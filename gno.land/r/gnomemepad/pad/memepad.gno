@@ -15,11 +15,13 @@ import (
 	"chain/runtime"
 	"chain/runtime/unsafe"
 	"strconv"
+	"strings"
 
 	"gno.land/p/demo/tokens/grc20"
 	"gno.land/p/gnomemepad/ammmath"
 	"gno.land/p/nt/avl/v0"
 	"gno.land/p/nt/seqid/v0"
+	"gno.land/r/demo/defi/grc20reg"
 )
 
 var (
@@ -262,6 +264,15 @@ func Create(cur realm, name, symbol, uri string) string {
 	// Decimals=0: whole-token units (matches existing trade amounts).
 	token, ledger := grc20.NewToken(name, symbol, 0, nextTokenID.Next(), cur)
 
+	// Adena (and Gnoswap registries) resolve tokens ONLY via grc20reg under key
+	// packagePath.SYMBOL — Token.ID() itself is packagePath.SYMBOL.seq and is
+	// rejected as "Invalid path" if pasted into Adena without registration.
+	// Skip in unit tests (testSkipBanker); production always registers.
+	regKey := ""
+	if !testSkipBanker {
+		regKey = grc20reg.Register(cross(cur), token, symbol)
+	}
+
 	l := &Launch{
 		ID:           id,
 		Name:         name,
@@ -289,8 +300,34 @@ func Create(cur realm, name, symbol, uri string) string {
 		"symbol", symbol,
 		"creator", creator.String(),
 		"token", l.TokenID,
+		"reg", regKey,
 	)
 	return id
+}
+
+// AdenaPathOf returns the grc20reg / Adena token key: packagePath.SYMBOL
+// (Token.ID is packagePath.SYMBOL.seq — Adena rejects that form).
+func AdenaPathOf(id string) string {
+	l := mustLaunch(id)
+	return adenaKeyFromTokenID(l.TokenID, l.Symbol)
+}
+
+// adenaKeyFromTokenID strips the trailing .seq from Token.ID when present.
+func adenaKeyFromTokenID(tokenID, symbol string) string {
+	if tokenID == "" {
+		return ""
+	}
+	// Token.ID = packagePath.symbol.seq → registry key = packagePath.symbol
+	suffix := "." + symbol + "."
+	if i := strings.LastIndex(tokenID, suffix); i >= 0 {
+		// packagePath + "." + symbol
+		return tokenID[:i] + "." + symbol
+	}
+	// Already packagePath.symbol or unknown layout
+	if strings.HasSuffix(tokenID, "."+symbol) {
+		return tokenID
+	}
+	return tokenID
 }
 
 // Buy spends -send ugnot on the bonding curve; credits tokens to the caller.

@@ -11,7 +11,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:USERPROFILE\go\bin;C:\Users\Hi\tools;$
 
 $env:RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
 $env:CHAIN_ID = "sapphire-1"
-$env:PKG = "gno.land/r/$Address/gnomemepad/padv2"
+$env:PKG = "gno.land/r/$Address/gnomemepad/padv3"
 $env:GNOKEY_NAME = $KeyName
 $env:SIGNER_ADDR = $Address
 $env:PORT = "$Port"

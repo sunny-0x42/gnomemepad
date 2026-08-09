@@ -254,18 +254,26 @@ function padPkgPath() {
   return (
     state.pkg ||
     state.walletsMeta?.pkg ||
-    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv2"
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv3"
   );
 }
 
 /**
- * Path for Adena “Add Custom Token”.
- * Adena expects: packagePath.symbol (first dot after last slash = symbol).
- * On-chain Token.ID may be packagePath.symbol.seqid — that form is INVALID in Adena.
+ * Path for Adena “Add Custom Token” = grc20reg key packagePath.SYMBOL.
+ * Adena ignores Token.ID (…SYMBOL.seq) and returns “Invalid path” if the token
+ * is not registered in gno.land/r/demo/defi/grc20reg (padv3+ registers on Create).
  */
 function adenaWalletPath(m) {
   const sym = String(m?.symbol || "").trim();
   if (!sym) return "";
+  // Prefer stripping .seq from on-chain Token.ID when present
+  const full = String(m?.tokenId || "").trim();
+  if (full) {
+    const marker = `.${sym}.`;
+    const i = full.lastIndexOf(marker);
+    if (i >= 0) return full.slice(0, i) + `.${sym}`;
+    if (full.endsWith(`.${sym}`)) return full;
+  }
   return `${padPkgPath()}.${sym}`;
 }
 
@@ -281,17 +289,17 @@ function renderContractBox(m) {
   if (!walletPath && !factory) return "";
   return `
     <div class="contract-box">
-      <div class="contract-box-title">Add token in Adena (manual)</div>
+      <div class="contract-box-title">Add token in Adena</div>
       <p class="contract-box-hint">
-        Adena only accepts path form <code>packagePath.SYMBOL</code>
-        (not the full Token.ID with extra <code>.seq</code>).
-        Copy below → Adena → Manage Tokens → + → paste → Add.
+        Use path form <code>packagePath.SYMBOL</code> (not full Token.ID with <code>.seq</code>).
+        Token must be registered in <code>grc20reg</code> (padv3 Create does this automatically).
+        Adena → Manage Tokens → + → Manual → paste path below.
       </p>
       ${
         walletPath
           ? `<div class="contract-row">
         <div class="contract-meta">
-          <span class="contract-label">Path for Adena (use this)</span>
+          <span class="contract-label">Adena / grc20reg path</span>
           <code class="contract-value mono" title="${escapeHtml(walletPath)}">${escapeHtml(walletPath)}</code>
         </div>
         <button type="button" class="btn sm primary copy-btn" data-copy="${escapeHtml(walletPath)}" data-copy-label="Adena path copied">Copy</button>
@@ -302,7 +310,7 @@ function renderContractBox(m) {
         fullId && fullId !== walletPath
           ? `<div class="contract-row">
         <div class="contract-meta">
-          <span class="contract-label">On-chain Token.ID (not for Adena)</span>
+          <span class="contract-label">Token.ID (Gnoswap / events — not for Adena)</span>
           <code class="contract-value mono" title="${escapeHtml(fullId)}">${escapeHtml(fullId)}</code>
         </div>
         <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(fullId)}" data-copy-label="Token.ID copied">Copy</button>
