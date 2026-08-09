@@ -1250,7 +1250,7 @@ function wireGlobal() {
       type: "view",
     });
     closeWalletModal();
-    toast("Connected view-only — use Adena to trade");
+    toast("View-only mode");
     if (state.view === "portfolio") refreshPortfolio();
     if (state.view === "creator") refreshCreator();
     updateCreateHint();
