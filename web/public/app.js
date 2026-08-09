@@ -222,6 +222,98 @@ function toast(msg, ok = true) {
   toast._t = setTimeout(() => el.classList.add("hidden"), 4200);
 }
 
+/** Copy text to clipboard; toast on success. */
+async function copyText(text, label = "Copied") {
+  const t = String(text || "").trim();
+  if (!t) {
+    toast("Nothing to copy", false);
+    return false;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(t);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    toast(label);
+    return true;
+  } catch (e) {
+    toast("Copy failed — select text manually", false);
+    return false;
+  }
+}
+
+function padPkgPath() {
+  return (
+    state.pkg ||
+    state.walletsMeta?.pkg ||
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv2"
+  );
+}
+
+/** GRC20 Token.ID for wallet “add token” (Gno identifier). */
+function contractIdForMarket(m) {
+  if (m?.tokenId) return m.tokenId;
+  // Fallback if older LaunchInfo: factory path + symbol (incomplete without seq)
+  if (m?.symbol) return `${padPkgPath()}.${m.symbol}`;
+  return "";
+}
+
+function renderContractBox(m) {
+  const tokenId = contractIdForMarket(m);
+  const factory = padPkgPath();
+  if (!tokenId && !factory) return "";
+  return `
+    <div class="contract-box">
+      <div class="contract-box-title">Add token to wallet</div>
+      <p class="contract-box-hint">
+        Copy the <strong>GRC20 Token.ID</strong> and paste it in Adena (or another Gno wallet) as a custom token to see your balance.
+      </p>
+      ${
+        tokenId
+          ? `<div class="contract-row">
+        <div class="contract-meta">
+          <span class="contract-label">Token contract (GRC20 ID)</span>
+          <code class="contract-value mono" title="${escapeHtml(tokenId)}">${escapeHtml(tokenId)}</code>
+        </div>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tokenId)}" data-copy-label="Token ID copied">Copy</button>
+      </div>`
+          : `<div class="muted" style="font-size:0.85rem">Token ID not available yet (use a market created on padv2).</div>`
+      }
+      <div class="contract-row">
+        <div class="contract-meta">
+          <span class="contract-label">Launchpad (factory realm)</span>
+          <code class="contract-value mono" title="${escapeHtml(factory)}">${escapeHtml(factory)}</code>
+        </div>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(factory)}" data-copy-label="Factory path copied">Copy</button>
+      </div>
+      <div class="contract-row">
+        <div class="contract-meta">
+          <span class="contract-label">Launch ID</span>
+          <code class="contract-value mono">${escapeHtml(m.id || "")}</code>
+        </div>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(m.id || "")}" data-copy-label="Launch ID copied">Copy</button>
+      </div>
+    </div>`;
+}
+
+function wireCopyButtons(root = document) {
+  $$(".copy-btn", root).forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      copyText(btn.dataset.copy || "", btn.dataset.copyLabel || "Copied");
+    });
+  });
+}
+
 async function api(path, opts) {
   const r = await fetch(path, {
     headers: { "content-type": "application/json", ...(opts?.headers || {}) },
@@ -503,15 +595,25 @@ async function refreshPortfolio() {
           <thead><tr><th>Token</th><th>Balance</th><th>Est. value</th><th></th></tr></thead>
           <tbody>
             ${rows
-              .map(
-                (h) => `<tr>
+              .map((h) => {
+                const tid = h.tokenId || h.market?.tokenId || contractIdForMarket(h.market || h);
+                return `<tr>
               <td><strong>${escapeHtml(h.name)}</strong> <span class="card-sym">$${escapeHtml(h.symbol)}</span>
-                <div class="muted mono" style="font-size:0.7rem">${escapeHtml(h.id)}</div></td>
+                <div class="muted mono" style="font-size:0.7rem">launch ${escapeHtml(h.id)}</div>
+                ${
+                  tid
+                    ? `<div class="pf-contract">
+                  <code class="mono pf-tid" title="${escapeHtml(tid)}">${escapeHtml(tid.length > 36 ? tid.slice(0, 16) + "…" + tid.slice(-10) : tid)}</code>
+                  <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tid)}" data-copy-label="Token ID copied">Copy ID</button>
+                </div>`
+                    : ""
+                }
+              </td>
               <td class="mono">${fmtNum(h.balance)}</td>
               <td class="mono">${fmtGnot(h.valueGnotApprox ?? (h.valueUgnotApprox || 0) / UGNOT_PER_GNOT, { alreadyGnot: true })}</td>
               <td><button type="button" class="btn sm" data-open="${escapeHtml(h.id)}">Trade</button></td>
-            </tr>`,
-              )
+            </tr>`;
+              })
               .join("")}
           </tbody>
         </table>`
@@ -522,6 +624,7 @@ async function refreshPortfolio() {
     $$("[data-open]", panel).forEach((b) =>
       b.addEventListener("click", () => openToken(b.dataset.open)),
     );
+    wireCopyButtons(panel);
   } catch (e) {
     panel.innerHTML = `<div class="empty">Portfolio error: ${escapeHtml(e.message)}</div>`;
   }
@@ -987,23 +1090,19 @@ function renderToken(m) {
         <div class="kv-row"><span>Creator fees</span><span>${fmtGnot(m.creatorFeesGnot ?? m.creatorFees, { alreadyGnot: m.creatorFeesGnot != null })}</span></div>
         <div class="kv-row"><span>Creator</span><span title="${escapeHtml(m.creator || "")}">${shortAddr(m.creator)}</span></div>
         ${
-          m.tokenId
-            ? `<div class="kv-row"><span>GRC20 Token.ID</span><span class="mono" title="${escapeHtml(m.tokenId)}">${escapeHtml(m.tokenId.length > 42 ? m.tokenId.slice(0, 20) + "…" + m.tokenId.slice(-12) : m.tokenId)}</span></div>`
-            : ""
-        }
-        ${
           m.gnoswapReady || isPool
             ? `<div class="kv-row"><span>Gnoswap</span><span class="badge graduated">Ready to list</span></div>`
             : `<div class="kv-row"><span>Gnoswap</span><span class="muted">After graduation</span></div>`
         }
       </div>
+      ${renderContractBox(m)}
       ${
         m.gnoswapReady || isPool
           ? `<div class="callout ok" style="margin-top:0.75rem">
           <strong>GRC20 ready for Gnoswap.</strong>
           Create a permissionless GNOT/${escapeHtml(m.symbol)} pool on
           <a href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Gnoswap</a>
-          using Token.ID above. Pad keeps a locked CPMM; Gnoswap is a separate venue.
+          using the Token ID above. Pad keeps a locked CPMM; Gnoswap is a separate venue.
         </div>`
           : ""
       }
@@ -1106,6 +1205,7 @@ async function refreshTradeBalances(tokenId) {
 }
 
 function wireToken(m) {
+  wireCopyButtons($("#tokenPanel") || document);
   const log = (t) => {
     const el = $("#txLog");
     if (!el) return;
