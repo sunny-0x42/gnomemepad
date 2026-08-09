@@ -4,7 +4,6 @@ import {
   doContractCall,
   onAccountChange,
   openInstallAdena,
-  addTokenToAdena,
   DEFAULT_NETWORK,
 } from "./adena.js";
 
@@ -259,50 +258,60 @@ function padPkgPath() {
   );
 }
 
-/** GRC20 Token.ID for wallet “add token” (Gno identifier). */
-function contractIdForMarket(m) {
-  if (m?.tokenId) return m.tokenId;
-  // Fallback if older LaunchInfo: factory path + symbol (incomplete without seq)
-  if (m?.symbol) return `${padPkgPath()}.${m.symbol}`;
-  return "";
+/**
+ * Path for Adena “Add Custom Token”.
+ * Adena expects: packagePath.symbol (first dot after last slash = symbol).
+ * On-chain Token.ID may be packagePath.symbol.seqid — that form is INVALID in Adena.
+ */
+function adenaWalletPath(m) {
+  const sym = String(m?.symbol || "").trim();
+  if (!sym) return "";
+  return `${padPkgPath()}.${sym}`;
+}
+
+/** Full on-chain Token.ID when available (indexer / debugging). */
+function onchainTokenId(m) {
+  return String(m?.tokenId || "").trim();
 }
 
 function renderContractBox(m) {
-  const tokenId = contractIdForMarket(m);
+  const walletPath = adenaWalletPath(m);
+  const fullId = onchainTokenId(m);
   const factory = padPkgPath();
-  if (!tokenId && !factory) return "";
-  const adenaPayload = encodeURIComponent(
-    JSON.stringify({
-      tokenPath: tokenId,
-      name: m.name || m.symbol,
-      symbol: m.symbol,
-      decimals: 0,
-    }),
-  );
+  if (!walletPath && !factory) return "";
   return `
     <div class="contract-box">
-      <div class="contract-box-title">Add token to wallet</div>
+      <div class="contract-box-title">Add token in Adena (manual)</div>
       <p class="contract-box-hint">
-        Use <strong>Add to Adena</strong> to open the wallet with this GRC20 path.
-        If Adena does not auto-fill, the Token ID is copied — paste it under Manage Tokens → Add Custom Token.
+        Adena only accepts path form <code>packagePath.SYMBOL</code>
+        (not the full Token.ID with extra <code>.seq</code>).
+        Copy below → Adena → Manage Tokens → + → paste → Add.
       </p>
       ${
-        tokenId
-          ? `<button type="button" class="btn primary wide adena-add-btn" data-adena-token="${adenaPayload}">
-          Add to Adena
-        </button>
-      <div class="contract-row">
+        walletPath
+          ? `<div class="contract-row">
         <div class="contract-meta">
-          <span class="contract-label">Token contract (GRC20 ID)</span>
-          <code class="contract-value mono" title="${escapeHtml(tokenId)}">${escapeHtml(tokenId)}</code>
+          <span class="contract-label">Path for Adena (use this)</span>
+          <code class="contract-value mono" title="${escapeHtml(walletPath)}">${escapeHtml(walletPath)}</code>
         </div>
-        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tokenId)}" data-copy-label="Token ID copied">Copy</button>
+        <button type="button" class="btn sm primary copy-btn" data-copy="${escapeHtml(walletPath)}" data-copy-label="Adena path copied">Copy</button>
       </div>`
-          : `<div class="muted" style="font-size:0.85rem">Token ID not available yet (use a market created on padv2).</div>`
+          : ""
+      }
+      ${
+        fullId && fullId !== walletPath
+          ? `<div class="contract-row">
+        <div class="contract-meta">
+          <span class="contract-label">On-chain Token.ID (not for Adena)</span>
+          <code class="contract-value mono" title="${escapeHtml(fullId)}">${escapeHtml(fullId)}</code>
+        </div>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(fullId)}" data-copy-label="Token.ID copied">Copy</button>
+      </div>`
+          : ""
       }
       <div class="contract-row">
         <div class="contract-meta">
-          <span class="contract-label">Launchpad (factory realm)</span>
+          <span class="contract-label">Launchpad realm</span>
           <code class="contract-value mono" title="${escapeHtml(factory)}">${escapeHtml(factory)}</code>
         </div>
         <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(factory)}" data-copy-label="Factory path copied">Copy</button>
@@ -323,65 +332,6 @@ function wireCopyButtons(root = document) {
       e.preventDefault();
       e.stopPropagation();
       copyText(btn.dataset.copy || "", btn.dataset.copyLabel || "Copied");
-    });
-  });
-}
-
-async function handleAddToAdena(tokenInfo) {
-  if (!hasAdena()) {
-    openInstallAdena();
-    toast("Install Adena, then try again", false);
-    return;
-  }
-  const btn = document.activeElement;
-  if (btn?.classList?.contains("adena-add-btn")) btn.disabled = true;
-  try {
-    toast("Opening Adena…");
-    // Keep app wallet in sync if user approves connect
-    try {
-      const w = await connectAdena(networkForAdena());
-      if (w?.address) saveWallet(w);
-    } catch {
-      /* may already be connected */
-    }
-    const r = await addTokenToAdena(
-      {
-        tokenPath: tokenInfo.tokenPath || tokenInfo.path,
-        name: tokenInfo.name,
-        symbol: tokenInfo.symbol,
-        decimals: tokenInfo.decimals ?? 0,
-      },
-      networkForAdena(),
-    );
-    if (r.ok && r.mode === "api") {
-      toast(`Added $${tokenInfo.symbol || "token"} to Adena`);
-    } else {
-      toast(
-        r.message ||
-          "Token ID copied. In Adena: Manage Tokens → + → paste path → Add",
-        true,
-      );
-    }
-  } catch (e) {
-    console.error(e);
-    toast(String(e.message || e), false);
-  } finally {
-    if (btn?.classList?.contains("adena-add-btn")) btn.disabled = false;
-  }
-}
-
-function wireAdenaAddButtons(root = document) {
-  $$(".adena-add-btn", root).forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      let info = {};
-      try {
-        info = JSON.parse(decodeURIComponent(btn.dataset.adenaToken || "{}"));
-      } catch {
-        info = { tokenPath: btn.dataset.adenaToken };
-      }
-      handleAddToAdena(info);
     });
   });
 }
@@ -668,7 +618,7 @@ async function refreshPortfolio() {
           <tbody>
             ${rows
               .map((h) => {
-                const tid = h.tokenId || h.market?.tokenId || contractIdForMarket(h.market || h);
+                const tid = adenaWalletPath(h.market || h) || adenaWalletPath(h);
                 return `<tr>
               <td><strong>${escapeHtml(h.name)}</strong> <span class="card-sym">$${escapeHtml(h.symbol)}</span>
                 <div class="muted mono" style="font-size:0.7rem">launch ${escapeHtml(h.id)}</div>
@@ -676,15 +626,7 @@ async function refreshPortfolio() {
                   tid
                     ? `<div class="pf-contract">
                   <code class="mono pf-tid" title="${escapeHtml(tid)}">${escapeHtml(tid.length > 36 ? tid.slice(0, 16) + "…" + tid.slice(-10) : tid)}</code>
-                  <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tid)}" data-copy-label="Token ID copied">Copy</button>
-                  <button type="button" class="btn sm primary adena-add-btn" data-adena-token="${encodeURIComponent(
-                    JSON.stringify({
-                      tokenPath: tid,
-                      name: h.name,
-                      symbol: h.symbol,
-                      decimals: 0,
-                    }),
-                  )}">Adena</button>
+                  <button type="button" class="btn sm primary copy-btn" data-copy="${escapeHtml(tid)}" data-copy-label="Adena path copied">Copy path</button>
                 </div>`
                     : ""
                 }
@@ -705,7 +647,6 @@ async function refreshPortfolio() {
       b.addEventListener("click", () => openToken(b.dataset.open)),
     );
     wireCopyButtons(panel);
-    wireAdenaAddButtons(panel);
   } catch (e) {
     panel.innerHTML = `<div class="empty">Portfolio error: ${escapeHtml(e.message)}</div>`;
   }
@@ -1288,7 +1229,6 @@ async function refreshTradeBalances(tokenId) {
 function wireToken(m) {
   const root = $("#tokenPanel") || document;
   wireCopyButtons(root);
-  wireAdenaAddButtons(root);
   const log = (t) => {
     const el = $("#txLog");
     if (!el) return;
