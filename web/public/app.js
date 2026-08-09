@@ -277,60 +277,19 @@ function adenaWalletPath(m) {
   return `${padPkgPath()}.${sym}`;
 }
 
-/** Full on-chain Token.ID when available (indexer / debugging). */
-function onchainTokenId(m) {
-  return String(m?.tokenId || "").trim();
-}
-
 function renderContractBox(m) {
   const walletPath = adenaWalletPath(m);
-  const fullId = onchainTokenId(m);
-  const factory = padPkgPath();
-  if (!walletPath && !factory) return "";
+  if (!walletPath) return "";
   return `
     <div class="contract-box">
-      <div class="contract-box-title">Add token in Adena</div>
-      <p class="contract-box-hint">
-        Use path form <code>packagePath.SYMBOL</code> (not full Token.ID with <code>.seq</code>).
-        Token must be registered in <code>grc20reg</code> (padv3 Create does this automatically).
-        Adena → Manage Tokens → + → Manual → paste path below.
-      </p>
-      ${
-        walletPath
-          ? `<div class="contract-row">
+      <div class="contract-row">
         <div class="contract-meta">
-          <span class="contract-label">Adena / grc20reg path</span>
+          <span class="contract-label">Adena path</span>
           <code class="contract-value mono" title="${escapeHtml(walletPath)}">${escapeHtml(walletPath)}</code>
         </div>
         <button type="button" class="btn sm primary copy-btn" data-copy="${escapeHtml(walletPath)}" data-copy-label="Adena path copied">Copy</button>
-      </div>`
-          : ""
-      }
-      ${
-        fullId && fullId !== walletPath
-          ? `<div class="contract-row">
-        <div class="contract-meta">
-          <span class="contract-label">Token.ID (Gnoswap / events — not for Adena)</span>
-          <code class="contract-value mono" title="${escapeHtml(fullId)}">${escapeHtml(fullId)}</code>
-        </div>
-        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(fullId)}" data-copy-label="Token.ID copied">Copy</button>
-      </div>`
-          : ""
-      }
-      <div class="contract-row">
-        <div class="contract-meta">
-          <span class="contract-label">Launchpad realm</span>
-          <code class="contract-value mono" title="${escapeHtml(factory)}">${escapeHtml(factory)}</code>
-        </div>
-        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(factory)}" data-copy-label="Factory path copied">Copy</button>
       </div>
-      <div class="contract-row">
-        <div class="contract-meta">
-          <span class="contract-label">Launch ID</span>
-          <code class="contract-value mono">${escapeHtml(m.id || "")}</code>
-        </div>
-        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(m.id || "")}" data-copy-label="Launch ID copied">Copy</button>
-      </div>
+      <p class="contract-box-hint">Manage Tokens → + → Manual → paste</p>
     </div>`;
 }
 
