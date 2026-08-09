@@ -1,4 +1,5 @@
-# Deploy gnomemepad padv3 (GRC20 + grc20reg) to Sapphire. Interactive gnokey password.
+# Deploy gnomemepad padv3 (GRC20 + grc20reg) to Sapphire.
+# Interactive password, or set $env:GNOKEY_PASS first.
 param(
   [string]$KeyName = "deploykey",
   [string]$Address = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr",
@@ -27,7 +28,12 @@ Write-Host ""
 Write-Host "=== Sapphire V3 deploy (GRC20 + grc20reg / padv3) ==="
 Write-Host "Key:  $KeyName"
 Write-Host "Pkg:  $padPath"
+Write-Host "Dir:  $padDir"
 Write-Host ""
+
+if (-not (Test-Path $padDir)) {
+  throw "Package dir missing: $padDir"
+}
 
 Write-Host "--- balance ---"
 gnokey query bank/balances/$Address -remote $Remote
@@ -47,18 +53,24 @@ Write-Host "OK dependency $regPath"
 Write-Host ""
 
 function Assert-Ok([string]$Step) {
-  if ($LASTEXITCODE -ne 0) { throw "Failed: $Step" }
+  if ($LASTEXITCODE -ne 0) { throw "Failed: $Step (exit $LASTEXITCODE)" }
 }
 
-function Invoke-Gnokey {
-  param([string[]]$Args)
+# Avoid PowerShell automatic variable $Args — splat via $GnokeyCmd instead.
+function Invoke-GnokeyDeploy {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string[]]$GnokeyCmd,
+    [string]$StepName
+  )
   if ($env:GNOKEY_PASS) {
-    $env:GNOKEY_PASS | & gnokey @Args -insecure-password-stdin
+    Write-Host "(using GNOKEY_PASS from env)"
+    $env:GNOKEY_PASS | & gnokey @GnokeyCmd -insecure-password-stdin
   } else {
     Write-Host "Enter password for '$KeyName' (hidden)..."
-    & gnokey @Args
+    & gnokey @GnokeyCmd
   }
-  Assert-Ok ($Args -join " ")
+  Assert-Ok $StepName
 }
 
 $existing = gnokey query vm/qpaths --data $padPath -remote $Remote 2>&1 | Out-String
@@ -66,30 +78,30 @@ if ($existing -match [regex]::Escape($padPath)) {
   Write-Host "=== addpkg === already on chain, skip"
 } else {
   Write-Host "=== 1/2 addpkg padv3 ==="
-  Invoke-Gnokey @(
-    "maketx","addpkg",$KeyName,
-    "-pkgpath",$padPath,
-    "-pkgdir",$padDir,
-    "-max-deposit",$MaxDepositPad,
-    "-gas-fee",$GasFee,
-    "-gas-wanted","$GasWantedPad",
+  Invoke-GnokeyDeploy -StepName "addpkg" -GnokeyCmd @(
+    "maketx", "addpkg", $KeyName,
+    "-pkgpath", $padPath,
+    "-pkgdir", $padDir,
+    "-max-deposit", $MaxDepositPad,
+    "-gas-fee", $GasFee,
+    "-gas-wanted", "$GasWantedPad",
     "-broadcast",
-    "-chainid",$ChainId,
-    "-remote",$Remote
+    "-chainid", $ChainId,
+    "-remote", $Remote
   )
 }
 
 if (-not $SkipInit) {
   Write-Host "=== 2/2 Init ==="
-  Invoke-Gnokey @(
-    "maketx","call",$KeyName,
-    "-pkgpath",$padPath,
-    "-func","Init",
-    "-gas-fee",$GasFee,
-    "-gas-wanted","$GasWantedInit",
+  Invoke-GnokeyDeploy -StepName "Init" -GnokeyCmd @(
+    "maketx", "call", $KeyName,
+    "-pkgpath", $padPath,
+    "-func", "Init",
+    "-gas-fee", $GasFee,
+    "-gas-wanted", "$GasWantedInit",
     "-broadcast",
-    "-chainid",$ChainId,
-    "-remote",$Remote
+    "-chainid", $ChainId,
+    "-remote", $Remote
   )
 }
 
