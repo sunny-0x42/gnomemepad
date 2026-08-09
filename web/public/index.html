@@ -3,154 +3,116 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>gnomemepad — Gno meme launchpad</title>
+  <meta name="description" content="gnomemepad — fair meme launches on Gno.land Sapphire" />
+  <title>gnomemepad</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
-  <!-- TradingView Lightweight Charts (custom data — not TV.com listed symbols) -->
   <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-  <div class="bg-grid"></div>
-  <div class="bg-glow"></div>
-
   <header class="top">
     <div class="brand" data-nav="home">
       <div class="logo">g</div>
-      <div>
-        <div class="brand-name">gnomemepad</div>
-        <div class="brand-sub">fair launch · locked LP · gno.land</div>
-      </div>
+      <span class="brand-name">gnomemepad</span>
     </div>
-    <nav class="nav">
+    <nav class="nav" aria-label="Main">
       <button type="button" class="nav-btn active" data-nav="home">Markets</button>
       <button type="button" class="nav-btn" data-nav="create">Create</button>
       <button type="button" class="nav-btn" data-nav="portfolio">Portfolio</button>
       <button type="button" class="nav-btn" data-nav="creator">Creator</button>
-      <button type="button" class="nav-btn" data-nav="help">How it works</button>
     </nav>
     <div class="header-right">
       <div class="status-pill" id="netStatus">
         <span class="dot"></span>
-        <span id="netLabel">connecting…</span>
+        <span id="netLabel">…</span>
       </div>
       <button type="button" class="btn wallet-btn" id="btnWallet">
         <span class="wallet-dot"></span>
-        <span id="walletLabel">Connect wallet</span>
+        <span id="walletLabel">Connect</span>
       </button>
     </div>
   </header>
 
   <main>
-    <!-- HOME -->
     <section id="view-home" class="view">
-      <div class="hero">
+      <div class="page-head">
         <div>
-          <h1>Launch &amp; trade memes<br /><span class="grad">without an external AMM</span></h1>
-          <p class="lede">
-            Bonding curve price discovery → atomic graduate into a permanently locked CPMM.
-            Connect a wallet to trade, manage portfolio, and claim creator fees.
-          </p>
-          <div class="hero-actions">
-            <button type="button" class="btn primary" data-nav="create">Launch a coin</button>
-            <button type="button" class="btn ghost" id="heroConnect">Connect wallet</button>
-            <a class="btn ghost" href="https://sapphire.testnets.gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad" target="_blank" rel="noreferrer">gnoweb ↗</a>
-          </div>
+          <h1>Markets</h1>
+          <p class="lede">Fair launch · bonding curve · locked LP on Gno Sapphire</p>
         </div>
-        <div class="stat-cards" id="statCards">
-          <div class="stat"><div class="stat-k">Markets</div><div class="stat-v" id="statMarkets">—</div></div>
-          <div class="stat"><div class="stat-k">Protocol fees</div><div class="stat-v" id="statFees">—</div></div>
-          <div class="stat"><div class="stat-k">Graduation</div><div class="stat-v" id="statGrad">—</div></div>
-          <div class="stat"><div class="stat-k">Trade fee</div><div class="stat-v" id="statFeeBps">—</div></div>
+        <div class="page-actions">
+          <button type="button" class="btn primary" data-nav="create">Launch</button>
+          <button type="button" class="btn ghost" id="heroConnect">Connect</button>
         </div>
+      </div>
+
+      <div class="stat-row" id="statCards">
+        <div class="stat"><span class="stat-k">Markets</span><span class="stat-v" id="statMarkets">—</span></div>
+        <div class="stat"><span class="stat-k">Fees</span><span class="stat-v" id="statFees">—</span></div>
+        <div class="stat"><span class="stat-k">Graduate at</span><span class="stat-v" id="statGrad">—</span></div>
+        <div class="stat"><span class="stat-k">Trade fee</span><span class="stat-v" id="statFeeBps">—</span></div>
       </div>
 
       <div class="toolbar">
-        <h2>Live markets</h2>
-        <div class="toolbar-right">
-          <input id="search" type="search" placeholder="Search name / symbol / id…" />
-          <button type="button" class="btn sm" id="btnRefresh">Refresh</button>
-        </div>
+        <input id="search" type="search" placeholder="Search…" autocomplete="off" />
+        <button type="button" class="btn sm" id="btnRefresh">Refresh</button>
       </div>
       <div id="marketGrid" class="market-grid">
-        <div class="empty">Loading markets…</div>
+        <div class="empty">Loading…</div>
       </div>
     </section>
 
-    <!-- TOKEN DETAIL -->
     <section id="view-token" class="view hidden">
       <button type="button" class="back" data-nav="home">← Markets</button>
-      <div class="token-layout" id="tokenPanel">
-        <div class="empty">Select a market</div>
-      </div>
+      <div class="token-layout" id="tokenPanel"></div>
     </section>
 
-    <!-- CREATE -->
     <section id="view-create" class="view hidden">
       <div class="panel create-panel">
-        <h2>Create coin</h2>
-        <p class="muted">Fair launch · create bond required · no pre-mint to creator</p>
+        <h1>Create</h1>
+        <p class="lede">Fair launch · bond required · no pre-mint</p>
         <div id="createWalletHint" class="callout"></div>
         <form id="createForm" class="form">
-          <label>Name<input name="name" required maxlength="48" placeholder="Local Cat" /></label>
-          <label>Symbol<input name="symbol" required maxlength="12" placeholder="LCAT" class="mono" /></label>
-          <label>URI / meta<input name="uri" placeholder="https://…" /></label>
+          <label>Name<input name="name" required maxlength="48" placeholder="Token name" /></label>
+          <label>Symbol<input name="symbol" required maxlength="12" placeholder="TICKER" class="mono" /></label>
+          <label>URI <span class="opt">(optional)</span><input name="uri" placeholder="https://" /></label>
           <label>Bond (GNOT)<input name="bond" type="number" value="1" min="1" step="any" class="mono" /></label>
-          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create with Adena</button>
+          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create</button>
         </form>
-        <pre class="log" id="createLog"></pre>
+        <pre class="log" id="createLog" hidden></pre>
       </div>
     </section>
 
-    <!-- PORTFOLIO -->
     <section id="view-portfolio" class="view hidden">
-      <div id="portfolioPanel">
-        <div class="empty">Connect a wallet to view holdings.</div>
-      </div>
+      <div id="portfolioPanel"><div class="empty">Connect wallet to view holdings.</div></div>
     </section>
 
-    <!-- CREATOR -->
     <section id="view-creator" class="view hidden">
-      <div id="creatorPanel">
-        <div class="empty">Connect a wallet to open the creator dashboard.</div>
-      </div>
-    </section>
-
-    <!-- HELP -->
-    <section id="view-help" class="view hidden">
-      <div class="panel prose">
-        <h2>How gnomemepad works</h2>
-        <ol>
-          <li><strong>Connect wallet</strong> — local demo signer or paste any <code>g1…</code> address (view-only).</li>
-          <li><strong>Create</strong> — pay create bond, fair launch, you become creator fee recipient.</li>
-          <li><strong>Bonding curve</strong> — buy/sell against virtual CPMM; price rises with demand.</li>
-          <li><strong>Graduate</strong> — at threshold, liquidity seeds a real pool; LP permanently locked.</li>
-          <li><strong>Creator fees</strong> — claim 0.4% of fee share on your coins from Creator hub.</li>
-        </ol>
-        <p class="muted">Production would use Adeña / GnoConnect browser signing. This local UI demos connect + gnokey broadcast for the funded signer.</p>
-      </div>
+      <div id="creatorPanel"><div class="empty">Connect wallet for creator tools.</div></div>
     </section>
   </main>
 
-  <!-- WALLET MODAL -->
+  <footer class="foot">
+    <span>Sapphire testnet</span>
+    <a href="https://sapphire.testnets.gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad" target="_blank" rel="noreferrer">Contract</a>
+    <a href="https://adena.app/" target="_blank" rel="noreferrer">Adena</a>
+  </footer>
+
   <div id="walletModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="walletModalTitle">
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card">
       <div class="modal-head">
-        <h2 id="walletModalTitle">Connect wallet</h2>
+        <h2 id="walletModalTitle">Connect</h2>
         <button type="button" class="modal-x" data-close-modal aria-label="Close">×</button>
       </div>
-      <p class="muted" style="margin-top:0">
-        Connect <strong>Adena</strong> to sign Create / Buy / Sell on Gno Sapphire.
-        Or paste any <span class="mono">g1</span> address for view-only.
-      </p>
       <div id="walletDemoList" class="wallet-list"></div>
-      <div class="form" style="margin-top:1rem">
-        <label>Or paste address (view-only)
+      <div class="form modal-extra">
+        <label>View-only address
           <input id="walletPaste" class="mono" placeholder="g1…" maxlength="64" />
         </label>
-        <button type="button" class="btn ghost wide" id="btnWalletPaste">Connect address</button>
+        <button type="button" class="btn ghost wide" id="btnWalletPaste">Use address</button>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn ghost sm" id="btnWalletDisconnect">Disconnect</button>
@@ -159,24 +121,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <noscript>
-    <div style="padding:2rem;color:#fff;background:#111;font-family:sans-serif">
-      JavaScript is required for gnomemepad UI.
-    </div>
-  </noscript>
-  <script>
-    // Early error surface if module fails to load
-    window.addEventListener("error", function (e) {
-      var el = document.getElementById("bootError");
-      if (!el) {
-        el = document.createElement("div");
-        el.id = "bootError";
-        el.style.cssText = "position:fixed;bottom:0;left:0;right:0;background:#7f1d1d;color:#fff;padding:12px 16px;z-index:9999;font:14px/1.4 sans-serif";
-        document.body.appendChild(el);
-      }
-      el.textContent = "JS error: " + (e.message || e.error || "unknown");
-    });
-  </script>
   <script src="/app.js" type="module"></script>
 </body>
 </html>

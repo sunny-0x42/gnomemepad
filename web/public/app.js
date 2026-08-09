@@ -249,15 +249,8 @@ async function refreshHealth() {
     if (h && h.signing === false) state.readOnlyHost = true;
     if (h && h.hosting === "netlify") state.hosting = "netlify";
     if (h.ok) {
-      const tag = h.hosting === "netlify" ? "sapphire" : h.chainId || "dev";
-      const mode =
-        state.wallet?.type === "adena"
-          ? " · Adena"
-          : state.wallet?.canSign
-            ? " · sign"
-            : " · view";
-      setNet(true, `${tag} · h${h.height || "?"}${mode}`);
-    } else setNet(false, h.error || "RPC down");
+      setNet(true, h.chainId || "online");
+    } else setNet(false, "offline");
   } catch (e) {
     setNet(false, "offline");
   }
@@ -282,7 +275,7 @@ async function refreshMarkets() {
     }
     renderMarketGrid();
   } catch (e) {
-    grid.innerHTML = `<div class="empty">Cannot load markets: ${escapeHtml(e.message)}. Check RPC / Netlify function logs.</div>`;
+    grid.innerHTML = `<div class="empty">Failed to load markets</div>`;
   }
 }
 
@@ -307,12 +300,13 @@ function renderMarketGrid() {
   }
   const grid = $("#marketGrid");
   if (!list.length) {
-    grid.innerHTML = `<div class="empty">${state.markets.length ? "No match." : "No markets yet — create the first coin."}</div>`;
+    grid.innerHTML = `<div class="empty">${state.markets.length ? "No results" : "No markets yet. Launch the first coin."}</div>`;
     return;
   }
   grid.innerHTML = list
     .map((m) => {
       const pct = m.progressPct ?? 0;
+      const st = m.status === 1 ? "Live" : "Curve";
       return `
       <article class="card" data-id="${escapeHtml(m.id)}">
         <div class="card-top">
@@ -320,16 +314,20 @@ function renderMarketGrid() {
             <div class="card-title">${escapeHtml(m.name)}</div>
             <div class="card-sym">$${escapeHtml(m.symbol)}</div>
           </div>
-          <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${escapeHtml(m.statusLabel || "curve")}</span>
+          <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${st}</span>
         </div>
         <div class="card-meta">
-          <div>Price <strong>${fmtPriceGnot(m.priceGnot)}</strong></div>
-          <div>MCap <strong>${fmtMcap(m.mcapGnot)}</strong></div>
-          <div>Raised <strong>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</strong></div>
-          <div>Buyers <strong>${fmtNum(m.buyers)}</strong> · sold ${fmtNum(m.sold)}</div>
+          <div>Price<strong>${fmtPriceGnot(m.priceGnot)}</strong></div>
+          <div>MCap<strong>${fmtMcap(m.mcapGnot)}</strong></div>
+          <div>Raised<strong>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</strong></div>
+          <div>Buyers<strong>${fmtNum(m.buyers)}</strong></div>
         </div>
-        <div class="bar"><i style="width:${pct}%"></i></div>
-        <div class="bar-label"><span>Graduation</span><span>${pct}%</span></div>
+        ${
+          m.status === 1
+            ? ""
+            : `<div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="bar-label"><span>To graduate</span><span>${pct}%</span></div>`
+        }
       </article>`;
     })
     .join("");
@@ -344,12 +342,11 @@ function showView(name) {
   const map = {
     home: "view-home",
     create: "view-create",
-    help: "view-help",
     token: "view-token",
     portfolio: "view-portfolio",
     creator: "view-creator",
   };
-  $(`#${map[name] || "view-home"}`).classList.remove("hidden");
+  $(`#${map[name] || "view-home"}`)?.classList.remove("hidden");
   $$(".nav-btn").forEach((b) =>
     b.classList.toggle(
       "active",
@@ -366,17 +363,11 @@ function renderWalletChrome() {
   const btn = $("#btnWallet");
   if (!label || !btn) return;
   if (state.wallet?.address) {
-    const tag =
-      state.wallet.type === "adena"
-        ? "· Adena"
-        : state.wallet.canSign
-          ? "· signer"
-          : "· view";
-    label.textContent = `${shortAddr(state.wallet.address)} ${tag}`;
+    label.textContent = shortAddr(state.wallet.address);
     btn.classList.add("connected");
     btn.title = state.wallet.address;
   } else {
-    label.textContent = "Connect wallet";
+    label.textContent = "Connect";
     btn.classList.remove("connected");
     btn.title = "";
   }
@@ -400,28 +391,20 @@ function renderWalletDemoList() {
   let html = `
     <button type="button" class="wallet-option wallet-adena" id="btnConnectAdena">
       <div class="wo-top">
-        <strong>Adena Wallet</strong>
-        <span class="badge graduated">${adenaInstalled ? "recommended" : "install"}</span>
+        <strong>Adena</strong>
+        <span class="badge graduated">${adenaInstalled ? "Ready" : "Install"}</span>
       </div>
-      <div class="muted" style="font-size:0.78rem">
-        ${
-          adenaInstalled
-            ? "Connect browser extension · sign Create / Buy / Sell on Sapphire"
-            : "Not detected — click to open adena.app, then reconnect"
-        }
+      <div class="muted" style="font-size:0.78rem;margin-top:0.25rem">
+        ${adenaInstalled ? "Sign transactions on Sapphire" : "Open adena.app to install"}
       </div>
     </button>`;
 
   for (const d of demos) {
-    if (!d.canSign) continue; // skip server demo signers on public host
+    if (!d.canSign) continue;
     html += `
     <button type="button" class="wallet-option" data-addr="${escapeHtml(d.address)}" data-sign="1" data-label="${escapeHtml(d.label)}" data-type="local">
-      <div class="wo-top">
-        <strong>${escapeHtml(d.label)}</strong>
-        <span class="badge graduated">local gnokey</span>
-      </div>
+      <div class="wo-top"><strong>${escapeHtml(d.label)}</strong><span class="badge curve">Local</span></div>
       <div class="mono wo-addr">${escapeHtml(d.address)}</div>
-      <div class="muted" style="font-size:0.78rem">${escapeHtml(d.hint || "Server-side signing (local only)")}</div>
     </button>`;
   }
 
@@ -450,20 +433,15 @@ function updateCreateHint() {
   if (!el) return;
   if (!isConnected()) {
     el.className = "callout warn";
-    el.innerHTML = `Connect <strong>Adena</strong> to create a coin on Sapphire (you'll sign in the extension).`;
-    if (btn) btn.disabled = false;
+    el.innerHTML = `Connect <strong>Adena</strong> to create.`;
   } else if (!canSign()) {
     el.className = "callout warn";
-    el.innerHTML = `Connected <span class="mono">${shortAddr(state.wallet.address)}</span> is <strong>view-only</strong>. Connect Adena to create.`;
+    el.innerHTML = `<span class="mono">${shortAddr(state.wallet.address)}</span> is view-only. Connect Adena to sign.`;
   } else {
-    const via = state.wallet.type === "adena" ? "Adena" : "local signer";
     el.className = "callout ok";
-    el.innerHTML = `Signing via <strong>${via}</strong> as <span class="mono">${escapeHtml(state.wallet.address)}</span> — you become the creator.`;
+    el.innerHTML = `Creating as <span class="mono">${escapeHtml(shortAddr(state.wallet.address))}</span>`;
   }
-  if (btn) {
-    btn.textContent =
-      state.wallet?.type === "adena" ? "Create with Adena" : "Create on chain";
-  }
+  if (btn) btn.textContent = "Create";
 }
 
 async function refreshPortfolio() {
@@ -473,8 +451,8 @@ async function refreshPortfolio() {
     panel.innerHTML = `
       <div class="panel empty-panel">
         <h2>Portfolio</h2>
-        <p class="muted">Connect a wallet to see GNOT balance and meme holdings.</p>
-        <button type="button" class="btn primary" id="pfConnect">Connect wallet</button>
+        <p class="muted">Connect to view holdings.</p>
+        <button type="button" class="btn primary" id="pfConnect">Connect</button>
       </div>`;
     $("#pfConnect")?.addEventListener("click", openWalletModal);
     return;
@@ -989,46 +967,35 @@ function renderToken(m) {
             </div>
           </div>
         </div>
-        <span class="badge ${isPool ? "graduated" : "curve"}">${escapeHtml(m.statusLabel)}</span>
+        <span class="badge ${isPool ? "graduated" : "curve"}">${isPool ? "Live" : "Curve"}</span>
       </div>
       ${chart}
-      <div class="bar"><i style="width:${m.progressPct || 0}%"></i></div>
-      <div class="bar-label"><span>Progress to graduation</span><span>${m.progressPct || 0}%</span></div>
+      ${
+        isPool
+          ? ""
+          : `<div class="bar"><i style="width:${m.progressPct || 0}%"></i></div>
+      <div class="bar-label"><span>To graduate</span><span>${m.progressPct || 0}%</span></div>`
+      }
       <div class="kv">
-        <div class="kv-row"><span>Price</span><span>${fmtPriceGnot(m.priceGnot)}</span></div>
-        <div class="kv-row"><span>Market cap (FDV)</span><span>${fmtMcap(m.mcapGnot)}</span></div>
-        <div class="kv-row"><span>Circ. mcap</span><span>${fmtMcap(m.circMcapGnot)}</span></div>
         <div class="kv-row"><span>Raised</span><span>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</span></div>
-        <div class="kv-row"><span>Tokens sold</span><span>${fmtNum(m.sold)}</span></div>
         <div class="kv-row"><span>Buyers</span><span>${fmtNum(m.buyers)}</span></div>
         <div class="kv-row"><span>Creator fees</span><span>${fmtGnot(m.creatorFeesGnot ?? m.creatorFees, { alreadyGnot: m.creatorFeesGnot != null })}</span></div>
-        <div class="kv-row"><span>Pool</span><span>${fmtGnot(m.poolGnot ?? m.poolUgnot, { alreadyGnot: m.poolGnot != null })} / ${fmtNum(m.poolToken)} tok</span></div>
-        <div class="kv-row"><span>Creator</span><span title="${escapeHtml(m.creator)}">${shortAddr(m.creator)}</span></div>
-        ${m.uri ? `<div class="kv-row"><span>URI</span><span>${escapeHtml(m.uri)}</span></div>` : ""}
+        <div class="kv-row"><span>Creator</span><span title="${escapeHtml(m.creator || "")}">${shortAddr(m.creator)}</span></div>
       </div>
       ${trades}
     </div>
     <div class="panel">
       <h3 style="margin:0 0 0.75rem">Trade</h3>
-      <div id="tradeWalletBanner" class="callout ${isConnected() ? (canSign() ? "ok" : "warn") : "warn"}" style="margin-bottom:0.85rem">
-        ${
-          !isConnected()
-            ? "Connect a wallet to trade."
-            : canSign()
-              ? `Trading as <span class="mono">${shortAddr(state.wallet.address)}</span>`
-              : `View-only wallet — connect local signer to buy/sell.`
-        }
-      </div>
       <div class="wallet-balances" id="walletBalances">
         <div class="wb-row">
-          <span class="wb-k">$${escapeHtml(m.symbol)} in wallet</span>
+          <span class="wb-k">$${escapeHtml(m.symbol)}</span>
           <span class="wb-v mono" id="balTokens">—</span>
         </div>
         <div class="wb-row">
-          <span class="wb-k">GNOT in wallet</span>
+          <span class="wb-k">GNOT</span>
           <span class="wb-v mono" id="balGnot">—</span>
         </div>
-        <div class="wb-hint muted" id="balHint">Connect wallet to load balances</div>
+        <div class="wb-hint muted" id="balHint"></div>
       </div>
       <div class="trade-tabs">
         <button type="button" class="tab-buy active" data-mode="buy">${buyLabel}</button>
@@ -1066,8 +1033,7 @@ function renderToken(m) {
           <button class="btn danger wide" type="submit">Sell</button>
         </form>
       </div>
-      <pre class="tx-log" id="txLog"></pre>
-      <p class="muted" style="font-size:0.8rem;margin-bottom:0">Balances update after each buy/sell. Anti-snipe may block large early buys.</p>
+      <pre class="tx-log" id="txLog" hidden></pre>
     </div>`;
 }
 
@@ -1117,7 +1083,9 @@ async function refreshTradeBalances(tokenId) {
 function wireToken(m) {
   const log = (t) => {
     const el = $("#txLog");
-    if (el) el.textContent = t;
+    if (!el) return;
+    el.hidden = !t;
+    el.textContent = t || "";
   };
   refreshTradeBalances(m.id);
 
@@ -1177,7 +1145,7 @@ function wireToken(m) {
       const r = await broadcastRealm(func, [m.id], `${amountUgnot}ugnot`);
       const got = r.result || "?";
       log(`OK height ${r.height}\nhash ${r.hash}\n+${got} tokens`);
-      toast(`Bought — confirm in Adena history`);
+      toast("Buy submitted");
       await refreshTradeBalances(m.id);
       // soft refresh market stats without full page wipe if possible
       try {
@@ -1230,7 +1198,7 @@ function wireToken(m) {
       const func = m.status === 1 ? "SwapSell" : "Sell";
       const r = await broadcastRealm(func, [m.id, String(tokens)], "");
       log(`OK height ${r.height}\nhash ${r.hash}\nout ${r.result != null ? fmtGnot(r.result) : "see tx"}`);
-      toast(`Sold — confirm in Adena history`);
+      toast("Sell submitted");
       await refreshTradeBalances(m.id);
       try {
         const fresh = await api(`/api/market/${encodeURIComponent(m.id)}`);
@@ -1258,7 +1226,7 @@ function wireGlobal() {
   $$("[data-nav]").forEach((el) => {
     el.addEventListener("click", () => {
       const v = el.dataset.nav;
-      if (["home", "create", "help", "portfolio", "creator"].includes(v)) showView(v);
+      if (["home", "create", "portfolio", "creator"].includes(v)) showView(v);
     });
   });
   $("#btnRefresh")?.addEventListener("click", () => {
@@ -1304,21 +1272,21 @@ function wireGlobal() {
     const uri = fd.get("uri") || "";
     const bond = `${gnotToUgnot(fd.get("bond") || 1)}ugnot`;
     const log = $("#createLog");
-    log.textContent =
-      state.wallet?.type === "adena"
-        ? "Approve Create in Adena…"
-        : "Creating…";
+    if (log) {
+      log.hidden = false;
+      log.textContent = "Approve in wallet…";
+    }
     try {
       const r = await broadcastRealm("Create", [name, symbol, uri], bond);
-      log.textContent = `Created\nheight ${r.height}\nhash ${r.hash}\n${r.result ? "id " + r.result : "check markets after confirm"}`;
-      toast(`Create submitted for $${symbol}`);
-      // Adena may not return result id — refresh list after short delay
-      await new Promise((res) => setTimeout(res, 2500));
+      if (log) log.textContent = r.hash ? `Submitted\n${r.hash}` : "Submitted";
+      toast(`$${symbol} created`);
+      await new Promise((res) => setTimeout(res, 2000));
       await refreshMarkets();
       refreshCreator();
       if (r.result) openToken(r.result);
+      else showView("home");
     } catch (err) {
-      log.textContent = String(err.message || err);
+      if (log) log.textContent = String(err.message || err);
       toast(String(err.message || err), false);
     }
   });
