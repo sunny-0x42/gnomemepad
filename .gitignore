@@ -1,0 +1,33 @@
+# Secrets & keys
+.env
+.env.*
+*.pem
+*.key
+server.log
+server.err.log
+web/server.log
+web/server.err.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Node
+node_modules/
+web/node_modules/
+
+# Local chain / deploy artifacts (keep scripts, ignore generated outs if large)
+deploy/topaz/**/gnomod.toml.bak
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Gno cache (if any under project)
+.gno/
