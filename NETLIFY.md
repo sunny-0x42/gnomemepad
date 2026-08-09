@@ -7,10 +7,13 @@ Static frontend (`web/public`) + serverless function for **read** APIs (markets,
 | Feature | Netlify |
 |---|---|
 | Markets / params / charts | Yes |
-| Portfolio / creator (view) | Yes (paste any `g1…`) |
-| Create / Buy / Sell / Claim | **No** — needs `gnokey` on your machine |
+| Portfolio / creator | Yes |
+| **Create / Buy / Sell / Claim** | **Yes — via Adena browser wallet** |
 
-Txs: use local UI (`scripts/start-ui-sapphire.ps1`) or CLI. Browser wallet (Adena) can be added later.
+1. Install [Adena](https://adena.app/)
+2. Switch Adena network to **Sapphire** (`sapphire-1`) when prompted
+3. Open the site → **Connect wallet** → **Adena Wallet**
+4. Create / trade — approve each tx in Adena
 
 ## One-time setup
 

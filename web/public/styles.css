@@ -396,6 +396,13 @@ h1 {
 .modal-foot { margin-top: 1rem; display: flex; justify-content: flex-end; }
 
 .wallet-list { display: grid; gap: 0.55rem; margin-top: 0.75rem; }
+.wallet-option.wallet-adena {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(16, 185, 129, 0.08));
+}
+.wallet-option.wallet-adena:hover {
+  border-color: rgba(129, 140, 248, 0.9);
+}
 .wallet-option {
   text-align: left; width: 100%;
   border: 1px solid var(--border); background: var(--bg2); color: var(--text);

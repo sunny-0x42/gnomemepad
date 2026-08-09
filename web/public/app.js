@@ -1,3 +1,12 @@
+import {
+  hasAdena,
+  connectAdena,
+  doContractCall,
+  onAccountChange,
+  openInstallAdena,
+  DEFAULT_NETWORK,
+} from "./adena.js";
+
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
@@ -9,11 +18,81 @@ const state = {
   params: null,
   selectedId: null,
   tradeMode: "buy",
-  wallet: null, // { address, label, canSign }
+  wallet: null, // { address, label, canSign, type: 'adena'|'local'|'view' }
   walletsMeta: null,
   portfolio: null,
   creator: null,
+  // from /api/health
+  pkg: DEFAULT_NETWORK.pkg || null,
+  chainId: DEFAULT_NETWORK.chainId,
+  rpcUrl: DEFAULT_NETWORK.rpcUrl,
+  readOnlyHost: false,
+  hosting: null,
 };
+
+function networkForAdena() {
+  return {
+    chainId: state.chainId || DEFAULT_NETWORK.chainId,
+    chainName: "Gno Sapphire",
+    rpcUrl: state.rpcUrl || DEFAULT_NETWORK.rpcUrl,
+  };
+}
+
+function pkgPath() {
+  return (
+    state.pkg ||
+    state.walletsMeta?.pkg ||
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad"
+  );
+}
+
+/**
+ * Broadcast a realm call: Adena if connected as type=adena, else server gnokey API.
+ */
+async function broadcastRealm(func, args = [], send = "") {
+  if (state.wallet?.type === "adena" && state.wallet.canSign) {
+    return doContractCall({
+      caller: state.wallet.address,
+      pkgPath: pkgPath(),
+      func,
+      args,
+      send: send || "",
+      gasWanted: 50_000_000,
+      gasFee: 1_000_000,
+    });
+  }
+  // Local server path (legacy demo gnokey)
+  const path =
+    func === "Create"
+      ? "/api/tx/create"
+      : func === "Buy"
+        ? "/api/tx/buy"
+        : func === "Sell"
+          ? "/api/tx/sell"
+          : func === "SwapBuy"
+            ? "/api/tx/swap-buy"
+            : func === "SwapSell"
+              ? "/api/tx/swap-sell"
+              : func === "ClaimCreatorFees"
+                ? "/api/tx/claim-creator"
+                : func === "ClaimProtocolFees"
+                  ? "/api/tx/claim-protocol"
+                  : func === "Init"
+                    ? "/api/tx/init"
+                    : null;
+  if (!path) throw new Error(`Unknown func ${func}`);
+  let body = {};
+  if (func === "Create") {
+    body = { name: args[0], symbol: args[1], uri: args[2] || "", bond: send };
+  } else if (func === "Buy" || func === "SwapBuy") {
+    body = { id: args[0], amount: String(send).replace(/ugnot$/, "") };
+  } else if (func === "Sell" || func === "SwapSell") {
+    body = { id: args[0], tokens: String(args[1]) };
+  } else if (func === "ClaimCreatorFees") {
+    body = { id: args[0] };
+  }
+  return api(path, { method: "POST", body: JSON.stringify(body) });
+}
 
 function loadWallet() {
   try {
@@ -54,14 +133,32 @@ function requireWallet(action = "continue") {
 function requireSigner(action = "sign") {
   if (!requireWallet(action)) return false;
   if (!canSign()) {
-    toast(
-      "This host is view-only (e.g. Netlify). Create/Buy/Sell via local UI + gnokey or CLI on Sapphire.",
-      false,
-    );
+    toast(`Connect Adena wallet to ${action} (view-only address cannot sign).`, false);
     openWalletModal();
     return false;
   }
   return true;
+}
+
+async function connectWithAdena() {
+  if (!hasAdena()) {
+    openInstallAdena();
+    toast("Install Adena, then try again", false);
+    return;
+  }
+  try {
+    toast("Opening Adena…");
+    const w = await connectAdena(networkForAdena());
+    saveWallet(w);
+    closeWalletModal();
+    toast(`Adena connected: ${shortAddr(w.address)}`);
+    if (state.view === "portfolio") refreshPortfolio();
+    if (state.view === "creator") refreshCreator();
+    updateCreateHint();
+  } catch (e) {
+    console.error(e);
+    toast(String(e.message || e), false);
+  }
 }
 
 /** Chain base unit → display. 1 GNOT = 1_000_000 ugnot. */
@@ -146,12 +243,20 @@ function setNet(ok, label) {
 async function refreshHealth() {
   try {
     const h = await api("/api/health");
+    if (h.pkg) state.pkg = h.pkg;
+    if (h.chainId) state.chainId = h.chainId;
+    if (h.rpc) state.rpcUrl = h.rpc;
     if (h && h.signing === false) state.readOnlyHost = true;
     if (h && h.hosting === "netlify") state.hosting = "netlify";
     if (h.ok) {
-      const net = h.chainId || (h.hosting === "netlify" ? "sapphire" : "dev");
-      const tag = h.hosting === "netlify" ? "netlify" : net;
-      setNet(true, `${tag} · h${h.height || "?"}${h.signing === false ? " · view" : ""}`);
+      const tag = h.hosting === "netlify" ? "sapphire" : h.chainId || "dev";
+      const mode =
+        state.wallet?.type === "adena"
+          ? " · Adena"
+          : state.wallet?.canSign
+            ? " · sign"
+            : " · view";
+      setNet(true, `${tag} · h${h.height || "?"}${mode}`);
     } else setNet(false, h.error || "RPC down");
   } catch (e) {
     setNet(false, "offline");
@@ -261,7 +366,12 @@ function renderWalletChrome() {
   const btn = $("#btnWallet");
   if (!label || !btn) return;
   if (state.wallet?.address) {
-    const tag = state.wallet.canSign ? "· signer" : "· view";
+    const tag =
+      state.wallet.type === "adena"
+        ? "· Adena"
+        : state.wallet.canSign
+          ? "· signer"
+          : "· view";
     label.textContent = `${shortAddr(state.wallet.address)} ${tag}`;
     btn.classList.add("connected");
     btn.title = state.wallet.address;
@@ -284,33 +394,49 @@ function closeWalletModal() {
 function renderWalletDemoList() {
   const list = $("#walletDemoList");
   if (!list) return;
+  const adenaInstalled = hasAdena();
   const demos = state.walletsMeta?.demos || [];
-  if (!demos.length) {
-    list.innerHTML = `<div class="empty">Loading wallet options…</div>`;
-    return;
-  }
-  list.innerHTML = demos
-    .map(
-      (d) => `
-    <button type="button" class="wallet-option" data-addr="${escapeHtml(d.address)}" data-sign="${d.canSign ? "1" : "0"}" data-label="${escapeHtml(d.label)}">
+
+  let html = `
+    <button type="button" class="wallet-option wallet-adena" id="btnConnectAdena">
+      <div class="wo-top">
+        <strong>Adena Wallet</strong>
+        <span class="badge graduated">${adenaInstalled ? "recommended" : "install"}</span>
+      </div>
+      <div class="muted" style="font-size:0.78rem">
+        ${
+          adenaInstalled
+            ? "Connect browser extension · sign Create / Buy / Sell on Sapphire"
+            : "Not detected — click to open adena.app, then reconnect"
+        }
+      </div>
+    </button>`;
+
+  for (const d of demos) {
+    if (!d.canSign) continue; // skip server demo signers on public host
+    html += `
+    <button type="button" class="wallet-option" data-addr="${escapeHtml(d.address)}" data-sign="1" data-label="${escapeHtml(d.label)}" data-type="local">
       <div class="wo-top">
         <strong>${escapeHtml(d.label)}</strong>
-        <span class="badge ${d.canSign ? "graduated" : "curve"}">${d.canSign ? "can sign" : "view-only"}</span>
+        <span class="badge graduated">local gnokey</span>
       </div>
       <div class="mono wo-addr">${escapeHtml(d.address)}</div>
-      <div class="muted" style="font-size:0.78rem">${escapeHtml(d.hint || "")}</div>
-    </button>`,
-    )
-    .join("");
-  $$(".wallet-option", list).forEach((b) => {
+      <div class="muted" style="font-size:0.78rem">${escapeHtml(d.hint || "Server-side signing (local only)")}</div>
+    </button>`;
+  }
+
+  list.innerHTML = html;
+  $("#btnConnectAdena")?.addEventListener("click", () => connectWithAdena());
+  $$(".wallet-option[data-addr]", list).forEach((b) => {
     b.addEventListener("click", () => {
       saveWallet({
         address: b.dataset.addr,
         label: b.dataset.label,
-        canSign: b.dataset.sign === "1",
+        canSign: true,
+        type: b.dataset.type || "local",
       });
       closeWalletModal();
-      toast(b.dataset.sign === "1" ? "Signer wallet connected" : "View-only wallet connected");
+      toast("Local signer connected");
       if (state.view === "portfolio") refreshPortfolio();
       if (state.view === "creator") refreshCreator();
       updateCreateHint();
@@ -324,14 +450,19 @@ function updateCreateHint() {
   if (!el) return;
   if (!isConnected()) {
     el.className = "callout warn";
-    el.innerHTML = `Connect a wallet first. Prefer the <strong>local signer</strong> to broadcast Create.`;
-    if (btn) btn.disabled = false; // still allow try → modal
+    el.innerHTML = `Connect <strong>Adena</strong> to create a coin on Sapphire (you'll sign in the extension).`;
+    if (btn) btn.disabled = false;
   } else if (!canSign()) {
     el.className = "callout warn";
-    el.innerHTML = `Connected <span class="mono">${shortAddr(state.wallet.address)}</span> is <strong>view-only</strong>. Switch to local signer to create.`;
+    el.innerHTML = `Connected <span class="mono">${shortAddr(state.wallet.address)}</span> is <strong>view-only</strong>. Connect Adena to create.`;
   } else {
+    const via = state.wallet.type === "adena" ? "Adena" : "local signer";
     el.className = "callout ok";
-    el.innerHTML = `Signing as <span class="mono">${escapeHtml(state.wallet.address)}</span> — new coins will list you as creator.`;
+    el.innerHTML = `Signing via <strong>${via}</strong> as <span class="mono">${escapeHtml(state.wallet.address)}</span> — you become the creator.`;
+  }
+  if (btn) {
+    btn.textContent =
+      state.wallet?.type === "adena" ? "Create with Adena" : "Create on chain";
   }
 }
 
@@ -506,12 +637,9 @@ async function refreshCreator() {
         const log = $("#creatorLog");
         log.textContent = `Claiming ${b.dataset.claim}…`;
         try {
-          const r = await api("/api/tx/claim-creator", {
-            method: "POST",
-            body: JSON.stringify({ id: b.dataset.claim }),
-          });
-          log.textContent = `Claimed ${fmtGnot(r.result)}\nheight ${r.height}\n${r.hash}`;
-          toast(`Claimed ${fmtGnot(r.result)}`);
+          const r = await broadcastRealm("ClaimCreatorFees", [b.dataset.claim], "");
+          log.textContent = `Claimed\nheight ${r.height}\n${r.hash}`;
+          toast("Claim submitted");
           refreshCreator();
           refreshMarkets();
         } catch (e) {
@@ -524,9 +652,9 @@ async function refreshCreator() {
       if (!requireSigner("claim protocol fees")) return;
       const log = $("#creatorLog");
       try {
-        const r = await api("/api/tx/claim-protocol", { method: "POST", body: "{}" });
-        log.textContent = `Protocol claim ${r.result}\n${r.hash}`;
-        toast("Protocol fees claimed");
+        const r = await broadcastRealm("ClaimProtocolFees", [], "");
+        log.textContent = `Protocol claim\n${r.hash}`;
+        toast("Protocol claim submitted");
         refreshMarkets();
       } catch (e) {
         toast(String(e.message || e), false);
@@ -1045,14 +1173,11 @@ function wireToken(m) {
     btn.disabled = true;
     log(`Broadcasting buy ${amountGnot} GNOT…`);
     try {
-      const path = m.status === 1 ? "/api/tx/swap-buy" : "/api/tx/buy";
-      const r = await api(path, {
-        method: "POST",
-        body: JSON.stringify({ id: m.id, amount: String(amountUgnot) }),
-      });
-      const got = r.result || "0";
+      const func = m.status === 1 ? "SwapBuy" : "Buy";
+      const r = await broadcastRealm(func, [m.id], `${amountUgnot}ugnot`);
+      const got = r.result || "?";
       log(`OK height ${r.height}\nhash ${r.hash}\n+${got} tokens`);
-      toast(`Bought +${fmtNum(got)} tokens`);
+      toast(`Bought — confirm in Adena history`);
       await refreshTradeBalances(m.id);
       // soft refresh market stats without full page wipe if possible
       try {
@@ -1102,13 +1227,10 @@ function wireToken(m) {
     btn.disabled = true;
     log(`Broadcasting sell ${fmtNum(tokens)} tokens…`);
     try {
-      const path = m.status === 1 ? "/api/tx/swap-sell" : "/api/tx/sell";
-      const r = await api(path, {
-        method: "POST",
-        body: JSON.stringify({ id: m.id, tokens: String(tokens) }),
-      });
-      log(`OK height ${r.height}\nhash ${r.hash}\nout ${fmtGnot(r.result)}`);
-      toast(`Sold — received ${fmtGnot(r.result)}`);
+      const func = m.status === 1 ? "SwapSell" : "Sell";
+      const r = await broadcastRealm(func, [m.id, String(tokens)], "");
+      log(`OK height ${r.height}\nhash ${r.hash}\nout ${r.result != null ? fmtGnot(r.result) : "see tx"}`);
+      toast(`Sold — confirm in Adena history`);
       await refreshTradeBalances(m.id);
       try {
         const fresh = await api(`/api/market/${encodeURIComponent(m.id)}`);
@@ -1153,16 +1275,14 @@ function wireGlobal() {
       toast("Invalid g1 address", false);
       return;
     }
-    const can =
-      addr === state.walletsMeta?.signerAddr ||
-      addr === "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5";
     saveWallet({
       address: addr,
-      label: can ? "Custom signer" : "Custom view-only",
-      canSign: can,
+      label: "View-only",
+      canSign: false,
+      type: "view",
     });
     closeWalletModal();
-    toast(can ? "Connected (signer)" : "Connected (view-only)");
+    toast("Connected view-only — use Adena to trade");
     if (state.view === "portfolio") refreshPortfolio();
     if (state.view === "creator") refreshCreator();
     updateCreateHint();
@@ -1179,26 +1299,24 @@ function wireGlobal() {
     e.preventDefault();
     if (!requireSigner("create a coin")) return;
     const fd = new FormData(e.target);
-    const body = {
-      name: fd.get("name"),
-      symbol: String(fd.get("symbol") || "").toUpperCase(),
-      uri: fd.get("uri") || "",
-      bond: `${gnotToUgnot(fd.get("bond") || 1)}ugnot`,
-    };
+    const name = fd.get("name");
+    const symbol = String(fd.get("symbol") || "").toUpperCase();
+    const uri = fd.get("uri") || "";
+    const bond = `${gnotToUgnot(fd.get("bond") || 1)}ugnot`;
     const log = $("#createLog");
-    log.textContent = "Creating…";
+    log.textContent =
+      state.wallet?.type === "adena"
+        ? "Approve Create in Adena…"
+        : "Creating…";
     try {
-      try {
-        await api("/api/tx/init", { method: "POST", body: "{}" });
-      } catch {
-        /* already inited */
-      }
-      const r = await api("/api/tx/create", { method: "POST", body: JSON.stringify(body) });
-      log.textContent = `Created id ${r.result}\nheight ${r.height}\n${r.hash}`;
-      toast(`Created $${body.symbol} (${r.result})`);
+      const r = await broadcastRealm("Create", [name, symbol, uri], bond);
+      log.textContent = `Created\nheight ${r.height}\nhash ${r.hash}\n${r.result ? "id " + r.result : "check markets after confirm"}`;
+      toast(`Create submitted for $${symbol}`);
+      // Adena may not return result id — refresh list after short delay
+      await new Promise((res) => setTimeout(res, 2500));
       await refreshMarkets();
-      if (r.result) openToken(r.result);
       refreshCreator();
+      if (r.result) openToken(r.result);
     } catch (err) {
       log.textContent = String(err.message || err);
       toast(String(err.message || err), false);
@@ -1209,19 +1327,26 @@ function wireGlobal() {
 async function boot() {
   try {
     state.wallet = loadWallet();
+    // stale local "signer" without type should not pretend canSign on Netlify
+    if (state.wallet && state.wallet.type !== "adena" && state.wallet.type !== "local") {
+      state.wallet.canSign = false;
+      state.wallet.type = state.wallet.type || "view";
+    }
     renderWalletChrome();
     wireGlobal();
     try {
       state.walletsMeta = await api("/api/wallets");
-      if (state.wallet?.address) {
-        const can = state.wallet.address === state.walletsMeta.signerAddr;
-        if (state.wallet.canSign !== can) {
-          saveWallet({ ...state.wallet, canSign: can });
-        }
-      }
     } catch {
-      state.walletsMeta = { signerAddr: "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5", demos: [] };
+      state.walletsMeta = { demos: [] };
     }
+    onAccountChange((address) => {
+      if (state.wallet?.type === "adena" && address) {
+        saveWallet({ ...state.wallet, address });
+        toast(`Adena account: ${shortAddr(address)}`);
+        if (state.view === "portfolio") refreshPortfolio();
+        if (state.view === "creator") refreshCreator();
+      }
+    });
     await refreshHealth();
     await refreshMarkets();
     updateCreateHint();

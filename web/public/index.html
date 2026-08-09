@@ -55,7 +55,7 @@
           <div class="hero-actions">
             <button type="button" class="btn primary" data-nav="create">Launch a coin</button>
             <button type="button" class="btn ghost" id="heroConnect">Connect wallet</button>
-            <a class="btn ghost" href="http://127.0.0.1:8888/r/gnomemepad/pad" target="_blank" rel="noreferrer">gnoweb ↗</a>
+            <a class="btn ghost" href="https://sapphire.testnets.gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad" target="_blank" rel="noreferrer">gnoweb ↗</a>
           </div>
         </div>
         <div class="stat-cards" id="statCards">
@@ -97,7 +97,7 @@
           <label>Symbol<input name="symbol" required maxlength="12" placeholder="LCAT" class="mono" /></label>
           <label>URI / meta<input name="uri" placeholder="https://…" /></label>
           <label>Bond (GNOT)<input name="bond" type="number" value="1" min="1" step="any" class="mono" /></label>
-          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create on local chain</button>
+          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create with Adena</button>
         </form>
         <pre class="log" id="createLog"></pre>
       </div>
@@ -142,14 +142,15 @@
         <button type="button" class="modal-x" data-close-modal aria-label="Close">×</button>
       </div>
       <p class="muted" style="margin-top:0">
-        Local demo: pick a funded key or paste any <span class="mono">g1</span> address for read-only mode.
+        Connect <strong>Adena</strong> to sign Create / Buy / Sell on Gno Sapphire.
+        Or paste any <span class="mono">g1</span> address for view-only.
       </p>
       <div id="walletDemoList" class="wallet-list"></div>
       <div class="form" style="margin-top:1rem">
-        <label>Or paste address
+        <label>Or paste address (view-only)
           <input id="walletPaste" class="mono" placeholder="g1…" maxlength="64" />
         </label>
-        <button type="button" class="btn primary wide" id="btnWalletPaste">Connect address</button>
+        <button type="button" class="btn ghost wide" id="btnWalletPaste">Connect address</button>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn ghost sm" id="btnWalletDisconnect">Disconnect</button>
