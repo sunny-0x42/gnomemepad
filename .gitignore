@@ -1,8 +1,11 @@
 # Secrets & keys
 .env
 .env.*
+!.env*.example
 *.pem
 *.key
+.netlify/
+web/.netlify/
 server.log
 server.err.log
 web/server.log

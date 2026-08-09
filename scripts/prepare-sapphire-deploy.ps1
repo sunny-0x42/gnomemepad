@@ -1,7 +1,7 @@
 # Rebuild deploy/sapphire tree for the user's personal-address namespace.
 # Target: Gno.land Sapphire testnet (chain-id sapphire-1).
 param(
-  [string]$Address = "g16p08xxtyt320hjju7769lzguxlvzszwpg8duwl"
+  [string]$Address = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr"
 )
 
 $ErrorActionPreference = "Stop"

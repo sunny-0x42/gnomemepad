@@ -21,11 +21,11 @@ This guide deploys to **Gno Sapphire**.
 
 | Package | Path |
 |---|---|
-| Math (pure) | `gno.land/p/g16p08xxtyt320hjju7769lzguxlvzszwpg8duwl/gnomemepad/ammmath` |
-| Launchpad realm | `gno.land/r/g16p08xxtyt320hjju7769lzguxlvzszwpg8duwl/gnomemepad/pad` |
+| Math (pure) | `gno.land/p/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/ammmath` |
+| Launchpad realm | `gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad` |
 
-- Wallet (deployer / protocol treasury after `Init`): **`g16p08xxtyt320hjju7769lzguxlvzszwpg8duwl`**
-- Local key name: **`mykey`** (`gnokey list`)
+- Wallet (deployer / protocol treasury after `Init`): **`g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr`**
+- Local key name: **`deploykey`** (`gnokey list`)
 
 ## Prerequisites
 

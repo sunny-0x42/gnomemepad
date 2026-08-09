@@ -54,7 +54,10 @@ function requireWallet(action = "continue") {
 function requireSigner(action = "sign") {
   if (!requireWallet(action)) return false;
   if (!canSign()) {
-    toast("This address is view-only — connect the local signer wallet to " + action, false);
+    toast(
+      "This host is view-only (e.g. Netlify). Create/Buy/Sell via local UI + gnokey or CLI on Sapphire.",
+      false,
+    );
     openWalletModal();
     return false;
   }
@@ -143,8 +146,13 @@ function setNet(ok, label) {
 async function refreshHealth() {
   try {
     const h = await api("/api/health");
-    if (h.ok) setNet(true, `dev · h${h.height || "?"}`);
-    else setNet(false, h.error || "RPC down");
+    if (h && h.signing === false) state.readOnlyHost = true;
+    if (h && h.hosting === "netlify") state.hosting = "netlify";
+    if (h.ok) {
+      const net = h.chainId || (h.hosting === "netlify" ? "sapphire" : "dev");
+      const tag = h.hosting === "netlify" ? "netlify" : net;
+      setNet(true, `${tag} · h${h.height || "?"}${h.signing === false ? " · view" : ""}`);
+    } else setNet(false, h.error || "RPC down");
   } catch (e) {
     setNet(false, "offline");
   }
@@ -169,7 +177,7 @@ async function refreshMarkets() {
     }
     renderMarketGrid();
   } catch (e) {
-    grid.innerHTML = `<div class="empty">Cannot load markets: ${escapeHtml(e.message)}. Is gnodev running on :26657?</div>`;
+    grid.innerHTML = `<div class="empty">Cannot load markets: ${escapeHtml(e.message)}. Check RPC / Netlify function logs.</div>`;
   }
 }
 

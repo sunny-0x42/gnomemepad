@@ -1,0 +1,16 @@
+{
+  "name": "gnomemepad",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Gno.land meme launchpad UI (Netlify static + serverless API)",
+  "scripts": {
+    "start": "node web/server.mjs",
+    "start:sapphire": "node --env-file=web/.env.sapphire web/server.mjs",
+    "netlify:dev": "npx netlify-cli dev",
+    "netlify:deploy": "npx netlify-cli deploy --prod"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,42 @@
+# gnomemepad UI → Netlify (static + serverless read API → Gno Sapphire)
+#
+# Deploy:
+#   npx netlify-cli login
+#   npx netlify-cli init   # or link existing site
+#   npx netlify-cli deploy --prod
+#
+# Env (defaults below; override in Netlify Dashboard → Site settings → Environment):
+#   RPC_URL, CHAIN_ID, PKG, SIGNER_ADDR
+
+[build]
+  publish = "web/public"
+  functions = "web/netlify/functions"
+  command = "node -e \"console.log('netlify build: static web/public')\""
+
+[build.environment]
+  NODE_VERSION = "20"
+  RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
+  CHAIN_ID = "sapphire-1"
+  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad"
+  SIGNER_ADDR = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr"
+  # Expose to functions (Netlify prefixes)
+  # Already available as process.env.* in functions when set here
+
+# /api/markets → function with splat path
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"

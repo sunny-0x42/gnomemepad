@@ -96,19 +96,21 @@ func requireInit() {
 }
 
 func mustLaunch(id string) *Launch {
-	v, ok := launches.Get(id)
+	// Sapphire avl.Tree.Get returns a single any (nil if missing).
+	l, ok := launches.Get(id).(*Launch)
 	if !ok {
 		panic("pad: unknown launch")
 	}
-	return v.(*Launch)
+	return l
 }
 
 func balOf(l *Launch, addr address) int64 {
-	v, ok := l.Balances.Get(addr.String())
+	// nil / wrong type => zero balance
+	v, ok := l.Balances.Get(addr.String()).(int64)
 	if !ok {
 		return 0
 	}
-	return v.(int64)
+	return v
 }
 
 func setBal(l *Launch, addr address, amount int64) {
@@ -637,11 +639,11 @@ func LaunchCount() int {
 }
 
 func ResolveSymbol(symbol string) string {
-	v, ok := bySymbol.Get(symbol)
+	s, ok := bySymbol.Get(symbol).(string)
 	if !ok {
 		return ""
 	}
-	return v.(string)
+	return s
 }
 
 // ListIDs returns newline-separated launch IDs (sorted by AVL key / creation order).

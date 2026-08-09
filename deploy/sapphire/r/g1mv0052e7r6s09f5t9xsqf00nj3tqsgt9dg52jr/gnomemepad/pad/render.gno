@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gno.land/p/g16p08xxtyt320hjju7769lzguxlvzszwpg8duwl/gnomemepad/ammmath"
+	"gno.land/p/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/ammmath"
 	"gno.land/p/nt/ufmt/v0"
 )
 
@@ -67,11 +67,10 @@ func renderHome() string {
 
 func renderToken(id string) string {
 	id = sanitize(id)
-	v, ok := launches.Get(id)
+	l, ok := launches.Get(id).(*Launch)
 	if !ok {
 		return "> [!WARNING]\n> Unknown launch " + id + "\n\n[Home](./)\n"
 	}
-	l := v.(*Launch)
 	st := "bonding curve"
 	if l.Status == StatusGraduated {
 		st = "graduated pool (LP locked)"

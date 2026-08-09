@@ -120,7 +120,8 @@ func (roTree *ReadOnlyTree) Has(key string) bool {
 
 // Get retrieves the value associated with the given key, converted to a safe format.
 func (roTree *ReadOnlyTree) Get(key string) (any, bool) {
-	value, exists := roTree.tree.Get(key)
+	exists := roTree.tree.Has(key)
+	value := roTree.tree.Get(key)
 	if !exists {
 		return nil, false
 	}

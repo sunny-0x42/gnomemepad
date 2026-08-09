@@ -67,11 +67,10 @@ func renderHome() string {
 
 func renderToken(id string) string {
 	id = sanitize(id)
-	v, ok := launches.Get(id)
+	l, ok := launches.Get(id).(*Launch)
 	if !ok {
 		return "> [!WARNING]\n> Unknown launch " + id + "\n\n[Home](./)\n"
 	}
-	l := v.(*Launch)
 	st := "bonding curve"
 	if l.Status == StatusGraduated {
 		st = "graduated pool (LP locked)"
