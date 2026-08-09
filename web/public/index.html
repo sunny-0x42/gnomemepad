@@ -22,7 +22,7 @@
       <button type="button" class="nav-btn" data-nav="create">Create</button>
       <button type="button" class="nav-btn" data-nav="portfolio">Portfolio</button>
       <button type="button" class="nav-btn" data-nav="creator">Creator</button>
-      <button type="button" class="nav-btn" data-nav="docs">Docs</button>
+      <button type="button" class="nav-btn" data-nav="docs">Guide</button>
     </nav>
     <div class="header-right">
       <div class="status-pill" id="netStatus">
@@ -97,156 +97,156 @@
     <section id="view-docs" class="view hidden">
       <article class="docs">
         <header class="docs-hero">
-          <h1>Hướng dẫn &amp; cơ chế</h1>
+          <h1>Guide &amp; how it works</h1>
           <p class="lede">
-            gnomemepad là launchpad meme trên <strong>Gno.land Sapphire</strong>:
-            phát hành fair launch, định giá bằng bonding curve, rồi tốt nghiệp sang pool CPMM khóa vĩnh viễn.
+            gnomemepad is a meme launchpad on <strong>Gno.land Sapphire</strong>:
+            fair launches, bonding-curve price discovery, then atomic graduation into a permanently locked CPMM pool.
           </p>
         </header>
 
-        <nav class="docs-toc" aria-label="Mục lục">
-          <a href="#docs-start">Bắt đầu</a>
-          <a href="#docs-flow">Luồng sử dụng</a>
-          <a href="#docs-mech">Cơ chế</a>
-          <a href="#docs-params">Tham số</a>
-          <a href="#docs-fees">Phí</a>
-          <a href="#docs-safety">Lưu ý</a>
+        <nav class="docs-toc" aria-label="Table of contents">
+          <a href="#docs-start">Get started</a>
+          <a href="#docs-flow">Using the app</a>
+          <a href="#docs-mech">Mechanics</a>
+          <a href="#docs-params">Parameters</a>
+          <a href="#docs-fees">Fees</a>
+          <a href="#docs-safety">Safety</a>
         </nav>
 
         <section class="docs-section" id="docs-start">
-          <h2>1. Bắt đầu</h2>
+          <h2>1. Get started</h2>
           <ol class="docs-steps">
             <li>
-              <strong>Cài Adena</strong>
-              <span>Ví browser cho Gno.land — <a href="https://adena.app/" target="_blank" rel="noreferrer">adena.app</a></span>
+              <strong>Install Adena</strong>
+              <span>Browser wallet for Gno.land — <a href="https://adena.app/" target="_blank" rel="noreferrer">adena.app</a></span>
             </li>
             <li>
-              <strong>Thêm mạng Sapphire</strong>
+              <strong>Add Sapphire network</strong>
               <span>Chain ID <code>sapphire-1</code> · RPC <code>https://rpc.sapphire.testnets.gno.land:443</code></span>
             </li>
             <li>
-              <strong>Nhận GNOT test</strong>
-              <span>Faucet: <a href="https://faucet.gno.land" target="_blank" rel="noreferrer">faucet.gno.land</a> (chọn Sapphire)</span>
+              <strong>Get test GNOT</strong>
+              <span>Faucet: <a href="https://faucet.gno.land" target="_blank" rel="noreferrer">faucet.gno.land</a> (select Sapphire)</span>
             </li>
             <li>
               <strong>Connect</strong>
-              <span>Nút <em>Connect</em> → chọn Adena → duyệt kết nối và giao dịch trên extension</span>
+              <span>Click <em>Connect</em> → Adena → approve the connection and later txs in the extension</span>
             </li>
           </ol>
         </section>
 
         <section class="docs-section" id="docs-flow">
-          <h2>2. Cách dùng trên website</h2>
+          <h2>2. Using the app</h2>
           <div class="docs-grid">
             <div class="docs-card">
               <h3>Markets</h3>
-              <p>Danh sách coin đang curve hoặc đã graduate. Bấm card để mở chart, mua/bán, xem tiến độ tốt nghiệp.</p>
+              <p>List of coins on the curve or already graduated. Open a card for chart, buy/sell, and graduation progress.</p>
             </div>
             <div class="docs-card">
               <h3>Create</h3>
-              <p>Đặt tên, symbol, bond tối thiểu <strong>1 GNOT</strong>. Không pre-mint cho creator — toàn bộ float bán qua curve.</p>
+              <p>Set name, symbol, and a create bond of at least <strong>1 GNOT</strong>. No pre-mint to the creator — all tradeable float sells on the curve.</p>
             </div>
             <div class="docs-card">
               <h3>Trade</h3>
-              <p><strong>Buy</strong>: gửi GNOT, nhận token. <strong>Sell</strong>: bán token lấy GNOT. Sau graduate dùng pool (SwapBuy / SwapSell).</p>
+              <p><strong>Buy</strong> sends GNOT for tokens. <strong>Sell</strong> returns tokens for GNOT. After graduation, trades use the locked pool (SwapBuy / SwapSell).</p>
             </div>
             <div class="docs-card">
               <h3>Portfolio</h3>
-              <p>Số dư GNOT và token meme của địa chỉ đang connect (hoặc địa chỉ view-only).</p>
+              <p>GNOT balance and meme token holdings for the connected (or view-only) address.</p>
             </div>
             <div class="docs-card">
               <h3>Creator</h3>
-              <p>Coin bạn đã tạo, phí creator tích lũy, claim phí về ví Adena.</p>
+              <p>Coins you launched, accrued creator fees, and claim fees to your Adena wallet.</p>
             </div>
             <div class="docs-card">
               <h3>View-only</h3>
-              <p>Có thể dán địa chỉ <code>g1…</code> chỉ để xem. Muốn ký Create/Buy/Sell cần Adena.</p>
+              <p>Paste any <code>g1…</code> address to browse. Create / Buy / Sell still require Adena to sign.</p>
             </div>
           </div>
         </section>
 
         <section class="docs-section" id="docs-mech">
-          <h2>3. Cơ chế hoạt động</h2>
+          <h2>3. How the platform works</h2>
           <div class="docs-flow">
             <div class="docs-flow-step">
               <span class="docs-n">01</span>
               <div>
                 <h3>Create (fair launch)</h3>
-                <p>Creator trả create bond. Token supply cố định; không mint sẵn cho team. Mọi người mua trên bonding curve như nhau.</p>
+                <p>The creator pays a create bond. Supply is fixed; nothing is pre-minted to the team. Everyone buys on the same bonding curve.</p>
               </div>
             </div>
             <div class="docs-flow-step">
               <span class="docs-n">02</span>
               <div>
                 <h3>Bonding curve (virtual CPMM)</h3>
-                <p>Giá theo constant-product ảo (virtual GNOT × virtual token). Càng mua nhiều, giá token càng tăng. Bán trả token về curve để nhận GNOT.</p>
+                <p>Price follows a virtual constant-product market (virtual GNOT × virtual tokens). Buys push price up; sells return tokens to the curve for GNOT.</p>
               </div>
             </div>
             <div class="docs-flow-step">
               <span class="docs-n">03</span>
               <div>
-                <h3>Graduation (tốt nghiệp)</h3>
-                <p>Khi GNOT raised trên curve đạt ngưỡng, protocol atomic chuyển sang pool CPMM thật: seed thanh khoản + khóa LP — không có cửa sổ migrate kiểu DEX bên ngoài.</p>
+                <h3>Graduation</h3>
+                <p>When GNOT raised on the curve hits the threshold, the protocol atomically seeds a real CPMM pool and locks LP — no external DEX migration window.</p>
               </div>
             </div>
             <div class="docs-flow-step">
               <span class="docs-n">04</span>
               <div>
                 <h3>Locked pool</h3>
-                <p>Sau graduate, trade qua pool locked. LP không rút được (permanent lock) — giảm dump thanh khoản sau listing.</p>
+                <p>After graduation, trading uses the locked pool. LP cannot be withdrawn (permanent lock), reducing post-listing liquidity dumps.</p>
               </div>
             </div>
           </div>
           <p class="docs-note">
-            Toàn bộ logic chạy on-chain trong realm Gno (factory = market). UI chỉ đọc state và gửi giao dịch qua ví.
+            All market logic runs on-chain in a Gno realm (the factory is the market). The UI only reads state and submits wallet-signed transactions.
           </p>
         </section>
 
         <section class="docs-section" id="docs-params">
-          <h2>4. Tham số on-chain (MVP)</h2>
+          <h2>4. On-chain parameters (MVP)</h2>
           <div class="docs-table-wrap">
             <table class="docs-table">
               <thead>
-                <tr><th>Tham số</th><th>Giá trị</th><th>Ý nghĩa</th></tr>
+                <tr><th>Parameter</th><th>Value</th><th>Meaning</th></tr>
               </thead>
               <tbody>
-                <tr><td>Total supply</td><td>1,000,000,000</td><td>Tổng cung token mỗi launch</td></tr>
-                <tr><td>Curve supply</td><td>800,000,000</td><td>Bán trên bonding curve</td></tr>
-                <tr><td>Pool seed</td><td>200,000,000</td><td>Khóa vào CPMM khi graduate</td></tr>
-                <tr><td>Graduation</td><td>50 GNOT</td><td>Ngưỡng raised để tốt nghiệp (testnet)</td></tr>
-                <tr><td>Create bond</td><td>1 GNOT</td><td>Phí/bond chống spam khi Create</td></tr>
-                <tr><td>Trade fee</td><td>1.20%</td><td>Phí mỗi lần trade (mua/bán)</td></tr>
-                <tr><td>Anti-snipe</td><td>~20 block đầu</td><td>Giới hạn mua lớn ngay sau create</td></tr>
+                <tr><td>Total supply</td><td>1,000,000,000</td><td>Token supply per launch</td></tr>
+                <tr><td>Curve supply</td><td>800,000,000</td><td>Sold on the bonding curve</td></tr>
+                <tr><td>Pool seed</td><td>200,000,000</td><td>Locked into the CPMM at graduation</td></tr>
+                <tr><td>Graduation</td><td>50 GNOT</td><td>Raised threshold to graduate (testnet)</td></tr>
+                <tr><td>Create bond</td><td>1 GNOT</td><td>Anti-spam bond on Create</td></tr>
+                <tr><td>Trade fee</td><td>1.20%</td><td>Fee on each buy/sell</td></tr>
+                <tr><td>Anti-snipe</td><td>~20 blocks</td><td>Caps large buys right after create</td></tr>
               </tbody>
             </table>
           </div>
-          <p class="docs-note">Số liệu “Graduate at” / “Trade fee” trên trang Markets đọc trực tiếp từ chain (<code>ParamsInfo</code>).</p>
+          <p class="docs-note">“Graduate at” and “Trade fee” on Markets are read live from the chain (<code>ParamsInfo</code>).</p>
         </section>
 
         <section class="docs-section" id="docs-fees">
-          <h2>5. Phí &amp; claim</h2>
+          <h2>5. Fees &amp; claims</h2>
           <ul class="docs-list">
-            <li><strong>1.20% fee</strong> trên mỗi trade (buy/sell).</li>
-            <li>Trong phần fee: khoảng <strong>40% creator</strong>, <strong>40% protocol</strong>, phần còn lại gắn curve/pool (LP residual).</li>
-            <li>Creator claim phí tại tab <em>Creator</em> (Adena ký <code>ClaimCreatorFees</code>).</li>
-            <li>Protocol claim qua <code>ClaimProtocolFees</code> (địa chỉ treasury đã Init).</li>
+            <li><strong>1.20% fee</strong> on every trade (buy/sell).</li>
+            <li>Of that fee: about <strong>40% creator</strong>, <strong>40% protocol</strong>, remainder stays with curve/pool (LP residual).</li>
+            <li>Creators claim fees under <em>Creator</em> (Adena signs <code>ClaimCreatorFees</code>).</li>
+            <li>Protocol claims via <code>ClaimProtocolFees</code> (treasury set at <code>Init</code>).</li>
           </ul>
         </section>
 
         <section class="docs-section" id="docs-safety">
-          <h2>6. Lưu ý an toàn</h2>
+          <h2>6. Safety notes</h2>
           <ul class="docs-list">
-            <li>Đây là <strong>testnet</strong> (Sapphire) — GNOT không có giá trị mainnet.</li>
-            <li>Meme coin rủi ro cao; chỉ dùng vốn bạn chấp nhận mất.</li>
-            <li>Chỉ duyệt giao dịch trên domain tin cậy; kiểm tra <code>pkg_path</code> realm trước khi ký trên Adena.</li>
-            <li>Không chia sẻ seed phrase / mật khẩu ví với bất kỳ ai (kể cả “hỗ trợ”).</li>
-            <li>Contract on-chain:
+            <li>This is a <strong>testnet</strong> (Sapphire) — GNOT has no mainnet value.</li>
+            <li>Meme coins are high risk; only use funds you can afford to lose.</li>
+            <li>Only approve txs on a trusted domain; check the realm <code>pkg_path</code> in Adena before signing.</li>
+            <li>Never share seed phrases or wallet passwords with anyone (including “support”).</li>
+            <li>On-chain contract:
               <a class="mono docs-link" href="https://sapphire.testnets.gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad" target="_blank" rel="noreferrer">gno.land/r/…/gnomemepad/pad</a>
             </li>
           </ul>
           <div class="docs-actions">
-            <button type="button" class="btn primary" data-nav="create">Tạo coin</button>
-            <button type="button" class="btn ghost" data-nav="home">Xem markets</button>
+            <button type="button" class="btn primary" data-nav="create">Create a coin</button>
+            <button type="button" class="btn ghost" data-nav="home">View markets</button>
             <button type="button" class="btn ghost" id="docsConnect">Connect Adena</button>
           </div>
         </section>
@@ -256,7 +256,7 @@
 
   <footer class="foot">
     <span>Sapphire testnet</span>
-    <button type="button" class="foot-link" data-nav="docs">Hướng dẫn</button>
+    <button type="button" class="foot-link" data-nav="docs">Guide</button>
     <a href="https://sapphire.testnets.gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad" target="_blank" rel="noreferrer">Contract</a>
     <a href="https://adena.app/" target="_blank" rel="noreferrer">Adena</a>
   </footer>
