@@ -345,6 +345,7 @@ function showView(name) {
     token: "view-token",
     portfolio: "view-portfolio",
     creator: "view-creator",
+    docs: "view-docs",
   };
   $(`#${map[name] || "view-home"}`)?.classList.remove("hidden");
   $$(".nav-btn").forEach((b) =>
@@ -356,6 +357,10 @@ function showView(name) {
   if (name === "portfolio") refreshPortfolio();
   if (name === "creator") refreshCreator();
   if (name === "create") updateCreateHint();
+  if (name === "docs") {
+    // smooth-ish: scroll page top when opening docs
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
 function renderWalletChrome() {
@@ -1226,7 +1231,7 @@ function wireGlobal() {
   $$("[data-nav]").forEach((el) => {
     el.addEventListener("click", () => {
       const v = el.dataset.nav;
-      if (["home", "create", "portfolio", "creator"].includes(v)) showView(v);
+      if (["home", "create", "portfolio", "creator", "docs"].includes(v)) showView(v);
     });
   });
   $("#btnRefresh")?.addEventListener("click", () => {
@@ -1236,6 +1241,18 @@ function wireGlobal() {
   $("#search")?.addEventListener("input", () => renderMarketGrid());
   $("#btnWallet")?.addEventListener("click", openWalletModal);
   $("#heroConnect")?.addEventListener("click", openWalletModal);
+  $("#docsConnect")?.addEventListener("click", () => connectWithAdena());
+  // In-page docs anchors
+  $$('#view-docs a[href^="#"]').forEach((a) => {
+    a.addEventListener("click", (e) => {
+      const id = a.getAttribute("href")?.slice(1);
+      const target = id && document.getElementById(id);
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  });
   $$("[data-close-modal]").forEach((el) => el.addEventListener("click", closeWalletModal));
   $("#btnWalletPaste")?.addEventListener("click", () => {
     const addr = ($("#walletPaste")?.value || "").trim();
