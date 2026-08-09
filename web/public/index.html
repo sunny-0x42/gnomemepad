@@ -109,6 +109,7 @@
           <a href="#docs-flow">Using the app</a>
           <a href="#docs-mech">Mechanics</a>
           <a href="#docs-curve">Curve pricing</a>
+          <a href="#docs-grc20">GRC20 &amp; Gnoswap</a>
           <a href="#docs-params">Parameters</a>
           <a href="#docs-fees">Fees</a>
           <a href="#docs-safety">Safety</a>
@@ -294,8 +295,49 @@ newVU = (virtualUgnot * virtualToken) / newVT
 ugnotOut = virtualUgnot - newVU</pre>
         </section>
 
+        <section class="docs-section" id="docs-grc20">
+          <h2>5. GRC20 tokens &amp; Gnoswap listing</h2>
+          <p class="docs-note" style="margin-top:0">
+            Each Create mints a real <strong>GRC20</strong> token bound to the pad realm
+            (<code>Token.ID = padPkg.SYMBOL.seq</code>). Buys <strong>mint</strong> to the buyer; sells <strong>burn</strong>.
+            Holders can <code>Transfer</code> / <code>Approve</code> for external use (DEX).
+          </p>
+          <div class="docs-flow">
+            <div class="docs-flow-step">
+              <span class="docs-n">01</span>
+              <div>
+                <h3>Create → GRC20</h3>
+                <p>New launch registers a GRC20 ledger in the pad. No pre-mint to the creator; circulating supply grows only via curve buys.</p>
+              </div>
+            </div>
+            <div class="docs-flow-step">
+              <span class="docs-n">02</span>
+              <div>
+                <h3>Graduate → listable</h3>
+                <p>When raised hits the threshold, pad seeds a <em>locked</em> internal CPMM and sets <code>GnoswapReady</code>. The GRC20 already exists and is transferable.</p>
+              </div>
+            </div>
+            <div class="docs-flow-step">
+              <span class="docs-n">03</span>
+              <div>
+                <h3>List on Gnoswap</h3>
+                <p>
+                  Gnoswap pools are <strong>permissionless</strong>. After graduation, create a GNOT/token pool on Gnoswap
+                  (seed liquidity from holders). Register metadata via
+                  <a href="https://github.com/onbloc/gno-token-resource" target="_blank" rel="noreferrer">gno-token-resource</a>
+                  for full UI display.
+                </p>
+              </div>
+            </div>
+          </div>
+          <p class="docs-note">
+            Pad pool and Gnoswap pool can coexist. Prices may diverge — arbitrage is expected.
+            Automated Gnoswap pool creation (if/when chain APIs allow) can be wired later without changing the GRC20 mint model.
+          </p>
+        </section>
+
         <section class="docs-section" id="docs-params">
-          <h2>5. On-chain parameters (MVP)</h2>
+          <h2>6. On-chain parameters (MVP)</h2>
           <div class="docs-table-wrap">
             <table class="docs-table">
               <thead>
@@ -316,7 +358,7 @@ ugnotOut = virtualUgnot - newVU</pre>
         </section>
 
         <section class="docs-section" id="docs-fees">
-          <h2>6. Fees &amp; claims</h2>
+          <h2>7. Fees &amp; claims</h2>
           <ul class="docs-list">
             <li><strong>1.20% fee</strong> on every trade (buy/sell).</li>
             <li>Of that fee: about <strong>40% creator</strong>, <strong>40% protocol</strong>, remainder stays with curve/pool (LP residual).</li>
@@ -326,7 +368,7 @@ ugnotOut = virtualUgnot - newVU</pre>
         </section>
 
         <section class="docs-section" id="docs-safety">
-          <h2>7. Safety notes</h2>
+          <h2>8. Safety notes</h2>
           <ul class="docs-list">
             <li>This is a <strong>testnet</strong> (Sapphire) — GNOT has no mainnet value.</li>
             <li>Meme coins are high risk; only use funds you can afford to lose.</li>

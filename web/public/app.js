@@ -956,7 +956,7 @@ function renderToken(m) {
       <div class="token-head">
         <div>
           <h2>${escapeHtml(m.name)} <span class="card-sym">$${escapeHtml(m.symbol)}</span></h2>
-          <div class="mono muted" style="font-size:0.8rem;margin-top:0.25rem">id ${escapeHtml(m.id)}</div>
+          <div class="mono muted" style="font-size:0.8rem;margin-top:0.25rem">launch ${escapeHtml(m.id)}</div>
           <div class="price-mcap-row">
             <div class="pm-block">
               <div class="pm-k">Price</div>
@@ -986,7 +986,27 @@ function renderToken(m) {
         <div class="kv-row"><span>Buyers</span><span>${fmtNum(m.buyers)}</span></div>
         <div class="kv-row"><span>Creator fees</span><span>${fmtGnot(m.creatorFeesGnot ?? m.creatorFees, { alreadyGnot: m.creatorFeesGnot != null })}</span></div>
         <div class="kv-row"><span>Creator</span><span title="${escapeHtml(m.creator || "")}">${shortAddr(m.creator)}</span></div>
+        ${
+          m.tokenId
+            ? `<div class="kv-row"><span>GRC20 Token.ID</span><span class="mono" title="${escapeHtml(m.tokenId)}">${escapeHtml(m.tokenId.length > 42 ? m.tokenId.slice(0, 20) + "…" + m.tokenId.slice(-12) : m.tokenId)}</span></div>`
+            : ""
+        }
+        ${
+          m.gnoswapReady || isPool
+            ? `<div class="kv-row"><span>Gnoswap</span><span class="badge graduated">Ready to list</span></div>`
+            : `<div class="kv-row"><span>Gnoswap</span><span class="muted">After graduation</span></div>`
+        }
       </div>
+      ${
+        m.gnoswapReady || isPool
+          ? `<div class="callout ok" style="margin-top:0.75rem">
+          <strong>GRC20 ready for Gnoswap.</strong>
+          Create a permissionless GNOT/${escapeHtml(m.symbol)} pool on
+          <a href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Gnoswap</a>
+          using Token.ID above. Pad keeps a locked CPMM; Gnoswap is a separate venue.
+        </div>`
+          : ""
+      }
       ${trades}
     </div>
     <div class="panel">

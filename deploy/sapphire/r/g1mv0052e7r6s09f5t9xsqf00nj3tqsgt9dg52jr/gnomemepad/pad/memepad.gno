@@ -1,12 +1,12 @@
 // Package pad is gnomemepad: a self-contained meme launchpad for gno.land.
 //
-// Direction A â€” factory IS the market (no external AMM required):
+// Direction A â€” factory IS the market (no external AMM required for MVP):
 //
-//	Create â†’ bonding curve (virtual CPMM, fair mint) â†’ Graduate (atomic)
-//	â†’ locked real CPMM pool (permanent LP, no remove) â†’ creator/protocol fees
+//	Create â†’ GRC20 token + bonding curve â†’ Graduate (atomic locked CPMM)
+//	â†’ GRC20 is listable on Gnoswap (external DEX); pad keeps locked pool too
 //
-// Hybrid of Pump.fun (curve + graduation) and Noxa Fun (no external migration,
-// permanent lock) adapted to Gno: banker push payments, on-chain Render discovery.
+// Tokens are real GRC20 (mint on buy, burn on sell) so holders can transfer and
+// later provide liquidity on Gnoswap. Hybrid of Pump.fun + permanent LP lock.
 package pad
 
 import (
@@ -16,6 +16,7 @@ import (
 	"chain/runtime/unsafe"
 	"strconv"
 
+	"gno.land/p/demo/tokens/grc20"
 	"gno.land/p/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/ammmath"
 	"gno.land/p/nt/avl/v0"
 	"gno.land/p/nt/seqid/v0"
@@ -25,6 +26,7 @@ var (
 	launches     avl.Tree // id -> *Launch
 	bySymbol     avl.Tree // symbol -> id string
 	nextID       seqid.ID
+	nextTokenID  seqid.ID // GRC20 identity sequence (shared for all launches)
 	protocolAddr address
 	protocolFees int64
 	inited       bool
@@ -52,6 +54,11 @@ type Launch struct {
 	Status  int
 	Created int64 // block height
 
+	// GRC20 (mint/burn via pad; transferable off-pad after buy)
+	Token   *grc20.Token
+	Ledger  *grc20.PrivateLedger
+	TokenID string // Token.ID() â€” registry / Gnoswap identity
+
 	// Virtual curve reserves
 	VirtualUgnot int64
 	VirtualToken int64
@@ -59,17 +66,19 @@ type Launch struct {
 	RaisedUgnot  int64 // net ugnot collateral in curve (excl. fee vaults)
 
 	// Real pool (post-grad); LP permanently locked â€” no remove path
+	// PoolToken is pad-internal reserve (not the same as GRC20 total supply).
 	PoolUgnot int64
 	PoolToken int64
-
-	// Token balances: bech32 -> int64 (factory-managed ledger)
-	Balances avl.Tree
 
 	CreatorFees  int64
 	BondUgnot    int64
 	BondRefunded bool
 	UniqueBuyers avl.Tree
 	BuyerCount   int
+
+	// Gnoswap listing readiness (GRC20 exists from Create; pool on Gnoswap is external)
+	GnoswapReady bool // true after graduate â€” token may be paired on Gnoswap
+	GnoswapNote  string
 
 	// Chart history (ordered AVL keys)
 	Trades    avl.Tree // tradeKey -> *Trade
@@ -105,36 +114,29 @@ func mustLaunch(id string) *Launch {
 }
 
 func balOf(l *Launch, addr address) int64 {
-	// nil / wrong type => zero balance
-	v, ok := l.Balances.Get(addr.String()).(int64)
-	if !ok {
+	if l == nil || l.Token == nil {
 		return 0
 	}
-	return v
+	return l.Token.BalanceOf(addr)
 }
 
-func setBal(l *Launch, addr address, amount int64) {
-	if amount < 0 {
-		panic("pad: negative balance")
+// addBal mints (delta>0) or burns (delta<0) GRC20 via pad-owned PrivateLedger.
+func addBal(l *Launch, addr address, delta int64) {
+	if l == nil || l.Ledger == nil {
+		panic("pad: missing GRC20 ledger")
 	}
-	key := addr.String()
-	if amount == 0 {
-		l.Balances.Remove(key)
+	if delta == 0 {
 		return
 	}
-	l.Balances.Set(key, amount)
-}
-
-func addBal(l *Launch, addr address, delta int64) {
-	curBal := balOf(l, addr)
-	n := curBal + delta
-	if delta > 0 && n < curBal {
-		panic("pad: balance overflow")
+	if delta > 0 {
+		if err := l.Ledger.Mint(addr, delta); err != nil {
+			panic("pad: mint: " + err.Error())
+		}
+		return
 	}
-	if n < 0 {
-		panic("pad: insufficient balance")
+	if err := l.Ledger.Burn(addr, -delta); err != nil {
+		panic("pad: burn: " + err.Error())
 	}
-	setBal(l, addr, n)
 }
 
 func sendUgnot(cur realm, to address, amount int64) {
@@ -255,6 +257,11 @@ func Create(cur realm, name, symbol, uri string) string {
 
 	creator := cur.Previous().Address()
 	id := nextID.Next().String()
+
+	// Real GRC20 bound to this pad realm (mint/burn only via pad ledger).
+	// Decimals=0: whole-token units (matches existing trade amounts).
+	token, ledger := grc20.NewToken(name, symbol, 0, nextTokenID.Next(), cur)
+
 	l := &Launch{
 		ID:           id,
 		Name:         name,
@@ -263,9 +270,11 @@ func Create(cur realm, name, symbol, uri string) string {
 		Creator:      creator,
 		Status:       StatusCurve,
 		Created:      runtime.ChainHeight(),
+		Token:        token,
+		Ledger:       ledger,
+		TokenID:      token.ID(),
 		VirtualUgnot: VirtualUgnot0,
 		VirtualToken: VirtualToken0,
-		Balances:     avl.Tree{},
 		UniqueBuyers: avl.Tree{},
 		BondUgnot:    CreateBondUgnot,
 		Trades:       avl.Tree{},
@@ -275,7 +284,12 @@ func Create(cur realm, name, symbol, uri string) string {
 	launches.Set(id, l)
 	bySymbol.Set(symbol, id)
 
-	chain.Emit("Created", "id", id, "symbol", symbol, "creator", creator.String())
+	chain.Emit("Created",
+		"id", id,
+		"symbol", symbol,
+		"creator", creator.String(),
+		"token", l.TokenID,
+	)
 	return id
 }
 
@@ -463,12 +477,34 @@ func graduate(cur realm, l *Launch) {
 	// Mark graduation on chart at pool spot.
 	recordTrade(l, TradeSideOpen, poolU, poolT)
 
+	// GRC20 already exists and is transferable. Mark ready for external Gnoswap pool.
+	// Pad keeps a locked internal CPMM; Gnoswap listing is a separate permissionless pool
+	// seeded with GNOT + this GRC20 by the community/creator (see Guide).
+	l.GnoswapReady = true
+	l.GnoswapNote = "create GNOT/" + l.Symbol + " pool on Gnoswap with Token.ID=" + l.TokenID
+
 	chain.Emit("Graduated",
 		"id", l.ID,
 		"poolUgnot", strconv.FormatInt(poolU, 10),
 		"poolToken", strconv.FormatInt(poolT, 10),
+		"token", l.TokenID,
+		"gnoswap_ready", "1",
 	)
 	_ = cur // banker not needed; ugnot already on realm
+}
+
+// TokenIDOf returns the GRC20 Token.ID() for a launch.
+func TokenIDOf(id string) string {
+	return mustLaunch(id).TokenID
+}
+
+// GRC20Bank returns the underlying *grc20.Token for interop (metadata / external DEX).
+func GRC20Bank(id string) *grc20.Token {
+	l := mustLaunch(id)
+	if l.Token == nil {
+		panic("pad: no token")
+	}
+	return l.Token
 }
 
 // SwapBuy buys tokens from the graduated pool with -send ugnot.
@@ -543,7 +579,7 @@ func SwapSell(cur realm, id string, tokensIn int64) int64 {
 	return fee.Net
 }
 
-// Transfer moves factory-ledger tokens between addresses.
+// Transfer moves GRC20 tokens between addresses (user-initiated).
 func Transfer(cur realm, id string, to address, amount int64) {
 	requireInit()
 	if !cur.Previous().IsUserCall() {
@@ -560,9 +596,35 @@ func Transfer(cur realm, id string, to address, amount int64) {
 	if from == to {
 		panic("pad: self transfer")
 	}
-	addBal(l, from, -amount)
-	addBal(l, to, amount)
+	if l.Ledger == nil {
+		panic("pad: no GRC20 ledger")
+	}
+	// Proper GRC20 transfer (not mint/burn).
+	if err := l.Ledger.Transfer(from, to, amount); err != nil {
+		panic("pad: transfer: " + err.Error())
+	}
 	chain.Emit("Transfer", "id", id, "from", from.String(), "to", to.String(),
+		"amount", strconv.FormatInt(amount, 10))
+}
+
+// Approve sets GRC20 allowance so DEX/contracts can TransferFrom.
+func Approve(cur realm, id string, spender address, amount int64) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	if !spender.IsValid() {
+		panic("pad: invalid spender")
+	}
+	l := mustLaunch(id)
+	if l.Ledger == nil {
+		panic("pad: no GRC20 ledger")
+	}
+	owner := cur.Previous().Address()
+	if err := l.Ledger.Approve(owner, spender, amount); err != nil {
+		panic("pad: approve: " + err.Error())
+	}
+	chain.Emit("Approval", "id", id, "owner", owner.String(), "spender", spender.String(),
 		"amount", strconv.FormatInt(amount, 10))
 }
 
@@ -661,11 +723,15 @@ func ListIDs() string {
 
 // LaunchInfo returns a single-line pipe-delimited summary for UIs/indexers:
 //
-//	id|name|symbol|status|raised|sold|buyers|creatorFees|poolUgnot|poolToken|uri|creator|virtualUgnot|virtualToken|created
+//	id|name|symbol|status|raised|sold|buyers|creatorFees|poolUgnot|poolToken|uri|creator|virtualUgnot|virtualToken|created|tokenID|gnoswapReady
 //
-// status: 0=curve 1=graduated
+// status: 0=curve 1=graduated; gnoswapReady: 0|1
 func LaunchInfo(id string) string {
 	l := mustLaunch(id)
+	gs := "0"
+	if l.GnoswapReady {
+		gs = "1"
+	}
 	return l.ID + "|" +
 		l.Name + "|" +
 		l.Symbol + "|" +
@@ -680,7 +746,9 @@ func LaunchInfo(id string) string {
 		l.Creator.String() + "|" +
 		strconv.FormatInt(l.VirtualUgnot, 10) + "|" +
 		strconv.FormatInt(l.VirtualToken, 10) + "|" +
-		strconv.FormatInt(l.Created, 10)
+		strconv.FormatInt(l.Created, 10) + "|" +
+		l.TokenID + "|" +
+		gs
 }
 
 // ParamsInfo returns fixed MVP parameters for UI display.
