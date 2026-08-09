@@ -11,6 +11,9 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
 const LS_WALLET = "gnomemepad.wallet.v1";
+/** Fixed create platform fee (matches on-chain CreateBondUgnot). Not user-editable. */
+const CREATE_FEE_GNOT = 10;
+const CREATE_FEE_UGNOT = CREATE_FEE_GNOT * 1_000_000;
 
 const state = {
   view: "home",
@@ -446,7 +449,7 @@ function updateCreateHint() {
     el.className = "callout ok";
     el.innerHTML = `Creating as <span class="mono">${escapeHtml(shortAddr(state.wallet.address))}</span>`;
   }
-  if (btn) btn.textContent = "Create";
+  if (btn) btn.textContent = `Create · ${CREATE_FEE_GNOT} GNOT`;
 }
 
 async function refreshPortfolio() {
@@ -1287,11 +1290,11 @@ function wireGlobal() {
     const name = fd.get("name");
     const symbol = String(fd.get("symbol") || "").toUpperCase();
     const uri = fd.get("uri") || "";
-    const bond = `${gnotToUgnot(fd.get("bond") || 1)}ugnot`;
+    const bond = `${CREATE_FEE_UGNOT}ugnot`;
     const log = $("#createLog");
     if (log) {
       log.hidden = false;
-      log.textContent = "Approve in wallet…";
+      log.textContent = `Approve Create (${CREATE_FEE_GNOT} GNOT fee) in wallet…`;
     }
     try {
       const r = await broadcastRealm("Create", [name, symbol, uri], bond);

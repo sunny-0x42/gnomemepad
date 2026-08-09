@@ -231,13 +231,14 @@ func maybeRefundBond(cur realm, l *Launch) {
 	chain.Emit("BondRefund", "id", l.ID, "amount", strconv.FormatInt(amt, 10))
 }
 
-// Create deploys a fair-launch meme. Requires CreateBondUgnot via -send.
+// Create deploys a fair-launch meme. Requires fixed CreateBondUgnot platform fee via -send.
+// Fee goes entirely to protocolFees (not the curve, not refundable). Does not change virtual reserves.
 // No pre-mint; all tradeable float starts on the bonding curve.
 func Create(cur realm, name, symbol, uri string) string {
 	requireInit()
 	sent := requireUserPayment(cur)
 	if sent < CreateBondUgnot {
-		panic("pad: create bond underpaid")
+		panic("pad: create fee underpaid")
 	}
 	if name == "" || symbol == "" {
 		panic("pad: name and symbol required")
@@ -248,10 +249,8 @@ func Create(cur realm, name, symbol, uri string) string {
 	if bySymbol.Has(symbol) {
 		panic("pad: symbol taken")
 	}
-	extra := sent - CreateBondUgnot
-	if extra > 0 {
-		protocolFees += extra
-	}
+	// Entire payment = platform fee (fixed fee model). Excess above CreateBondUgnot also to protocol.
+	protocolFees += sent
 
 	creator := cur.Previous().Address()
 	id := nextID.Next().String()
@@ -267,7 +266,7 @@ func Create(cur realm, name, symbol, uri string) string {
 		VirtualToken: VirtualToken0,
 		Balances:     avl.Tree{},
 		UniqueBuyers: avl.Tree{},
-		BondUgnot:    CreateBondUgnot,
+		BondUgnot:    0, // no refundable bond; create fee is non-refundable platform fee
 		Trades:       avl.Tree{},
 	}
 	// Open mark for charts (initial virtual spot).

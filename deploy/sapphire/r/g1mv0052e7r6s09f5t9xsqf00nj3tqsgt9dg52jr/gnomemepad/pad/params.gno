@@ -23,8 +23,10 @@ const (
 	CreatorFeeShareBPS int64 = 4000
 	ProtocolFeeShareBPS int64 = 4000
 
-	// Anti-spam create bond (1 GNOT). Refunded if min unique buyers hit before expire.
-	CreateBondUgnot      int64 = 1_000_000
+	// Fixed platform create fee (10 GNOT). Not refundable; credited to protocolFees.
+	// UI sends exactly this amount; not user-editable.
+	CreateBondUgnot      int64 = 10_000_000
+	// Legacy refund knobs (unused when BondUgnot is always 0 after Create fee model).
 	BondRefundBuyers     int   = 5
 	BondRefundMaxHeights int64 = 100_000 // ~ loosely long window; chain-dependent
 

@@ -73,14 +73,18 @@
     <section id="view-create" class="view hidden">
       <div class="panel create-panel">
         <h1>Create</h1>
-        <p class="lede">Fair launch · bond required · no pre-mint</p>
+        <p class="lede">Fair launch · fixed platform fee · no pre-mint</p>
         <div id="createWalletHint" class="callout"></div>
         <form id="createForm" class="form">
           <label>Name<input name="name" required maxlength="48" placeholder="Token name" /></label>
           <label>Symbol<input name="symbol" required maxlength="12" placeholder="TICKER" class="mono" /></label>
           <label>URI <span class="opt">(optional)</span><input name="uri" placeholder="https://" /></label>
-          <label>Bond (GNOT)<input name="bond" type="number" value="1" min="1" step="any" class="mono" /></label>
-          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create</button>
+          <div class="fee-fixed">
+            <span class="fee-fixed-k">Platform fee</span>
+            <span class="fee-fixed-v mono">10 GNOT</span>
+            <span class="fee-fixed-h">Fixed · non-refundable · does not affect the bonding curve</span>
+          </div>
+          <button type="submit" class="btn primary wide" id="btnCreateSubmit">Create · 10 GNOT</button>
         </form>
         <pre class="log" id="createLog" hidden></pre>
       </div>
@@ -145,7 +149,7 @@
             </div>
             <div class="docs-card">
               <h3>Create</h3>
-              <p>Set name, symbol, and a create bond of at least <strong>1 GNOT</strong>. No pre-mint to the creator — all tradeable float sells on the curve.</p>
+              <p>Set name and symbol. A fixed <strong>10 GNOT</strong> platform fee is charged (not editable). No pre-mint — all tradeable float sells on the curve.</p>
             </div>
             <div class="docs-card">
               <h3>Trade</h3>
@@ -173,7 +177,7 @@
               <span class="docs-n">01</span>
               <div>
                 <h3>Create (fair launch)</h3>
-                <p>The creator pays a create bond. Supply is fixed; nothing is pre-minted to the team. Everyone buys on the same bonding curve.</p>
+                <p>The creator pays a fixed <strong>10 GNOT</strong> platform fee. Supply is fixed; nothing is pre-minted to the team. Everyone buys on the same bonding curve (fee does not seed the curve).</p>
               </div>
             </div>
             <div class="docs-flow-step">
@@ -306,7 +310,7 @@ ugnotOut = virtualUgnot - newVU</pre>
                 <tr><td>Curve supply</td><td>800,000,000</td><td>Sold on the bonding curve</td></tr>
                 <tr><td>Pool seed</td><td>200,000,000</td><td>Locked into the CPMM at graduation</td></tr>
                 <tr><td>Graduation</td><td>50 GNOT</td><td>Raised threshold to graduate (testnet)</td></tr>
-                <tr><td>Create bond</td><td>1 GNOT</td><td>Anti-spam bond on Create</td></tr>
+                <tr><td>Create fee</td><td>10 GNOT</td><td>Fixed platform fee (non-refundable, not on curve)</td></tr>
                 <tr><td>Trade fee</td><td>1.20%</td><td>Fee on each buy/sell</td></tr>
                 <tr><td>Anti-snipe</td><td>~20 blocks</td><td>Caps large buys right after create</td></tr>
               </tbody>
