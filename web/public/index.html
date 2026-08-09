@@ -108,6 +108,7 @@
           <a href="#docs-start">Get started</a>
           <a href="#docs-flow">Using the app</a>
           <a href="#docs-mech">Mechanics</a>
+          <a href="#docs-curve">Curve pricing</a>
           <a href="#docs-params">Parameters</a>
           <a href="#docs-fees">Fees</a>
           <a href="#docs-safety">Safety</a>
@@ -202,8 +203,99 @@
           </p>
         </section>
 
+        <section class="docs-section" id="docs-curve">
+          <h2>4. Curve pricing (how price is calculated)</h2>
+          <p class="docs-note" style="margin-top:0">
+            While a launch is on the <strong>bonding curve</strong>, price discovery uses a
+            <strong>virtual constant-product AMM (CPMM)</strong> — the same family of math as Uniswap v2 / Pump-style curves,
+            but with <em>virtual</em> reserves that start pre-seeded so the first buys are not free and price rises smoothly.
+          </p>
+
+          <h3 class="docs-h3">Invariant</h3>
+          <p class="docs-note">
+            Virtual reserves always satisfy approximately:
+          </p>
+          <pre class="docs-formula">k = R<sub>u</sub> × R<sub>t</sub>  (constant)</pre>
+          <ul class="docs-list">
+            <li><strong>R<sub>u</sub></strong> — virtual ugnot reserve (quote)</li>
+            <li><strong>R<sub>t</sub></strong> — virtual token reserve (base)</li>
+            <li>At create: <code>R<sub>u</sub> = 30 GNOT</code> (30,000,000 ugnot), <code>R<sub>t</sub> ≈ 1.073B</code> virtual tokens</li>
+          </ul>
+
+          <h3 class="docs-h3">Spot price (what the UI shows)</h3>
+          <p class="docs-note">
+            Instantaneous price in GNOT per token is the ratio of virtual reserves:
+          </p>
+          <pre class="docs-formula">P ≈ R<sub>u</sub> / R<sub>t</sub>   (ugnot per token)
+price_GNOT = P / 1_000_000</pre>
+          <p class="docs-note">
+            <strong>Market cap (FDV)</strong> on the UI ≈ <code>price_GNOT × total_supply</code> (1B tokens).
+            Circ. mcap uses tokens sold so far instead of full supply.
+          </p>
+
+          <h3 class="docs-h3">Buy (GNOT in → tokens out)</h3>
+          <ol class="docs-list docs-ol">
+            <li>You send gross GNOT (ugnot) with the transaction.</li>
+            <li>Protocol takes the trade fee first (see Fees): <code>net = gross − fee</code>.</li>
+            <li>Net ugnot is added to the virtual ugnot reserve:
+              <pre class="docs-formula">R<sub>u</sub>' = R<sub>u</sub> + net_in
+R<sub>t</sub>' = k / R<sub>u</sub>'
+tokens_out = R<sub>t</sub> − R<sub>t</sub>'</pre>
+            </li>
+            <li>You receive <code>tokens_out</code>; virtual reserves update to <code>(R<sub>u</sub>', R<sub>t</sub>')</code>.</li>
+          </ol>
+          <p class="docs-note">
+            Larger buys move further along the curve → higher average price (slippage). Partial fills may apply if the buy would exceed remaining curve supply (800M).
+          </p>
+
+          <h3 class="docs-h3">Sell (tokens in → GNOT out)</h3>
+          <ol class="docs-list docs-ol">
+            <li>You send tokens back into the curve.</li>
+            <li>Virtual token reserve increases; ugnot reserve falls to keep <code>k</code>:
+              <pre class="docs-formula">R<sub>t</sub>' = R<sub>t</sub> + tokens_in
+R<sub>u</sub>' = k / R<sub>t</sub>'
+ugnot_out_gross = R<sub>u</sub> − R<sub>u</sub>'</pre>
+            </li>
+            <li>Fee is applied on output; you receive net GNOT.</li>
+          </ol>
+
+          <h3 class="docs-h3">Worked intuition</h3>
+          <div class="docs-grid">
+            <div class="docs-card">
+              <h3>Early buys</h3>
+              <p>Virtual ugnot is still near 30 GNOT and token side is large → low spot price. Small GNOT amounts buy many tokens.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Later buys</h3>
+              <p>As real GNOT is absorbed into <code>R<sub>u</sub></code>, <code>R<sub>t</sub></code> shrinks → price rises. The same GNOT buys fewer tokens (slippage).</p>
+            </div>
+            <div class="docs-card">
+              <h3>Graduation</h3>
+              <p>When raised GNOT hits the threshold (50 GNOT testnet), the curve ends. Remaining seed tokens + raised liquidity open a <strong>real</strong> CPMM pool with permanently locked LP.</p>
+            </div>
+            <div class="docs-card">
+              <h3>After graduate</h3>
+              <p>Pricing uses the locked pool reserves instead of virtual curve reserves (SwapBuy / SwapSell) — still constant-product, but with real balances.</p>
+            </div>
+          </div>
+
+          <h3 class="docs-h3">On-chain formulas (integer math)</h3>
+          <p class="docs-note">
+            Implemented in <code>ammmath.BuyTokens</code> / <code>SellTokens</code> with overflow-safe integer division (floor). Dust stays with the curve/pool.
+          </p>
+          <pre class="docs-formula">// Buy (net ugnot already after fee)
+newVU = virtualUgnot + ugnotIn
+newVT = (virtualUgnot * virtualToken) / newVU
+tokensOut = virtualToken - newVT
+
+// Sell
+newVT = virtualToken + tokensIn
+newVU = (virtualUgnot * virtualToken) / newVT
+ugnotOut = virtualUgnot - newVU</pre>
+        </section>
+
         <section class="docs-section" id="docs-params">
-          <h2>4. On-chain parameters (MVP)</h2>
+          <h2>5. On-chain parameters (MVP)</h2>
           <div class="docs-table-wrap">
             <table class="docs-table">
               <thead>
@@ -224,7 +316,7 @@
         </section>
 
         <section class="docs-section" id="docs-fees">
-          <h2>5. Fees &amp; claims</h2>
+          <h2>6. Fees &amp; claims</h2>
           <ul class="docs-list">
             <li><strong>1.20% fee</strong> on every trade (buy/sell).</li>
             <li>Of that fee: about <strong>40% creator</strong>, <strong>40% protocol</strong>, remainder stays with curve/pool (LP residual).</li>
@@ -234,7 +326,7 @@
         </section>
 
         <section class="docs-section" id="docs-safety">
-          <h2>6. Safety notes</h2>
+          <h2>7. Safety notes</h2>
           <ul class="docs-list">
             <li>This is a <strong>testnet</strong> (Sapphire) — GNOT has no mainnet value.</li>
             <li>Meme coins are high risk; only use funds you can afford to lose.</li>
