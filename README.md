@@ -54,6 +54,18 @@ gno test ./gno.land/r/gnomemepad/pad/
 - **Price** = GNOT per token  
 - **Market cap (FDV)** = price × total supply (1B)
 
+## Host UI on Netlify
+
+Static markets UI + serverless read API (Sapphire). Signing stays local.
+
+See **[NETLIFY.md](./NETLIFY.md)** — `netlify.toml` is ready; import the GitHub repo in Netlify or:
+
+```powershell
+npx netlify-cli login
+npx netlify-cli init
+npx netlify-cli deploy --prod
+```
+
 ## Deploy (Sapphire testnet)
 
 Target is **Gno.land Sapphire** (`sapphire-1`).  
