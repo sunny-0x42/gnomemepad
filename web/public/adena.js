@@ -168,3 +168,119 @@ export function onAccountChange(cb) {
 export function openInstallAdena() {
   window.open("https://adena.app/", "_blank", "noopener,noreferrer");
 }
+
+/** Chrome Web Store ID for Adena (desktop extension). */
+const ADENA_CHROME_ID = "oefglhbffgfkcpboeackfgdagmlnihnh";
+
+/** Best-effort open Adena extension popup (may be blocked by browser). */
+export function openAdenaExtension() {
+  const urls = [
+    `chrome-extension://${ADENA_CHROME_ID}/popup.html`,
+    `chrome-extension://${ADENA_CHROME_ID}/index.html`,
+    `chrome-extension://${ADENA_CHROME_ID}/popup.html#/wallet`,
+  ];
+  for (const u of urls) {
+    try {
+      const w = window.open(u, "_blank", "noopener,noreferrer");
+      if (w) return true;
+    } catch {
+      /* try next */
+    }
+  }
+  return false;
+}
+
+/**
+ * Ask Adena to add a GRC20 custom token (best-effort).
+ *
+ * Official inject API does not document AddToken yet; we probe common method
+ * names. If none work: copy Token.ID and open Adena so user can paste into
+ * Manage Tokens → Add Custom Token → search by path.
+ *
+ * @param {object} t
+ * @param {string} t.tokenPath - GRC20 Token.ID (path)
+ * @param {string} [t.name]
+ * @param {string} [t.symbol]
+ * @param {number} [t.decimals]
+ * @param {object} [t.network]
+ * @returns {Promise<{ok:boolean, mode:'api'|'fallback', method?:string, path:string}>}
+ */
+export async function addTokenToAdena(t, network = DEFAULT_NETWORK) {
+  const tokenPath = String(t?.tokenPath || t?.path || "").trim();
+  if (!tokenPath) throw new Error("Token path (Token.ID) is required");
+
+  const name = t.name || t.symbol || "Token";
+  const symbol = t.symbol || "TKN";
+  const decimals = Number.isFinite(Number(t.decimals)) ? Number(t.decimals) : 0;
+
+  const adena = assertAdena();
+
+  // Connect + network first (same flow as trading)
+  try {
+    await adena.AddEstablish(ADENA_APP_NAME);
+  } catch {
+    /* already connected */
+  }
+  await ensureNetwork(network || DEFAULT_NETWORK);
+
+  const payloads = [
+    { path: tokenPath, name, symbol, decimals },
+    { tokenPath, name, symbol, decimals },
+    { pkgPath: tokenPath, name, symbol, decimals },
+    { tokenPath, tokenName: name, tokenSymbol: symbol, decimals },
+    { grc20Path: tokenPath, name, symbol, decimals },
+    { token: { path: tokenPath, name, symbol, decimals } },
+    // Some builds accept the path string alone
+    tokenPath,
+  ];
+
+  // Probe inject methods (forward-compatible if Adena adds one later)
+  const methodNames = [
+    "AddToken",
+    "AddGRC20Token",
+    "AddCustomToken",
+    "AddGRC20",
+    "addToken",
+    "addGRC20Token",
+    "AddTokenMetainfo",
+  ];
+
+  for (const method of methodNames) {
+    const fn = adena[method];
+    if (typeof fn !== "function") continue;
+    for (const payload of payloads) {
+      try {
+        const res = await fn.call(adena, payload);
+        if (!res) continue;
+        if (
+          res.code === 0 ||
+          res.status === "success" ||
+          /SUCCESS|ADDED|TOKEN/i.test(String(res.type || "")) ||
+          /already/i.test(String(res.message || ""))
+        ) {
+          return { ok: true, mode: "api", method, path: tokenPath, res };
+        }
+      } catch {
+        /* try next payload / method */
+      }
+    }
+  }
+
+  // Fallback: clipboard + open wallet for manual add (search by path)
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(tokenPath);
+    }
+  } catch {
+    /* ignore */
+  }
+  openAdenaExtension();
+
+  return {
+    ok: false,
+    mode: "fallback",
+    path: tokenPath,
+    message:
+      "Token ID copied. In Adena: Manage Tokens → + → search/paste the path → Add.",
+  };
+}

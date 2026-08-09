@@ -492,10 +492,17 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pf-contract .copy-btn {
+.pf-contract .copy-btn,
+.pf-contract .adena-add-btn {
   margin-top: 0;
   padding: 0.25rem 0.5rem;
   font-size: 0.72rem;
+}
+.adena-add-btn {
+  white-space: nowrap;
+}
+.contract-box .adena-add-btn {
+  margin-bottom: 0.15rem;
 }
 
 .trade-tabs {

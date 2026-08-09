@@ -4,6 +4,7 @@ import {
   doContractCall,
   onAccountChange,
   openInstallAdena,
+  addTokenToAdena,
   DEFAULT_NETWORK,
 } from "./adena.js";
 
@@ -270,15 +271,27 @@ function renderContractBox(m) {
   const tokenId = contractIdForMarket(m);
   const factory = padPkgPath();
   if (!tokenId && !factory) return "";
+  const adenaPayload = encodeURIComponent(
+    JSON.stringify({
+      tokenPath: tokenId,
+      name: m.name || m.symbol,
+      symbol: m.symbol,
+      decimals: 0,
+    }),
+  );
   return `
     <div class="contract-box">
       <div class="contract-box-title">Add token to wallet</div>
       <p class="contract-box-hint">
-        Copy the <strong>GRC20 Token.ID</strong> and paste it in Adena (or another Gno wallet) as a custom token to see your balance.
+        Use <strong>Add to Adena</strong> to open the wallet with this GRC20 path.
+        If Adena does not auto-fill, the Token ID is copied — paste it under Manage Tokens → Add Custom Token.
       </p>
       ${
         tokenId
-          ? `<div class="contract-row">
+          ? `<button type="button" class="btn primary wide adena-add-btn" data-adena-token="${adenaPayload}">
+          Add to Adena
+        </button>
+      <div class="contract-row">
         <div class="contract-meta">
           <span class="contract-label">Token contract (GRC20 ID)</span>
           <code class="contract-value mono" title="${escapeHtml(tokenId)}">${escapeHtml(tokenId)}</code>
@@ -310,6 +323,65 @@ function wireCopyButtons(root = document) {
       e.preventDefault();
       e.stopPropagation();
       copyText(btn.dataset.copy || "", btn.dataset.copyLabel || "Copied");
+    });
+  });
+}
+
+async function handleAddToAdena(tokenInfo) {
+  if (!hasAdena()) {
+    openInstallAdena();
+    toast("Install Adena, then try again", false);
+    return;
+  }
+  const btn = document.activeElement;
+  if (btn?.classList?.contains("adena-add-btn")) btn.disabled = true;
+  try {
+    toast("Opening Adena…");
+    // Keep app wallet in sync if user approves connect
+    try {
+      const w = await connectAdena(networkForAdena());
+      if (w?.address) saveWallet(w);
+    } catch {
+      /* may already be connected */
+    }
+    const r = await addTokenToAdena(
+      {
+        tokenPath: tokenInfo.tokenPath || tokenInfo.path,
+        name: tokenInfo.name,
+        symbol: tokenInfo.symbol,
+        decimals: tokenInfo.decimals ?? 0,
+      },
+      networkForAdena(),
+    );
+    if (r.ok && r.mode === "api") {
+      toast(`Added $${tokenInfo.symbol || "token"} to Adena`);
+    } else {
+      toast(
+        r.message ||
+          "Token ID copied. In Adena: Manage Tokens → + → paste path → Add",
+        true,
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    toast(String(e.message || e), false);
+  } finally {
+    if (btn?.classList?.contains("adena-add-btn")) btn.disabled = false;
+  }
+}
+
+function wireAdenaAddButtons(root = document) {
+  $$(".adena-add-btn", root).forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      let info = {};
+      try {
+        info = JSON.parse(decodeURIComponent(btn.dataset.adenaToken || "{}"));
+      } catch {
+        info = { tokenPath: btn.dataset.adenaToken };
+      }
+      handleAddToAdena(info);
     });
   });
 }
@@ -604,7 +676,15 @@ async function refreshPortfolio() {
                   tid
                     ? `<div class="pf-contract">
                   <code class="mono pf-tid" title="${escapeHtml(tid)}">${escapeHtml(tid.length > 36 ? tid.slice(0, 16) + "…" + tid.slice(-10) : tid)}</code>
-                  <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tid)}" data-copy-label="Token ID copied">Copy ID</button>
+                  <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tid)}" data-copy-label="Token ID copied">Copy</button>
+                  <button type="button" class="btn sm primary adena-add-btn" data-adena-token="${encodeURIComponent(
+                    JSON.stringify({
+                      tokenPath: tid,
+                      name: h.name,
+                      symbol: h.symbol,
+                      decimals: 0,
+                    }),
+                  )}">Adena</button>
                 </div>`
                     : ""
                 }
@@ -625,6 +705,7 @@ async function refreshPortfolio() {
       b.addEventListener("click", () => openToken(b.dataset.open)),
     );
     wireCopyButtons(panel);
+    wireAdenaAddButtons(panel);
   } catch (e) {
     panel.innerHTML = `<div class="empty">Portfolio error: ${escapeHtml(e.message)}</div>`;
   }
@@ -1205,7 +1286,9 @@ async function refreshTradeBalances(tokenId) {
 }
 
 function wireToken(m) {
-  wireCopyButtons($("#tokenPanel") || document);
+  const root = $("#tokenPanel") || document;
+  wireCopyButtons(root);
+  wireAdenaAddButtons(root);
   const log = (t) => {
     const el = $("#txLog");
     if (!el) return;
