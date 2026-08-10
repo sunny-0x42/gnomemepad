@@ -830,6 +830,28 @@ func BalanceOf(id string, owner address) int64 {
 	return balOf(mustLaunch(id), owner)
 }
 
+// ListBuyers returns unique buyer addresses (one per line), capped for query size.
+// Only addresses that bought at least once on this pad (UniqueBuyers). Not full GRC20 holders
+// who received tokens via transfer.
+func ListBuyers(id string) string {
+	l := mustLaunch(id)
+	const maxN = 100
+	out := ""
+	n := 0
+	l.UniqueBuyers.Iterate("", "", func(key string, _ any) bool {
+		if n >= maxN {
+			return true
+		}
+		if out != "" {
+			out += "\n"
+		}
+		out += key
+		n++
+		return false
+	})
+	return out
+}
+
 func GetStatus(id string) int {
 	return mustLaunch(id).Status
 }

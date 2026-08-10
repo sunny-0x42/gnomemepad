@@ -12,9 +12,9 @@ Pad packages (`padv2`…`padv4`) are immutable on-chain. Upgrading a monolith me
 | **profile** | `…/gnomemepad/profile` | User cards: `SetProfile` / `GetProfile` |
 | **meta** | `…/gnomemepad/meta` | Token description / image / socials |
 | **points** | `…/gnomemepad/pointsv2` | Referral + check-in + trade/create points |
-| **pad** | `…/gnomemepad/padv6` (active) | Launch + trade + optional points hooks (`padv5`/`v4`/`v3` as legacy) |
+| **pad** | `…/gnomemepad/padv6` (active) · **padv7** optional | Launch + trade + points hooks; **padv7** adds `ListBuyers` for holder UI (`padv5`/`v4`/`v3` as legacy) |
 
-See **DEPLOY_V6.md** for pointsv2 + padv6 deploy order.
+See **DEPLOY_V6.md** (pointsv2 + padv6) and `scripts/deploy-sapphire-v7.ps1` for ListBuyers.
 
 ## Deploy
 

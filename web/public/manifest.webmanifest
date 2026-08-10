@@ -1,0 +1,27 @@
+{
+  "name": "gnomemepad",
+  "short_name": "gnomemepad",
+  "description": "Fair meme launches on Gno.land Sapphire — curve, graduate, trade.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a0b0f",
+  "theme_color": "#6c5ce7",
+  "lang": "en",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

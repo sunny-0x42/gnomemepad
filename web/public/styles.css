@@ -981,6 +981,24 @@ a.person-chip:hover .person-name {
   border-color: var(--accent, #8b5cf6);
   background: var(--accent-soft, rgba(139, 92, 246, 0.12));
 }
+.header-icon-btn {
+  min-width: 2.25rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.header-icon-btn.on {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.1);
+}
+.holders-panel {
+  margin: 0.85rem 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: rgba(255, 255, 255, 0.02);
+}
 .bar {
   margin-top: 0.85rem;
   height: 4px;

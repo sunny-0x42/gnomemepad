@@ -13,6 +13,7 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const LS_WALLET = "gnomemepad.wallet.v1";
 const LS_WATCHLIST = "gnomemepad.watchlist.v1";
 const LS_MARKET_SORT = "gnomemepad.marketSort.v1";
+const LS_NOTIFY = "gnomemepad.notify.v1";
 
 const state = {
   view: "home",
@@ -1190,6 +1191,94 @@ function showView(name) {
 
 /** Almost-graduate toast throttle (id|pkg -> last toast ms) */
 const almostGradToastAt = new Map();
+const largeTradeNotifyAt = new Map();
+
+function loadNotifyPrefs() {
+  try {
+    const raw = localStorage.getItem(LS_NOTIFY);
+    if (!raw) return { enabled: false, almostGrad: true, largeTrade: true };
+    return { enabled: false, almostGrad: true, largeTrade: true, ...JSON.parse(raw) };
+  } catch {
+    return { enabled: false, almostGrad: true, largeTrade: true };
+  }
+}
+
+function saveNotifyPrefs(p) {
+  try {
+    localStorage.setItem(LS_NOTIFY, JSON.stringify(p));
+  } catch {
+    /* ignore */
+  }
+}
+
+let notifyPrefs = loadNotifyPrefs();
+
+function canNotify() {
+  return (
+    notifyPrefs.enabled &&
+    typeof Notification !== "undefined" &&
+    Notification.permission === "granted"
+  );
+}
+
+function pushNotify(title, body, tag) {
+  if (!canNotify()) return;
+  try {
+    const n = new Notification(title, {
+      body: body || "",
+      tag: tag || "gnomemepad",
+      icon: "/icon.svg",
+      badge: "/icon.svg",
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch {
+    /* ignore */
+  }
+}
+
+function updateNotifyButton() {
+  const btn = $("#btnNotify");
+  if (!btn) return;
+  const on = canNotify();
+  btn.classList.toggle("on", on);
+  btn.title = on
+    ? "Notifications on — click to disable"
+    : "Enable browser notifications";
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+}
+
+async function toggleNotifications() {
+  if (typeof Notification === "undefined") {
+    toast("Notifications not supported in this browser", false);
+    return;
+  }
+  if (canNotify()) {
+    notifyPrefs.enabled = false;
+    saveNotifyPrefs(notifyPrefs);
+    updateNotifyButton();
+    toast("Notifications off");
+    return;
+  }
+  let perm = Notification.permission;
+  if (perm === "default") {
+    perm = await Notification.requestPermission();
+  }
+  if (perm !== "granted") {
+    toast("Notification permission denied", false);
+    notifyPrefs.enabled = false;
+    saveNotifyPrefs(notifyPrefs);
+    updateNotifyButton();
+    return;
+  }
+  notifyPrefs.enabled = true;
+  saveNotifyPrefs(notifyPrefs);
+  updateNotifyButton();
+  pushNotify("gnomemepad", "Alerts on for almost-graduate & large trades");
+  toast("Notifications enabled");
+}
 
 function checkAlmostGraduateAlerts(markets) {
   const now = Date.now();
@@ -1201,7 +1290,166 @@ function checkAlmostGraduateAlerts(markets) {
     const last = almostGradToastAt.get(k) || 0;
     if (now - last < 10 * 60 * 1000) continue; // 10 min
     almostGradToastAt.set(k, now);
-    toast(`🚀 $${m.symbol || m.id} is ${pct}% to graduate`, true);
+    const msg = `$${m.symbol || m.id} is ${pct}% to graduate`;
+    toast(`🚀 ${msg}`, true);
+    if (notifyPrefs.almostGrad) pushNotify("Almost graduate", msg, `grad-${k}`);
+  }
+}
+
+function checkLargeTradeAlerts(events) {
+  if (!notifyPrefs.largeTrade || !canNotify()) return;
+  const now = Date.now();
+  for (const e of events || []) {
+    const vol = Number(e.volumeGnot) || 0;
+    if (vol < 1) continue; // ≥ 1 GNOT sample
+    const k = `${e.id}|${e.pkg || ""}|${e.height}|${e.side}`;
+    if (largeTradeNotifyAt.has(k)) continue;
+    largeTradeNotifyAt.set(k, now);
+    // prune map
+    if (largeTradeNotifyAt.size > 200) {
+      const first = largeTradeNotifyAt.keys().next().value;
+      largeTradeNotifyAt.delete(first);
+    }
+    const side = e.side === 1 ? "SELL" : e.side === 0 ? "BUY" : "TRADE";
+    pushNotify(
+      `${side} $${e.symbol || e.id}`,
+      `${fmtGnot(vol, { alreadyGnot: true })} · h${e.height}`,
+      `trade-${k}`,
+    );
+  }
+}
+
+/** PWA install prompt */
+let deferredInstallPrompt = null;
+
+function wirePwa() {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    $("#btnInstall")?.classList.remove("hidden");
+  });
+  $("#btnInstall")?.addEventListener("click", async () => {
+    if (!deferredInstallPrompt) {
+      toast("Install not available (already installed or unsupported)");
+      return;
+    }
+    deferredInstallPrompt.prompt();
+    try {
+      await deferredInstallPrompt.userChoice;
+    } catch {
+      /* ignore */
+    }
+    deferredInstallPrompt = null;
+    $("#btnInstall")?.classList.add("hidden");
+  });
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+}
+
+/** Canvas share card for a market (PNG download / Web Share). */
+async function shareTokenCard(m) {
+  const url = tokenShareUrl(m);
+  const W = 1200;
+  const H = 630;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Share link copied");
+    } catch {
+      prompt("Copy share link:", url);
+    }
+    return;
+  }
+  // background
+  const grad = ctx.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, "#0a0b0f");
+  grad.addColorStop(0.5, "#12141a");
+  grad.addColorStop(1, "#1a1030");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  // accent bar
+  ctx.fillStyle = "#6c5ce7";
+  ctx.fillRect(0, 0, 12, H);
+  ctx.fillStyle = "rgba(108,92,231,0.15)";
+  ctx.beginPath();
+  ctx.arc(W - 120, 100, 180, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#c4b5fd";
+  ctx.font = "600 28px Inter, system-ui, sans-serif";
+  ctx.fillText("gnomemepad · Sapphire", 64, 72);
+
+  ctx.fillStyle = "#f4f5f7";
+  ctx.font = "700 64px Inter, system-ui, sans-serif";
+  const title = `${m.name || "Token"}`;
+  ctx.fillText(title.length > 28 ? title.slice(0, 26) + "…" : title, 64, 180);
+
+  ctx.fillStyle = "#2dd4bf";
+  ctx.font = "600 40px JetBrains Mono, monospace";
+  ctx.fillText(`$${m.symbol || "—"}`, 64, 240);
+
+  ctx.fillStyle = "#8b90a0";
+  ctx.font = "500 26px Inter, system-ui, sans-serif";
+  const st = m.status === 1 ? "Graduated · Live pool" : `Curve · ${m.progressPct || 0}% to graduate`;
+  ctx.fillText(st, 64, 300);
+
+  ctx.fillStyle = "#f4f5f7";
+  ctx.font = "600 32px JetBrains Mono, monospace";
+  ctx.fillText(`Price  ${fmtPriceGnot(m.priceGnot)}`, 64, 380);
+  ctx.fillText(`MCap   ${fmtMcap(m.mcapGnot)}`, 64, 430);
+  ctx.fillText(
+    `Raised ${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}`,
+    64,
+    480,
+  );
+
+  ctx.fillStyle = "#6c5ce7";
+  ctx.font = "500 22px Inter, system-ui, sans-serif";
+  ctx.fillText(url.replace(/^https?:\/\//, "").slice(0, 60), 64, H - 48);
+
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Share link copied");
+    } catch {
+      prompt("Copy:", url);
+    }
+    return;
+  }
+  const file = new File([blob], `gnomemepad-${m.symbol || m.id}.png`, {
+    type: "image/png",
+  });
+  try {
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({
+        title: `$${m.symbol} on gnomemepad`,
+        text: `${m.name} · ${fmtPriceGnot(m.priceGnot)}`,
+        url,
+        files: [file],
+      });
+      toast("Shared");
+      return;
+    }
+  } catch (e) {
+    if (e?.name === "AbortError") return;
+  }
+  // fallback: download image + copy link
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = file.name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Card downloaded · link copied");
+  } catch {
+    toast("Share card downloaded");
   }
 }
 
@@ -2002,26 +2250,34 @@ function tradeVolGnot(p) {
   return p.volumeGnot != null ? Number(p.volumeGnot) : (Number(p.ugnot) || 0) / UGNOT_PER_GNOT;
 }
 
-function renderLargestTrades(points) {
-  const trades = (points || [])
-    .filter((p) => Number(p.side) !== 2)
-    .map((p) => ({
-      ...p,
-      vg: tradeVolGnot(p),
-      pg:
-        p.priceGnot != null
-          ? Number(p.priceGnot)
-          : Number(p.price) / UGNOT_PER_GNOT / 1_000_000,
-    }))
-    .filter((p) => p.vg > 0)
-    .sort((a, b) => b.vg - a.vg)
-    .slice(0, 5);
+function renderLargestTrades(points, precomputed) {
+  const trades =
+    precomputed?.length
+      ? precomputed.map((p) => ({
+          ...p,
+          vg: p.volumeGnot || 0,
+          pg: p.priceGnot || 0,
+        }))
+      : (points || [])
+          .filter((p) => Number(p.side) !== 2)
+          .map((p) => ({
+            ...p,
+            vg: tradeVolGnot(p),
+            pg:
+              p.priceGnot != null
+                ? Number(p.priceGnot)
+                : Number(p.price) / UGNOT_PER_GNOT / 1_000_000,
+          }))
+          .filter((p) => p.vg > 0)
+          .sort((a, b) => b.vg - a.vg)
+          .slice(0, 5);
   if (!trades.length) return "";
   return `
     <div class="largest-trades">
       <h4 class="trade-table-title" style="margin:0 0 0.45rem">Largest trades <span class="muted" style="font-weight:400">(ring sample)</span></h4>
       <div class="largest-list">
         ${trades
+          .slice(0, 5)
           .map((p) => {
             const side = p.side === 1 ? "sell" : "buy";
             return `<div class="largest-row ${side}">
@@ -2036,17 +2292,70 @@ function renderLargestTrades(points) {
     </div>`;
 }
 
+function renderHoldersPanel(m) {
+  const holders = m.holders || [];
+  const note = m.holdersNote;
+  const topTrades = m.topTrades || [];
+  let body = "";
+  if (holders.length) {
+    body = `<div class="table-scroll"><table class="trade-table">
+      <thead><tr><th>#</th><th>Buyer</th><th>Balance</th><th>Est. value</th></tr></thead>
+      <tbody>
+        ${holders
+          .slice(0, 15)
+          .map(
+            (h, i) => `<tr>
+            <td class="mono">${i + 1}</td>
+            <td>${renderPersonChip(h.address)}</td>
+            <td class="mono">${fmtNum(h.balance)}</td>
+            <td class="mono">${fmtGnot(h.valueGnot || 0, { alreadyGnot: true })}</td>
+          </tr>`,
+          )
+          .join("")}
+      </tbody>
+    </table></div>
+    <p class="muted" style="font-size:0.72rem;margin:0.4rem 0 0">
+      Unique buyers with balance &gt; 0 (from <code>ListBuyers</code>).
+      ${m.holdersCapped ? " List capped — not full GRC20 transfer holders." : ""}
+      Not a complete transfer-graph holder set.
+    </p>`;
+  } else {
+    body = `<p class="muted" style="font-size:0.85rem;margin:0 0 0.5rem">${
+      note
+        ? escapeHtml(note)
+        : "No buyer balances yet (or ListBuyers empty)."
+    }</p>
+    ${
+      topTrades.length
+        ? `<p class="muted" style="font-size:0.75rem;margin:0 0 0.35rem">Top trade sizes from history (addresses not in ring buffer):</p>
+      ${renderLargestTrades(null, topTrades)}`
+        : ""
+    }`;
+  }
+  return `
+    <div class="holders-panel">
+      <h4 class="trade-table-title" style="margin:0 0 0.45rem">
+        Holders / buyers
+        <span class="muted" style="font-weight:400">
+          (${holders.length ? holders.length : m.buyers != null ? `${fmtNum(m.buyers)} unique` : "—"})
+        </span>
+      </h4>
+      ${body}
+    </div>`;
+}
+
 function renderTradeTable(points, m) {
   const all = [...(points || [])].reverse();
   const rows = all.slice(0, 40);
-  if (!rows.length) return `<div class="muted" style="font-size:0.85rem">No trade history.</div>`;
   const stats = tradeStatsFromChart(points || []);
   const buyPct =
     stats.volumeGnot > 0
       ? Math.min(100, Math.round((stats.buyVolumeGnot / stats.volumeGnot) * 100))
       : 50;
-  return `
-    ${renderLargestTrades(points)}
+  const historyBlock = !rows.length
+    ? `<div class="muted" style="font-size:0.85rem">No trade history.</div>`
+    : `
+    ${renderLargestTrades(points, m?.topTrades)}
     <div class="trade-flow" style="margin:0.75rem 0 0.5rem">
       <div class="trade-flow-labels">
         <span class="chg-up">Buy ${fmtGnot(stats.buyVolumeGnot || 0, { alreadyGnot: true })} (${buyPct}%)</span>
@@ -2088,6 +2397,7 @@ function renderTradeTable(points, m) {
       </div>
       ${all.length > 40 ? `<p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">Showing latest 40 of ${all.length}. Export CSV for full sample.</p>` : ""}
     </div>`;
+  return `${m ? renderHoldersPanel(m) : ""}${historyBlock}`;
 }
 
 function exportTradesCsv(points, symbol) {
@@ -2153,6 +2463,7 @@ async function refreshActivity() {
     const data = await api("/api/activity?limit=80");
     const events = data.events || [];
     applyActivityVolume(events);
+    checkLargeTradeAlerts(events);
     if (state.view === "home") renderMarketGrid();
     if (meta) meta.textContent = events.length ? `${events.length}` : "";
     if (!events.length) {
@@ -2257,7 +2568,8 @@ function renderToken(m) {
           </div>
         </div>
         <div class="card-badges token-actions">
-          <button type="button" class="btn sm" id="btnShareToken" title="Copy share link">Share</button>
+          <button type="button" class="btn sm" id="btnShareToken" title="Share link + card image">Share</button>
+          <button type="button" class="btn sm" id="btnShareCard" title="Download share card PNG">Card</button>
           <button type="button" class="btn sm card-watch-btn ${watched ? "on" : ""}" id="btnWatchToken">${watched ? "★ Watch" : "☆ Watch"}</button>
           <span class="badge ${isPool ? "graduated" : "curve"}">${isPool ? "Live" : "Curve"}</span>
           ${padBadge}
@@ -2466,12 +2778,26 @@ function wireToken(m) {
   $("#btnShareToken")?.addEventListener("click", async () => {
     const url = tokenShareUrl(m);
     try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `$${m.symbol} on gnomemepad`,
+          text: `${m.name} · ${fmtPriceGnot(m.priceGnot)}`,
+          url,
+        });
+        toast("Shared");
+        return;
+      }
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+    }
+    try {
       await navigator.clipboard.writeText(url);
       toast("Share link copied");
     } catch {
       prompt("Copy share link:", url);
     }
   });
+  $("#btnShareCard")?.addEventListener("click", () => shareTokenCard(m));
   $("#btnWatchToken")?.addEventListener("click", () => {
     const on = toggleWatch(m.id, marketPkg);
     const b = $("#btnWatchToken");
@@ -3073,6 +3399,9 @@ function wireGlobal() {
     refreshHealth();
     refreshMarkets({ force: true });
   });
+  $("#btnNotify")?.addEventListener("click", () => toggleNotifications());
+  updateNotifyButton();
+  wirePwa();
   $("#search")?.addEventListener("input", () => renderMarketGrid());
   $$("#padFilter .filter-btn").forEach((b) => {
     b.addEventListener("click", () => {

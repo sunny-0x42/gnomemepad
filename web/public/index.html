@@ -2,8 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="gnomemepad — fair meme launches on Gno.land Sapphire" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="description" content="gnomemepad — fair meme launches on Gno.land Sapphire: bonding curve, graduation, locked LP, Adena wallet." />
+  <meta name="theme-color" content="#6c5ce7" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="gnomemepad" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <!-- Open Graph / Twitter (static shell; token share uses canvas card) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="gnomemepad" />
+  <meta property="og:title" content="gnomemepad — fair launches on Gno Sapphire" />
+  <meta property="og:description" content="Bonding curve meme pad · graduate to locked CPMM · trade with Adena · points &amp; multi-pad." />
+  <meta property="og:image" content="https://gnomemepad-sapphire.netlify.app/icon.svg" />
+  <meta property="og:url" content="https://gnomemepad-sapphire.netlify.app/" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="gnomemepad — Gno Sapphire meme pad" />
+  <meta name="twitter:description" content="Fair launches, curve → locked LP, Adena signing, modular hub." />
+  <meta name="twitter:image" content="https://gnomemepad-sapphire.netlify.app/icon.svg" />
   <title>gnomemepad</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -28,6 +47,8 @@
       <button type="button" class="nav-btn" data-nav="docs">Guide</button>
     </nav>
     <div class="header-right">
+      <button type="button" class="btn sm ghost header-icon-btn" id="btnNotify" title="Browser notifications">🔔</button>
+      <button type="button" class="btn sm ghost header-icon-btn hidden" id="btnInstall" title="Install app">Install</button>
       <div class="status-pill" id="netStatus">
         <span class="dot"></span>
         <span id="netLabel">…</span>
@@ -208,6 +229,7 @@
         <nav class="docs-toc" aria-label="Table of contents">
           <a href="#docs-start">Get started</a>
           <a href="#docs-flow">Using the app</a>
+          <a href="#docs-features">Features</a>
           <a href="#docs-mech">Mechanics</a>
           <a href="#docs-curve">Curve pricing</a>
           <a href="#docs-grc20">GRC20 &amp; Gnoswap</a>
@@ -248,23 +270,19 @@
             </div>
             <div class="docs-card">
               <h3>Create</h3>
-              <p>Set name, symbol, and a create bond of at least <strong>1 GNOT</strong>. No pre-mint to the creator — all tradeable float sells on the curve.</p>
+              <p>Set name, symbol, and a create bond (active pad <strong>padv6/v7: 2 GNOT</strong>). No pre-mint — all tradeable float sells on the curve.</p>
             </div>
             <div class="docs-card">
               <h3>Trade</h3>
-              <p><strong>Buy</strong> sends GNOT for tokens. <strong>Sell</strong> returns tokens for GNOT. After graduation, trades use the locked pool (SwapBuy / SwapSell).</p>
+              <p><strong>Buy</strong> sends GNOT for tokens. <strong>Sell</strong> returns tokens for GNOT. After graduation, trades use the locked pool (SwapBuy / SwapSell). Slippage → <code>minOut</code> on padv4+.</p>
             </div>
             <div class="docs-card">
               <h3>Portfolio</h3>
-              <p>GNOT balance and meme token holdings for the connected (or view-only) address.</p>
+              <p>GNOT balance, meme holdings, and your <strong>★ watchlist</strong> pins.</p>
             </div>
             <div class="docs-card">
               <h3>Creator</h3>
-              <p>Coins you launched, accrued creator fees, and claim fees to your Adena wallet.</p>
-            </div>
-            <div class="docs-card">
-              <h3>View-only</h3>
-              <p>Paste any <code>g1…</code> address to browse. Create / Buy / Sell still require Adena to sign.</p>
+              <p>Coins you launched, claim fees (single or all), export CSV.</p>
             </div>
             <div class="docs-card">
               <h3>Profile</h3>
@@ -272,7 +290,33 @@
             </div>
             <div class="docs-card">
               <h3>Rewards</h3>
-              <p>Referral + check-in points on a separate points realm. Leaderboard is public.</p>
+              <p><strong>pointsv2</strong>: referral, check-in, plus create/trade points when pad hooks are enabled.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Ops</h3>
+              <p>Read-only health of hub, pads, profile, meta, points.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="docs-section" id="docs-features">
+          <h2>2b. UI features (current)</h2>
+          <div class="docs-grid">
+            <div class="docs-card">
+              <h3>Discover</h3>
+              <p>Filter Raising / Graduated / Watch · sort Hot, Recent volume, Almost graduate, MCap…</p>
+            </div>
+            <div class="docs-card">
+              <h3>Live activity</h3>
+              <p>RTL marquee of recent trades; cards show recent volume sample + buy/sell split.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Token page</h3>
+              <p>Chart ranges, largest trades, holders when <code>ListBuyers</code> is available (padv7+), share card image, Gnoswap checklist.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Notifications &amp; PWA</h3>
+              <p>Optional browser alerts for almost-graduate / large trades. Installable as a standalone app.</p>
             </div>
           </div>
         </section>
@@ -284,12 +328,12 @@
           </p>
           <div class="docs-grid">
             <div class="docs-card">
-              <h3>hub</h3>
-              <p>Registry of module paths (<code>pad</code>, <code>profile</code>, <code>meta</code>, <code>points</code>, <code>legacy_*</code>). UI resolves the active pad from hub.</p>
+              <h3>hubv2</h3>
+              <p>Multi-admin registry of module paths (<code>pad</code>, <code>profile</code>, <code>meta</code>, <code>points</code>, <code>legacy_*</code>). UI resolves the active pad from hub.</p>
             </div>
             <div class="docs-card">
-              <h3>padv4 (+ legacy)</h3>
-              <p>Launch &amp; trade. Markets filter: <em>All / Active / Legacy</em>. Create always uses the active pad.</p>
+              <h3>padv6 / padv7 (+ legacy)</h3>
+              <p>Active launch &amp; trade. Bond 2 · graduate 100 GNOT. padv7 adds <code>ListBuyers</code>. Legacy padv3–v5 stay tradeable. Create uses active pad only.</p>
             </div>
             <div class="docs-card">
               <h3>profile</h3>
@@ -297,15 +341,15 @@
             </div>
             <div class="docs-card">
               <h3>meta</h3>
-              <p>Token description, image, socials. First writer owns the entry for that pad+launch id.</p>
+              <p>Token description, image, socials. First writer owns the entry for that pad+launch id. URI must be http(s)/ipfs.</p>
             </div>
             <div class="docs-card">
-              <h3>points</h3>
-              <p>Referrer once (+50 / +25), check-in (+5 / ~100 heights), leaderboard. Not tied to trade volume.</p>
+              <h3>pointsv2</h3>
+              <p>Referral + check-in + pad-only <code>OnTrade</code>/<code>OnCreate</code> (allowlist). Cap per height.</p>
             </div>
             <div class="docs-card">
               <h3>Trade UX</h3>
-              <p>Client-side quotes + slippage % → <code>minOut</code> on padv4+ (legacy padv3 has no minOut args).</p>
+              <p>Client quotes + slippage % → <code>minOut</code> on padv4+. Legacy padv3 has no minOut args.</p>
             </div>
           </div>
         </section>
