@@ -675,6 +675,67 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
+/** Heat score for curve (raising) markets — buyers + raised volume. */
+function marketHeatScore(m) {
+  if (!m || m.error || m.status === 1) return 0;
+  const raised = Number(m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT) || 0;
+  const buyers = Number(m.buyers) || 0;
+  const pct = Number(m.progressPct) || 0;
+  // Buyers weight activity; raised is cumulative buy volume on curve
+  return raised * 3 + buyers * 8 + pct * 0.35;
+}
+
+/**
+ * Tier 0 none · 1 warm · 2 hot · 3 fire — relative to other raising tokens,
+ * with absolute floors so empty launches stay quiet.
+ */
+function marketHeatTiers(list) {
+  const tiers = new Map();
+  const raising = list.filter((m) => !m.error && m.status !== 1);
+  if (!raising.length) return tiers;
+
+  const scored = raising.map((m) => ({
+    key: `${m.id}|${m.pkg || ""}`,
+    score: marketHeatScore(m),
+    buyers: Number(m.buyers) || 0,
+    raised: Number(m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT) || 0,
+  }));
+  const max = Math.max(...scored.map((s) => s.score), 0.0001);
+
+  for (const s of scored) {
+    const active = s.buyers >= 1 || s.raised >= 0.5;
+    if (!active) {
+      tiers.set(s.key, 0);
+      continue;
+    }
+    const rel = s.score / max;
+    // Absolute floors + relative rank
+    if ((s.buyers >= 5 || s.raised >= 8 || rel >= 0.85) && (s.buyers >= 2 || s.raised >= 2)) {
+      tiers.set(s.key, 3);
+    } else if (s.buyers >= 3 || s.raised >= 3 || rel >= 0.55) {
+      tiers.set(s.key, 2);
+    } else if (s.buyers >= 1 || s.raised >= 1 || rel >= 0.3) {
+      tiers.set(s.key, 1);
+    } else {
+      tiers.set(s.key, 0);
+    }
+  }
+  return tiers;
+}
+
+function heatBadgeHtml(tier) {
+  if (tier >= 3) {
+    return `<span class="badge heat-fire" title="Top volume / many buyers">🔥 Fire</span>`;
+  }
+  if (tier >= 2) {
+    return `<span class="badge heat-hot" title="High buy activity">Hot</span>`;
+  }
+  if (tier >= 1) {
+    return `<span class="badge heat-warm" title="Active buyers">Active</span>`;
+  }
+  return "";
+}
+
 function renderMarketGrid() {
   const q = ($("#search")?.value || "").trim().toLowerCase();
   const filter = state.marketFilter || "all";
@@ -691,6 +752,23 @@ function renderMarketGrid() {
         (state.profileCache[m.creator]?.name || "").toLowerCase().includes(q),
     );
   }
+
+  const heat = marketHeatTiers(list);
+  // Hot raising tokens first, then by heat score / raised
+  list = [...list].sort((a, b) => {
+    const ka = `${a.id}|${a.pkg || ""}`;
+    const kb = `${b.id}|${b.pkg || ""}`;
+    const ta = heat.get(ka) || 0;
+    const tb = heat.get(kb) || 0;
+    if (tb !== ta) return tb - ta;
+    const sa = marketHeatScore(a);
+    const sb = marketHeatScore(b);
+    if (sb !== sa) return sb - sa;
+    // graduated after curve when equal heat
+    if ((a.status === 1) !== (b.status === 1)) return a.status === 1 ? 1 : -1;
+    return (b.created || 0) - (a.created || 0);
+  });
+
   const grid = $("#marketGrid");
   if (!grid) return;
   if (!list.length) {
@@ -711,14 +789,21 @@ function renderMarketGrid() {
     .map((m) => {
       const pct = m.progressPct ?? 0;
       const st = m.status === 1 ? "Live" : "Curve";
+      const key = `${m.id}|${m.pkg || ""}`;
+      const tier = heat.get(key) || 0;
+      const heatClass =
+        tier >= 3 ? "card-heat card-fire" : tier >= 2 ? "card-heat card-hot" : tier >= 1 ? "card-heat card-warm" : "";
       const padBadge = m.legacy
         ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
         : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
       const creatorLine = m.creator
         ? `<div class="card-creator">${renderPersonChip(m.creator)}</div>`
         : "";
+      const buyers = Number(m.buyers) || 0;
+      const raisedVal = m.raisedGnot ?? m.raised;
+      const raisedAlready = m.raisedGnot != null;
       return `
-      <article class="card" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">
+      <article class="card ${heatClass}" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" data-heat="${tier}">
         <div class="card-top">
           <div>
             <div class="card-title">${escapeHtml(m.name)}</div>
@@ -726,6 +811,7 @@ function renderMarketGrid() {
             ${creatorLine}
           </div>
           <div class="card-badges">
+            ${heatBadgeHtml(tier)}
             <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${st}</span>
             ${padBadge}
           </div>
@@ -733,13 +819,13 @@ function renderMarketGrid() {
         <div class="card-meta">
           <div>Price<strong>${fmtPriceGnot(m.priceGnot)}</strong></div>
           <div>MCap<strong>${fmtMcap(m.mcapGnot)}</strong></div>
-          <div>Raised<strong>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</strong></div>
-          <div>Buyers<strong>${fmtNum(m.buyers)}</strong></div>
+          <div class="${tier >= 2 ? "meta-glow" : ""}">Raised<strong>${fmtGnot(raisedVal, { alreadyGnot: raisedAlready })}</strong></div>
+          <div class="${tier >= 1 && buyers > 0 ? "meta-glow buyers" : ""}">Buyers<strong>${fmtNum(buyers)}</strong></div>
         </div>
         ${
           m.status === 1
             ? ""
-            : `<div class="bar"><i style="width:${pct}%"></i></div>
+            : `<div class="bar ${tier >= 2 ? "bar-heat" : ""}"><i style="width:${pct}%"></i></div>
         <div class="bar-label"><span>To graduate</span><span>${pct}%</span></div>`
         }
       </article>`;
