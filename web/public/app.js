@@ -11,6 +11,8 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
 const LS_WALLET = "gnomemepad.wallet.v1";
+const LS_WATCHLIST = "gnomemepad.watchlist.v1";
+const LS_MARKET_SORT = "gnomemepad.marketSort.v1";
 
 const state = {
   view: "home",
@@ -19,7 +21,9 @@ const state = {
   selectedId: null,
   selectedPkg: null,
   padSources: [],
-  marketFilter: "all", // all | active | legacy
+  marketFilter: "all", // pad: all | active | legacy
+  statusFilter: "all", // all | curve | graduated | watch
+  marketSort: "hot", // hot | newest | almost | buyers | raised | mcap
   tradeMode: "buy",
   wallet: null, // { address, label, canSign, type: 'adena'|'local'|'view' }
   walletsMeta: null,
@@ -38,7 +42,126 @@ const state = {
   hosting: null,
   /** address -> { name, bio, uri, updated } | null (fetched empty) */
   profileCache: {},
+  /** `${pkg}|${id}` -> meta | null */
+  metaCache: {},
+  /** Set of `${pkg}|${id}` */
+  watchlist: new Set(),
 };
+
+function marketKey(id, pkg) {
+  return `${id || ""}|${pkg || ""}`;
+}
+
+function loadWatchlist() {
+  try {
+    const raw = localStorage.getItem(LS_WATCHLIST);
+    const arr = raw ? JSON.parse(raw) : [];
+    state.watchlist = new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch {
+    state.watchlist = new Set();
+  }
+}
+
+function saveWatchlist() {
+  try {
+    localStorage.setItem(LS_WATCHLIST, JSON.stringify([...state.watchlist]));
+  } catch {
+    /* ignore */
+  }
+}
+
+function isWatched(id, pkg) {
+  return state.watchlist.has(marketKey(id, pkg));
+}
+
+function toggleWatch(id, pkg) {
+  const k = marketKey(id, pkg);
+  if (state.watchlist.has(k)) state.watchlist.delete(k);
+  else state.watchlist.add(k);
+  saveWatchlist();
+  return state.watchlist.has(k);
+}
+
+function loadMarketSort() {
+  try {
+    const s = localStorage.getItem(LS_MARKET_SORT);
+    if (s && ["hot", "newest", "almost", "buyers", "raised", "mcap"].includes(s)) {
+      state.marketSort = s;
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function saveMarketSort(s) {
+  state.marketSort = s;
+  try {
+    localStorage.setItem(LS_MARKET_SORT, s);
+  } catch {
+    /* ignore */
+  }
+}
+
+function raisedGnotOf(m) {
+  if (!m) return 0;
+  if (m.raisedGnot != null) return Number(m.raisedGnot) || 0;
+  return (Number(m.raised) || 0) / UGNOT_PER_GNOT;
+}
+
+/** Safe image URL for meta (http/https/ipfs only). */
+function safeImageUri(uri) {
+  const u = String(uri || "").trim();
+  if (!u) return "";
+  if (u.startsWith("https://") || u.startsWith("http://")) return u;
+  if (u.startsWith("ipfs://")) {
+    const path = u.slice("ipfs://".length).replace(/^ipfs\//, "");
+    return `https://ipfs.io/ipfs/${path}`;
+  }
+  return "";
+}
+
+function isValidMetaUri(uri) {
+  const u = String(uri || "").trim();
+  if (!u) return true;
+  return (
+    u.startsWith("https://") ||
+    u.startsWith("http://") ||
+    u.startsWith("ipfs://")
+  );
+}
+
+async function prefetchMarketMeta(markets, limit = 24) {
+  const list = (markets || []).filter((m) => m && !m.error && m.id);
+  const need = [];
+  for (const m of list) {
+    const k = marketKey(m.id, m.pkg || "");
+    if (Object.prototype.hasOwnProperty.call(state.metaCache, k)) continue;
+    need.push({ pkg: m.pkg || "", id: m.id, key: k });
+    if (need.length >= limit) break;
+  }
+  if (!need.length) return;
+  // mark pending so we don't re-fetch
+  for (const n of need) state.metaCache[n.key] = state.metaCache[n.key] ?? undefined;
+  try {
+    const items = need.map((n) => `${n.pkg}|${n.id}`).join(",");
+    const data = await api(`/api/meta/batch?items=${encodeURIComponent(items)}`);
+    const metas = data.metas || {};
+    for (const n of need) {
+      state.metaCache[n.key] =
+        metas[n.key] !== undefined ? metas[n.key] : metas[`${n.pkg}|${n.id}`] ?? null;
+    }
+  } catch {
+    // fallback: leave missing as null so we don't hammer
+    for (const n of need) {
+      if (state.metaCache[n.key] === undefined) state.metaCache[n.key] = null;
+    }
+  }
+}
+
+function getCachedMeta(id, pkg) {
+  const k = marketKey(id, pkg);
+  return Object.prototype.hasOwnProperty.call(state.metaCache, k) ? state.metaCache[k] : null;
+}
 
 function networkForAdena() {
   return {
@@ -646,7 +769,7 @@ async function refreshMarkets() {
     }
     renderMarketGrid();
     const creators = state.markets.map((m) => m.creator).filter(Boolean);
-    await prefetchProfiles(creators);
+    await Promise.all([prefetchProfiles(creators), prefetchMarketMeta(state.markets)]);
     renderMarketGrid();
     refreshActivity();
   } catch (e) {
@@ -736,12 +859,58 @@ function heatBadgeHtml(tier) {
   return "";
 }
 
+function sortMarkets(list, sort, heat) {
+  const arr = [...list];
+  const keyOf = (m) => marketKey(m.id, m.pkg || "");
+  arr.sort((a, b) => {
+    // Always pin watchlist slightly when sorting hot
+    const wa = isWatched(a.id, a.pkg) ? 1 : 0;
+    const wb = isWatched(b.id, b.pkg) ? 1 : 0;
+
+    if (sort === "newest") {
+      return (b.created || 0) - (a.created || 0);
+    }
+    if (sort === "almost") {
+      // curve first by progress, then raised
+      const ca = a.status === 1 ? -1 : Number(a.progressPct) || 0;
+      const cb = b.status === 1 ? -1 : Number(b.progressPct) || 0;
+      if (cb !== ca) return cb - ca;
+      return raisedGnotOf(b) - raisedGnotOf(a);
+    }
+    if (sort === "buyers") {
+      return (Number(b.buyers) || 0) - (Number(a.buyers) || 0);
+    }
+    if (sort === "raised") {
+      return raisedGnotOf(b) - raisedGnotOf(a);
+    }
+    if (sort === "mcap") {
+      return (Number(b.mcapGnot) || 0) - (Number(a.mcapGnot) || 0);
+    }
+    // hot (default): heat tier → score → watch → created
+    const ta = heat.get(keyOf(a)) || 0;
+    const tb = heat.get(keyOf(b)) || 0;
+    if (tb !== ta) return tb - ta;
+    const sa = marketHeatScore(a);
+    const sb = marketHeatScore(b);
+    if (sb !== sa) return sb - sa;
+    if (wb !== wa) return wb - wa;
+    if ((a.status === 1) !== (b.status === 1)) return a.status === 1 ? 1 : -1;
+    return (b.created || 0) - (a.created || 0);
+  });
+  return arr;
+}
+
 function renderMarketGrid() {
   const q = ($("#search")?.value || "").trim().toLowerCase();
   const filter = state.marketFilter || "all";
+  const status = state.statusFilter || "all";
+  const sort = state.marketSort || "hot";
   let list = state.markets.filter((m) => !m.error);
   if (filter === "active") list = list.filter((m) => !m.legacy);
   if (filter === "legacy") list = list.filter((m) => m.legacy);
+  if (status === "curve") list = list.filter((m) => m.status !== 1);
+  if (status === "graduated") list = list.filter((m) => m.status === 1);
+  if (status === "watch") list = list.filter((m) => isWatched(m.id, m.pkg));
   if (q) {
     list = list.filter(
       (m) =>
@@ -754,31 +923,25 @@ function renderMarketGrid() {
   }
 
   const heat = marketHeatTiers(list);
-  // Hot raising tokens first, then by heat score / raised
-  list = [...list].sort((a, b) => {
-    const ka = `${a.id}|${a.pkg || ""}`;
-    const kb = `${b.id}|${b.pkg || ""}`;
-    const ta = heat.get(ka) || 0;
-    const tb = heat.get(kb) || 0;
-    if (tb !== ta) return tb - ta;
-    const sa = marketHeatScore(a);
-    const sb = marketHeatScore(b);
-    if (sb !== sa) return sb - sa;
-    // graduated after curve when equal heat
-    if ((a.status === 1) !== (b.status === 1)) return a.status === 1 ? 1 : -1;
-    return (b.created || 0) - (a.created || 0);
-  });
+  list = sortMarkets(list, sort, heat);
 
   const grid = $("#marketGrid");
   if (!grid) return;
   if (!list.length) {
-    const msg = !state.markets.length
-      ? `No markets yet. <button type="button" class="btn sm primary" data-nav="create">Launch the first coin</button>`
-      : filter === "legacy"
-        ? "No legacy markets match."
-        : filter === "active"
-          ? "No active-pad markets match. Try <em>All</em> to include legacy."
-          : "No results for this search.";
+    let msg = "No results for this search.";
+    if (!state.markets.length) {
+      msg = `No markets yet. <button type="button" class="btn sm primary" data-nav="create">Launch the first coin</button>`;
+    } else if (status === "watch") {
+      msg = "Watchlist empty — tap ★ on a market card to pin it here.";
+    } else if (status === "curve") {
+      msg = "No raising (curve) markets match.";
+    } else if (status === "graduated") {
+      msg = "No graduated markets match.";
+    } else if (filter === "legacy") {
+      msg = "No legacy markets match.";
+    } else if (filter === "active") {
+      msg = "No active-pad markets match. Try <em>All pads</em>.";
+    }
     grid.innerHTML = `<div class="empty">${msg}</div>`;
     $$("[data-nav]", grid).forEach((b) =>
       b.addEventListener("click", () => showView(b.dataset.nav)),
@@ -789,10 +952,13 @@ function renderMarketGrid() {
     .map((m) => {
       const pct = m.progressPct ?? 0;
       const st = m.status === 1 ? "Live" : "Curve";
-      const key = `${m.id}|${m.pkg || ""}`;
+      const key = marketKey(m.id, m.pkg || "");
       const tier = heat.get(key) || 0;
       const heatClass =
         tier >= 3 ? "card-heat card-fire" : tier >= 2 ? "card-heat card-hot" : tier >= 1 ? "card-heat card-warm" : "";
+      const watched = isWatched(m.id, m.pkg);
+      const meta = getCachedMeta(m.id, m.pkg);
+      const img = safeImageUri(meta?.imageURI);
       const padBadge = m.legacy
         ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
         : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
@@ -802,13 +968,21 @@ function renderMarketGrid() {
       const buyers = Number(m.buyers) || 0;
       const raisedVal = m.raisedGnot ?? m.raised;
       const raisedAlready = m.raisedGnot != null;
+      const sym2 = escapeHtml(String(m.symbol || "?").slice(0, 2));
+      const avatar = img
+        ? `<img class="card-avatar" src="${escapeHtml(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fallback="${sym2}" onerror="this.outerHTML='<div class=\\'card-avatar card-avatar-fallback\\'>'+this.dataset.fallback+'</div>'" />`
+        : `<div class="card-avatar card-avatar-fallback">${sym2}</div>`;
       return `
-      <article class="card ${heatClass}" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" data-heat="${tier}">
+      <article class="card ${heatClass}${watched ? " card-watched" : ""}" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" data-heat="${tier}">
+        <button type="button" class="card-watch ${watched ? "on" : ""}" data-watch="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" title="${watched ? "Remove from watchlist" : "Add to watchlist"}" aria-label="Watchlist">${watched ? "★" : "☆"}</button>
         <div class="card-top">
-          <div>
-            <div class="card-title">${escapeHtml(m.name)}</div>
-            <div class="card-sym">$${escapeHtml(m.symbol)}</div>
-            ${creatorLine}
+          <div class="card-identity">
+            ${avatar}
+            <div>
+              <div class="card-title">${escapeHtml(m.name)}</div>
+              <div class="card-sym">$${escapeHtml(m.symbol)}</div>
+              ${creatorLine}
+            </div>
           </div>
           <div class="card-badges">
             ${heatBadgeHtml(tier)}
@@ -833,9 +1007,17 @@ function renderMarketGrid() {
     .join("");
   $$(".card", grid).forEach((c) =>
     c.addEventListener("click", (e) => {
-      // Don't open token when clicking profile / external links
+      // Don't open token when clicking profile / external links / watch
       if (e.target.closest("a, button")) return;
       openToken(c.dataset.id, c.dataset.pkg || "");
+    }),
+  );
+  $$(".card-watch", grid).forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const on = toggleWatch(b.dataset.watch, b.dataset.pkg || "");
+      toast(on ? "Added to watchlist" : "Removed from watchlist");
+      renderMarketGrid();
     }),
   );
 }
@@ -1581,19 +1763,65 @@ async function refreshActivity() {
   }
 }
 
+function tradeStatsFromChart(chart) {
+  if (chart && typeof chart === "object" && !Array.isArray(chart) && chart.volumeGnot != null) {
+    return chart; // already stats object
+  }
+  let volumeGnot = 0;
+  let buyVolumeGnot = 0;
+  let sellVolumeGnot = 0;
+  let buyCount = 0;
+  let sellCount = 0;
+  let trades = 0;
+  for (const pt of chart || []) {
+    const side = Number(pt.side);
+    if (side === 2) continue;
+    const vol =
+      Number(pt.volumeGnot != null ? pt.volumeGnot : (pt.ugnot || 0) / UGNOT_PER_GNOT) || 0;
+    trades += 1;
+    volumeGnot += vol;
+    if (side === 0) {
+      buyCount += 1;
+      buyVolumeGnot += vol;
+    } else if (side === 1) {
+      sellCount += 1;
+      sellVolumeGnot += vol;
+    }
+  }
+  return { trades, buyCount, sellCount, volumeGnot, buyVolumeGnot, sellVolumeGnot };
+}
+
+function tokenShareUrl(m) {
+  const u = new URL(window.location.href);
+  u.hash = "";
+  u.searchParams.set("token", m.id || "");
+  if (m.pkg) u.searchParams.set("pkg", m.pkg);
+  return u.toString();
+}
+
 function renderToken(m) {
   const isPool = m.status === 1;
   const buyLabel = isPool ? "Swap buy" : "Buy on curve";
   const sellLabel = isPool ? "Swap sell" : "Sell on curve";
   const chart = chartShell(m.chart || [], m.priceGnot);
   const trades = renderTradeTable(m.chart || [], m);
+  const stats = m.tradeStats || tradeStatsFromChart(m.chart || []);
+  const watched = isWatched(m.id, m.pkg);
+  const cachedMeta = getCachedMeta(m.id, m.pkg);
+  const headImg = safeImageUri(cachedMeta?.imageURI);
   const padBadge = m.legacy
     ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
     : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
   return `
     <div class="panel">
       <div class="token-head">
-        <div>
+        <div class="token-head-main">
+          ${
+            headImg
+              ? `<img class="token-avatar" id="tokenAvatar" src="${escapeHtml(headImg)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+              : `<div class="token-avatar token-avatar-fallback" id="tokenAvatarFallback">$${(m.symbol || "?").slice(0, 3)}</div>`
+          }
+          <div>
           <h2>${escapeHtml(m.name)} <span class="card-sym">$${escapeHtml(m.symbol)}</span></h2>
           <div class="mono muted" style="font-size:0.8rem;margin-top:0.25rem">launch ${escapeHtml(m.id)}</div>
           ${
@@ -1614,9 +1842,16 @@ function renderToken(m) {
               <div class="pm-k">Circ. mcap</div>
               <div class="pm-v">${fmtMcap(m.circMcapGnot)}</div>
             </div>
+            <div class="pm-block">
+              <div class="pm-k">Volume (history)</div>
+              <div class="pm-v">${fmtGnot(stats.volumeGnot || 0, { alreadyGnot: true })}</div>
+            </div>
+          </div>
           </div>
         </div>
-        <div class="card-badges">
+        <div class="card-badges token-actions">
+          <button type="button" class="btn sm" id="btnShareToken" title="Copy share link">Share</button>
+          <button type="button" class="btn sm card-watch-btn ${watched ? "on" : ""}" id="btnWatchToken">${watched ? "★ Watch" : "☆ Watch"}</button>
           <span class="badge ${isPool ? "graduated" : "curve"}">${isPool ? "Live" : "Curve"}</span>
           ${padBadge}
         </div>
@@ -1631,6 +1866,9 @@ function renderToken(m) {
       <div class="kv">
         <div class="kv-row"><span>Raised</span><span>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</span></div>
         <div class="kv-row"><span>Buyers</span><span>${fmtNum(m.buyers)}</span></div>
+        <div class="kv-row"><span>Trades (ring)</span><span>${fmtNum(stats.trades || 0)} · buy ${fmtNum(stats.buyCount || 0)} / sell ${fmtNum(stats.sellCount || 0)}</span></div>
+        <div class="kv-row"><span>Buy vol</span><span>${fmtGnot(stats.buyVolumeGnot || 0, { alreadyGnot: true })}</span></div>
+        <div class="kv-row"><span>Sell vol</span><span>${fmtGnot(stats.sellVolumeGnot || 0, { alreadyGnot: true })}</span></div>
         <div class="kv-row"><span>Creator fees</span><span>${fmtGnot(m.creatorFeesGnot ?? m.creatorFees, { alreadyGnot: m.creatorFeesGnot != null })}</span></div>
         <div class="kv-row"><span>Creator</span><span>${renderPersonChip(m.creator)}</span></div>
         ${
@@ -1647,10 +1885,12 @@ function renderToken(m) {
           <summary>Edit metadata (first writer owns)</summary>
           <form id="metaForm" class="form" style="margin-top:0.5rem">
             <label>Description<textarea name="description" maxlength="500" rows="2" placeholder="About this coin"></textarea></label>
-            <label>Image URI<input name="imageURI" placeholder="https://… or ipfs://" /></label>
-            <label>Website<input name="website" placeholder="https://" /></label>
+            <label>Image URI<input name="imageURI" id="metaImageURI" placeholder="https://… or ipfs://" /></label>
+            <div id="metaImagePreview" class="meta-preview muted" hidden>Preview will appear for valid http(s)/ipfs URIs</div>
+            <label>Website<input name="website" id="metaWebsite" placeholder="https://" /></label>
             <label>Twitter / X<input name="twitter" placeholder="handle" maxlength="64" /></label>
             <label>Telegram<input name="telegram" placeholder="handle or t.me/…" maxlength="64" /></label>
+            <p class="muted" id="metaUriHint" style="font-size:0.72rem;margin:0">Image &amp; website must be <code>http(s)://</code> or <code>ipfs://</code>.</p>
             <button type="submit" class="btn sm primary">Save metadata</button>
           </form>
           <pre class="log" id="metaLog" hidden></pre>
@@ -1801,6 +2041,48 @@ function wireToken(m) {
   const marketPkg = m.pkg || state.selectedPkg || pkgPath();
   refreshTradeBalances(m.id, marketPkg);
   loadTokenMeta(marketPkg, m.id);
+
+  $("#btnShareToken")?.addEventListener("click", async () => {
+    const url = tokenShareUrl(m);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Share link copied");
+    } catch {
+      prompt("Copy share link:", url);
+    }
+  });
+  $("#btnWatchToken")?.addEventListener("click", () => {
+    const on = toggleWatch(m.id, marketPkg);
+    const b = $("#btnWatchToken");
+    if (b) {
+      b.textContent = on ? "★ Watch" : "☆ Watch";
+      b.classList.toggle("on", on);
+    }
+    toast(on ? "Added to watchlist" : "Removed from watchlist");
+  });
+
+  function refreshMetaImagePreview() {
+    const input = $("#metaImageURI");
+    const box = $("#metaImagePreview");
+    if (!input || !box) return;
+    const uri = String(input.value || "").trim();
+    const safe = safeImageUri(uri);
+    if (!uri) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    if (!safe) {
+      box.hidden = false;
+      box.innerHTML = `<span class="bad-uri">Invalid image URI — use http(s):// or ipfs://</span>`;
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<img class="meta-img preview" src="${escapeHtml(safe)}" alt="preview" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML='<span class=\\'bad-uri\\'>Image failed to load</span>'" />`;
+  }
+  $("#metaImageURI")?.addEventListener("input", refreshMetaImagePreview);
+  refreshMetaImagePreview();
+
   $("#btnExportTrades")?.addEventListener("click", () =>
     exportTradesCsv(m.chart || [], m.symbol),
   );
@@ -1808,6 +2090,12 @@ function wireToken(m) {
     e.preventDefault();
     if (!requireSigner("save metadata")) return;
     const fd = new FormData(e.target);
+    const imageURI = String(fd.get("imageURI") || "").trim();
+    const website = String(fd.get("website") || "").trim();
+    if (!isValidMetaUri(imageURI) || !isValidMetaUri(website)) {
+      toast("Image & website must be http(s):// or ipfs://", false);
+      return;
+    }
     const log = $("#metaLog");
     if (log) {
       log.hidden = false;
@@ -1821,8 +2109,8 @@ function wireToken(m) {
           marketPkg,
           m.id,
           String(fd.get("description") || ""),
-          String(fd.get("imageURI") || ""),
-          String(fd.get("website") || ""),
+          imageURI,
+          website,
           String(fd.get("twitter") || ""),
           String(fd.get("telegram") || ""),
         ],
@@ -1830,6 +2118,14 @@ function wireToken(m) {
       );
       if (log) log.textContent = r.hash ? `Submitted\n${r.hash}` : "Submitted";
       toast("Metadata saved");
+      state.metaCache[marketKey(m.id, marketPkg)] = {
+        ...(state.metaCache[marketKey(m.id, marketPkg)] || {}),
+        description: String(fd.get("description") || ""),
+        imageURI,
+        website,
+        twitter: String(fd.get("twitter") || ""),
+        telegram: String(fd.get("telegram") || ""),
+      };
       await new Promise((res) => setTimeout(res, 1500));
       loadTokenMeta(marketPkg, m.id);
     } catch (err) {
@@ -2122,6 +2418,7 @@ async function loadTokenMeta(pkg, id) {
       `/api/meta?pkg=${encodeURIComponent(pkg)}&id=${encodeURIComponent(id)}`,
     );
     const meta = data.meta;
+    state.metaCache[marketKey(id, pkg)] = meta;
     view.innerHTML = renderMetaHtml(meta);
     if (meta && form) {
       if (form.description) form.description.value = meta.description || "";
@@ -2129,6 +2426,29 @@ async function loadTokenMeta(pkg, id) {
       if (form.website) form.website.value = meta.website || "";
       if (form.twitter) form.twitter.value = meta.twitter || "";
       if (form.telegram) form.telegram.value = meta.telegram || "";
+    }
+    // Update token header avatar if present
+    const safe = safeImageUri(meta?.imageURI);
+    const av = $("#tokenAvatar");
+    const fb = $("#tokenAvatarFallback");
+    if (safe && av) av.src = safe;
+    if (safe && fb) {
+      const img = document.createElement("img");
+      img.className = "token-avatar";
+      img.id = "tokenAvatar";
+      img.src = safe;
+      img.alt = "";
+      img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
+      fb.replaceWith(img);
+    }
+    const prev = $("#metaImagePreview");
+    if (prev && form?.imageURI?.value) {
+      const s = safeImageUri(form.imageURI.value);
+      if (s) {
+        prev.hidden = false;
+        prev.innerHTML = `<img class="meta-img preview" src="${escapeHtml(s)}" alt="preview" loading="lazy" referrerpolicy="no-referrer" />`;
+      }
     }
   } catch (e) {
     view.innerHTML = `<div class="muted">Metadata unavailable (deploy meta realm?). ${escapeHtml(e.message || e)}</div>`;
@@ -2293,6 +2613,23 @@ function wireGlobal() {
       renderMarketGrid();
     });
   });
+  $$("#statusFilter .filter-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.statusFilter = b.dataset.status || "all";
+      $$("#statusFilter .filter-btn").forEach((x) =>
+        x.classList.toggle("active", x.dataset.status === state.statusFilter),
+      );
+      renderMarketGrid();
+    });
+  });
+  const sortEl = $("#marketSort");
+  if (sortEl) {
+    sortEl.value = state.marketSort || "hot";
+    sortEl.addEventListener("change", () => {
+      saveMarketSort(sortEl.value || "hot");
+      renderMarketGrid();
+    });
+  }
   $("#btnWallet")?.addEventListener("click", openWalletModal);
   $("#heroConnect")?.addEventListener("click", openWalletModal);
   $("#docsConnect")?.addEventListener("click", () => connectWithAdena());
@@ -2388,6 +2725,8 @@ function wireGlobal() {
 
 async function boot() {
   try {
+    loadWatchlist();
+    loadMarketSort();
     state.wallet = loadWallet();
     // stale local "signer" without type should not pretend canSign on Netlify
     if (state.wallet && state.wallet.type !== "adena" && state.wallet.type !== "local") {
@@ -2396,6 +2735,9 @@ async function boot() {
     }
     renderWalletChrome();
     wireGlobal();
+    // restore sort select after wire
+    const sortEl = $("#marketSort");
+    if (sortEl) sortEl.value = state.marketSort || "hot";
     try {
       state.walletsMeta = await api("/api/wallets");
     } catch {
@@ -2412,6 +2754,14 @@ async function boot() {
     await refreshHealth();
     await refreshMarkets();
     updateCreateHint();
+    // Deep link: ?token=ID&pkg=...
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const tok = sp.get("token");
+      if (tok) openToken(tok, sp.get("pkg") || "");
+    } catch {
+      /* ignore */
+    }
     setInterval(refreshHealth, 8000);
   } catch (e) {
     console.error(e);

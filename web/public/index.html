@@ -69,13 +69,30 @@
         </div>
       </div>
 
-      <div class="toolbar">
+      <div class="toolbar discover-toolbar">
         <input id="search" type="search" placeholder="Search name, symbol, id…" autocomplete="off" />
+        <div class="filter-tabs" id="statusFilter" role="group" aria-label="Status filter">
+          <button type="button" class="filter-btn active" data-status="all">All</button>
+          <button type="button" class="filter-btn" data-status="curve">Raising</button>
+          <button type="button" class="filter-btn" data-status="graduated">Graduated</button>
+          <button type="button" class="filter-btn" data-status="watch" title="Your watchlist">★ Watch</button>
+        </div>
         <div class="filter-tabs" id="padFilter" role="group" aria-label="Pad filter">
-          <button type="button" class="filter-btn active" data-filter="all">All</button>
-          <button type="button" class="filter-btn" data-filter="active">Active pad</button>
+          <button type="button" class="filter-btn active" data-filter="all">All pads</button>
+          <button type="button" class="filter-btn" data-filter="active">Active</button>
           <button type="button" class="filter-btn" data-filter="legacy">Legacy</button>
         </div>
+        <label class="sort-label">
+          <span class="muted">Sort</span>
+          <select id="marketSort" class="sort-select" aria-label="Sort markets">
+            <option value="hot">Hot</option>
+            <option value="newest">Newest</option>
+            <option value="almost">Almost graduate</option>
+            <option value="buyers">Most buyers</option>
+            <option value="raised">Most raised</option>
+            <option value="mcap">MCap</option>
+          </select>
+        </label>
         <button type="button" class="btn sm" id="btnRefresh">Refresh</button>
       </div>
       <div id="marketGrid" class="market-grid">

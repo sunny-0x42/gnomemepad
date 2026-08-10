@@ -232,6 +232,7 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1rem;
+  padding-top: 1.35rem;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.2s ease, transform 0.15s ease;
   position: relative;
@@ -468,6 +469,17 @@ a.person-chip:hover .person-name {
   font-size: 0.8rem;
   color: var(--muted);
 }
+.discover-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.65rem;
+  margin-bottom: 0.85rem;
+}
+.discover-toolbar #search {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
 .filter-tabs {
   display: flex;
   gap: 0.25rem;
@@ -487,6 +499,125 @@ a.person-chip:hover .person-name {
   border-color: var(--accent, #8b5cf6);
   color: #e9d5ff;
   background: var(--accent-soft, rgba(139, 92, 246, 0.12));
+}
+.sort-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+}
+.sort-select {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.sort-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.card-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+.card-avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+}
+.card-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #c4b5fd;
+  background: linear-gradient(145deg, rgba(108, 92, 231, 0.35), rgba(45, 212, 191, 0.12));
+  font-family: var(--mono);
+}
+.card-watch {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.45rem;
+  z-index: 3;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(10, 11, 15, 0.75);
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-watch:hover,
+.card-watch.on {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+}
+.card.card-watched {
+  border-color: rgba(251, 191, 36, 0.28);
+}
+.card-watch-btn.on {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+}
+.token-head-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  min-width: 0;
+}
+.token-avatar {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface2);
+}
+.token-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #c4b5fd;
+  background: linear-gradient(145deg, rgba(108, 92, 231, 0.4), rgba(45, 212, 191, 0.15));
+  font-family: var(--mono);
+}
+.token-actions {
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+.meta-preview {
+  margin: 0.35rem 0 0.5rem;
+  min-height: 1.2rem;
+}
+.meta-preview .meta-img.preview {
+  max-height: 96px;
+  max-width: 160px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.meta-preview .bad-uri {
+  color: var(--bad);
+  font-size: 0.75rem;
 }
 .skeleton-grid {
   display: grid;
