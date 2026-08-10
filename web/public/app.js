@@ -147,11 +147,11 @@ async function broadcastPkg(pkg, func, args = [], send = "") {
  * @param {string} [pkgOverride] — market pad path (legacy or active); default active pad
  */
 async function broadcastRealm(func, args = [], send = "", pkgOverride = "") {
-  const path = (pkgOverride || pkgPath()).trim();
+  const realmPkg = (pkgOverride || pkgPath()).trim();
   if (state.wallet?.type === "adena" && state.wallet.canSign) {
     return doContractCall({
       caller: state.wallet.address,
-      pkgPath: path,
+      pkgPath: realmPkg,
       func,
       args,
       send: send || "",
@@ -160,7 +160,7 @@ async function broadcastRealm(func, args = [], send = "", pkgOverride = "") {
     });
   }
   // Local server path (legacy demo gnokey)
-  const path =
+  const apiPath =
     func === "Create"
       ? "/api/tx/create"
       : func === "Buy"
@@ -178,7 +178,7 @@ async function broadcastRealm(func, args = [], send = "", pkgOverride = "") {
                   : func === "Init"
                     ? "/api/tx/init"
                     : null;
-  if (!path) throw new Error(`Unknown func ${func}`);
+  if (!apiPath) throw new Error(`Unknown func ${func}`);
   let body = {};
   if (func === "Create") {
     body = { name: args[0], symbol: args[1], uri: args[2] || "", bond: send };
@@ -189,7 +189,7 @@ async function broadcastRealm(func, args = [], send = "", pkgOverride = "") {
   } else if (func === "ClaimCreatorFees") {
     body = { id: args[0] };
   }
-  return api(path, { method: "POST", body: JSON.stringify(body) });
+  return api(apiPath, { method: "POST", body: JSON.stringify(body) });
 }
 
 function loadWallet() {
