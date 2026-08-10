@@ -137,6 +137,36 @@ function isValidMetaUri(uri) {
   );
 }
 
+/** Resize local image for preview (max edge px). Returns data URL. */
+function resizeImageFile(file, maxEdge = 512) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Invalid image data"));
+      img.onload = () => {
+        let { width, height } = img;
+        const scale = Math.min(1, maxEdge / Math.max(width, height));
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas unsupported"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 async function prefetchMarketMeta(markets, limit = 24) {
   const list = (markets || []).filter((m) => m && !m.error && m.id);
   const need = [];
@@ -702,14 +732,55 @@ function wireCopyButtons(root = document) {
   });
 }
 
-async function api(path, opts) {
-  const r = await fetch(path, {
-    headers: { "content-type": "application/json", ...(opts?.headers || {}) },
+/** Client GET cache — pairs with server TTL to skip redundant round-trips. */
+const apiClientCache = new Map();
+const API_CLIENT_TTL = {
+  "/api/markets": 18_000,
+  "/api/activity": 12_000,
+  "/api/ops": 22_000,
+  "/api/health": 8_000,
+  "/api/points": 15_000,
+};
+
+function apiPathBase(path) {
+  return String(path || "").split("?")[0];
+}
+
+function bustApiCache(prefix = "") {
+  for (const k of [...apiClientCache.keys()]) {
+    if (!prefix || k.startsWith(prefix) || apiPathBase(k) === prefix) {
+      apiClientCache.delete(k);
+    }
+  }
+}
+
+/**
+ * @param {string} path
+ * @param {{ method?: string, force?: boolean, cache?: string, headers?: object, body?: any }} [opts]
+ */
+async function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
+  const force = !!opts.force || opts.cache === "no-store";
+  const base = apiPathBase(path);
+  const ttl = API_CLIENT_TTL[base];
+  if (method === "GET" && ttl && !force) {
+    const hit = apiClientCache.get(path);
+    if (hit && Date.now() - hit.at < ttl) return hit.data;
+  }
+  let url = path;
+  if (method === "GET" && force) {
+    url += (path.includes("?") ? "&" : "?") + "refresh=1";
+  }
+  const r = await fetch(url, {
+    headers: { "content-type": "application/json", ...(opts.headers || {}) },
     ...opts,
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   if (j.error && j.ok === false) throw new Error(j.error);
+  if (method === "GET" && ttl) {
+    apiClientCache.set(path, { at: Date.now(), data: j });
+  }
   return j;
 }
 
@@ -750,13 +821,17 @@ function marketSkeletonHtml() {
   </div>`;
 }
 
-async function refreshMarkets() {
+async function refreshMarkets(opts = {}) {
   const grid = $("#marketGrid");
   if (grid && !state.markets.length) {
     grid.innerHTML = marketSkeletonHtml();
   }
   try {
-    const data = await api("/api/markets");
+    if (opts.force) {
+      bustApiCache("/api/markets");
+      bustApiCache("/api/activity");
+    }
+    const data = await api("/api/markets", { force: !!opts.force });
     state.markets = data.markets || [];
     state.params = data.params;
     state.padSources = data.sources || state.padSources || [];
@@ -1344,7 +1419,7 @@ async function refreshPortfolio() {
         <h3 style="margin-top:0">Holdings</h3>
         ${
           rows.length
-            ? `<table class="trade-table">
+            ? `<div class="table-scroll"><table class="trade-table">
           <thead><tr><th>Token</th><th>Balance</th><th>Est. value</th><th></th></tr></thead>
           <tbody>
             ${rows
@@ -1370,11 +1445,15 @@ async function refreshPortfolio() {
               })
               .join("")}
           </tbody>
-        </table>`
+        </table></div>`
             : `<div class="muted">No meme balances yet. Buy on the Markets page.</div>`
         }
-      </div>`;
-    $("#pfRefresh")?.addEventListener("click", refreshPortfolio);
+      </div>
+      ${renderPortfolioWatchlist()}`;
+    $("#pfRefresh")?.addEventListener("click", () => {
+      bustApiCache("/api/portfolio");
+      refreshPortfolio();
+    });
     $$("[data-nav]", panel).forEach((b) =>
       b.addEventListener("click", () => showView(b.dataset.nav)),
     );
@@ -1385,6 +1464,61 @@ async function refreshPortfolio() {
   } catch (e) {
     panel.innerHTML = `<div class="empty">Portfolio error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function renderPortfolioWatchlist() {
+  const watched = state.markets.filter((m) => !m.error && isWatched(m.id, m.pkg));
+  if (!watched.length) {
+    return `<div class="panel" style="margin-top:1rem">
+      <h3 style="margin-top:0">Watchlist</h3>
+      <p class="muted" style="font-size:0.85rem;margin:0">No starred markets. Tap ★ on a market card to pin it here.</p>
+    </div>`;
+  }
+  return `<div class="panel" style="margin-top:1rem">
+    <h3 style="margin-top:0">Watchlist <span class="muted" style="font-weight:400">(${watched.length})</span></h3>
+    <div class="watch-strip">
+      ${watched
+        .map((m) => {
+          const rv = recentVolOf(m);
+          return `<button type="button" class="watch-chip" data-open="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">
+            <span class="card-sym">$${escapeHtml(m.symbol)}</span>
+            <span class="mono">${fmtPriceGnot(m.priceGnot)}</span>
+            <span class="muted">${m.status === 1 ? "Live" : `${m.progressPct || 0}%`}</span>
+            ${rv.volumeGnot ? `<span class="muted mono">vol ${fmtGnot(rv.volumeGnot, { alreadyGnot: true })}</span>` : ""}
+          </button>`;
+        })
+        .join("")}
+    </div>
+  </div>`;
+}
+
+function exportCreatorCsv(launches) {
+  const lines = ["id,name,symbol,status,raised_gnot,fees_gnot,buyers,progress_pct,pkg,pad"];
+  for (const m of launches || []) {
+    const raised = m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT;
+    const fees = m.creatorFeesGnot != null ? m.creatorFeesGnot : (m.creatorFees || 0) / UGNOT_PER_GNOT;
+    lines.push(
+      [
+        m.id,
+        JSON.stringify(m.name || ""),
+        m.symbol,
+        m.statusLabel || m.status,
+        raised,
+        fees,
+        m.buyers || 0,
+        m.progressPct || 0,
+        m.pkg || "",
+        m.padLabel || "",
+      ].join(","),
+    );
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "gnomemepad-creator-launches.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Creator CSV downloaded");
 }
 
 async function refreshCreator() {
@@ -1407,6 +1541,7 @@ async function refreshCreator() {
     await fetchProfile(c.address);
     await prefetchProfiles((c.launches || []).map((x) => x.creator).filter(Boolean));
     const me = state.profileCache[c.address];
+    const claimable = (c.launches || []).filter((m) => (m.creatorFees || m.creatorFeesGnot) > 0);
     panel.innerHTML = `
       <div class="dash-head">
         <div>
@@ -1421,6 +1556,7 @@ async function refreshCreator() {
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
           <button type="button" class="btn sm" data-nav="create">+ New coin</button>
           <button type="button" class="btn sm" data-nav="profile">Profile</button>
+          <button type="button" class="btn sm" id="crExport" ${c.launches?.length ? "" : "disabled"}>Export CSV</button>
           <button type="button" class="btn sm" id="crRefresh">Refresh</button>
         </div>
       </div>
@@ -1431,7 +1567,14 @@ async function refreshCreator() {
         <div class="stat"><div class="stat-k">Graduated</div><div class="stat-v">${c.graduated}</div></div>
       </div>
       <div class="panel" style="margin-top:1rem">
-        <h3 style="margin-top:0">Your coins</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.65rem">
+          <h3 style="margin:0">Your coins</h3>
+          ${
+            claimable.length
+              ? `<button type="button" class="btn sm primary" id="crClaimAll" ${!isConnected() ? "disabled" : ""}>Claim all fees (${claimable.length})</button>`
+              : ""
+          }
+        </div>
         ${
           c.launches?.length
             ? `<div class="creator-grid">
@@ -1458,7 +1601,7 @@ async function refreshCreator() {
                 <div class="bar"><i style="width:${m.progressPct || 0}%"></i></div>
                 <div class="creator-actions">
                   <button type="button" class="btn sm" data-open="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">Open</button>
-                  <button type="button" class="btn sm primary" data-claim="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" ${!c.canSign || !m.creatorFees ? "disabled" : ""}>
+                  <button type="button" class="btn sm primary" data-claim="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" ${!(m.creatorFees || m.creatorFeesGnot) ? "disabled" : ""}>
                     Claim fees
                   </button>
                 </div>
@@ -1479,35 +1622,57 @@ async function refreshCreator() {
         </div>`
           : ""
       }`;
-    $("#crRefresh")?.addEventListener("click", refreshCreator);
+    $("#crRefresh")?.addEventListener("click", () => {
+      bustApiCache("/api/creator");
+      refreshCreator();
+    });
+    $("#crExport")?.addEventListener("click", () => exportCreatorCsv(c.launches || []));
     $$("[data-nav]", panel).forEach((b) =>
       b.addEventListener("click", () => showView(b.dataset.nav)),
     );
     $$("[data-open]", panel).forEach((b) =>
       b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
     );
+    async function claimOne(id, pkg, log) {
+      const r = await broadcastRealm("ClaimCreatorFees", [id], "", pkg || "");
+      if (log) log.textContent += `\n${id}: ${r.hash || "ok"}`;
+      return r;
+    }
     $$("[data-claim]", panel).forEach((b) =>
       b.addEventListener("click", async () => {
         if (!requireSigner("claim fees")) return;
         const log = $("#creatorLog");
-        log.textContent = `Claiming ${b.dataset.claim}…`;
+        if (log) log.textContent = `Claiming ${b.dataset.claim}…`;
         try {
-          const r = await broadcastRealm(
-            "ClaimCreatorFees",
-            [b.dataset.claim],
-            "",
-            b.dataset.pkg || "",
-          );
-          log.textContent = `Claimed\nheight ${r.height}\n${r.hash}`;
+          await claimOne(b.dataset.claim, b.dataset.pkg || "", log);
           toast("Claim submitted");
           refreshCreator();
-          refreshMarkets();
+          refreshMarkets({ force: true });
         } catch (e) {
-          log.textContent = String(e.message || e);
+          if (log) log.textContent = String(e.message || e);
           toast(String(e.message || e), false);
         }
       }),
     );
+    $("#crClaimAll")?.addEventListener("click", async () => {
+      if (!requireSigner("claim all fees")) return;
+      const log = $("#creatorLog");
+      const list = (c.launches || []).filter((m) => (m.creatorFees || m.creatorFeesGnot) > 0);
+      if (!list.length) return;
+      if (log) log.textContent = `Claiming ${list.length} launches…`;
+      let ok = 0;
+      for (const m of list) {
+        try {
+          await claimOne(m.id, m.pkg || "", log);
+          ok += 1;
+        } catch (e) {
+          if (log) log.textContent += `\n${m.id} fail: ${e.message || e}`;
+        }
+      }
+      toast(ok ? `Submitted ${ok}/${list.length} claims` : "No claims submitted", ok > 0);
+      refreshCreator();
+      refreshMarkets({ force: true });
+    });
     $("#btnClaimProtocol")?.addEventListener("click", async () => {
       if (!requireSigner("claim protocol fees")) return;
       const log = $("#creatorLog");
@@ -2127,7 +2292,17 @@ function renderToken(m) {
           <summary>Edit metadata (first writer owns)</summary>
           <form id="metaForm" class="form" style="margin-top:0.5rem">
             <label>Description<textarea name="description" maxlength="500" rows="2" placeholder="About this coin"></textarea></label>
-            <label>Image URI<input name="imageURI" id="metaImageURI" placeholder="https://… or ipfs://" /></label>
+            <label>Image URI
+              <input name="imageURI" id="metaImageURI" placeholder="https://… or ipfs://" />
+            </label>
+            <div class="meta-image-tools">
+              <label class="btn sm meta-file-btn">
+                Pick image
+                <input type="file" id="metaImageFile" accept="image/*" hidden />
+              </label>
+              <button type="button" class="btn sm" id="btnMetaHost" title="Open free image host to get a public URL">Get free URL</button>
+            </div>
+            <p class="muted" style="font-size:0.7rem;margin:0.25rem 0 0">On-chain meta needs a public <code>https://</code> or <code>ipfs://</code> URL. Pick image to preview &amp; resize (≤512px), then host it and paste the link.</p>
             <div id="metaImagePreview" class="meta-preview muted" hidden>Preview will appear for valid http(s)/ipfs URIs</div>
             <label>Website<input name="website" id="metaWebsite" placeholder="https://" /></label>
             <label>Twitter / X<input name="twitter" placeholder="handle" maxlength="64" /></label>
@@ -2307,10 +2482,16 @@ function wireToken(m) {
     toast(on ? "Added to watchlist" : "Removed from watchlist");
   });
 
-  function refreshMetaImagePreview() {
+  function refreshMetaImagePreview(localDataUrl) {
     const input = $("#metaImageURI");
     const box = $("#metaImagePreview");
     if (!input || !box) return;
+    if (localDataUrl) {
+      box.hidden = false;
+      box.innerHTML = `<img class="meta-img preview" src="${localDataUrl}" alt="local preview" />
+        <div class="muted" style="font-size:0.7rem;margin-top:0.3rem">Local preview only — host this image, paste the public URL above, then Save.</div>`;
+      return;
+    }
     const uri = String(input.value || "").trim();
     const safe = safeImageUri(uri);
     if (!uri) {
@@ -2326,7 +2507,30 @@ function wireToken(m) {
     box.hidden = false;
     box.innerHTML = `<img class="meta-img preview" src="${escapeHtml(safe)}" alt="preview" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML='<span class=\\'bad-uri\\'>Image failed to load</span>'" />`;
   }
-  $("#metaImageURI")?.addEventListener("input", refreshMetaImagePreview);
+  $("#metaImageURI")?.addEventListener("input", () => refreshMetaImagePreview());
+  $("#btnMetaHost")?.addEventListener("click", () => {
+    window.open("https://postimages.org/", "_blank", "noopener,noreferrer");
+    toast("Upload image → copy Direct link → paste into Image URI");
+  });
+  $("#metaImageFile")?.addEventListener("change", async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast("Choose an image file", false);
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      toast("Image too large (max ~4MB for preview)", false);
+      return;
+    }
+    try {
+      const dataUrl = await resizeImageFile(file, 512);
+      refreshMetaImagePreview(dataUrl);
+      toast("Preview ready — host online & paste URL to save on-chain");
+    } catch (err) {
+      toast(String(err.message || err), false);
+    }
+  });
   refreshMetaImagePreview();
 
   $("#btnExportTrades")?.addEventListener("click", () =>
@@ -2865,9 +3069,9 @@ function wireGlobal() {
     }
   });
   $("#btnRefresh")?.addEventListener("click", () => {
+    bustApiCache();
     refreshHealth();
-    refreshMarkets();
-    refreshActivity();
+    refreshMarkets({ force: true });
   });
   $("#search")?.addEventListener("input", () => renderMarketGrid());
   $$("#padFilter .filter-btn").forEach((b) => {

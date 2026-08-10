@@ -948,6 +948,39 @@ a.person-chip:hover .person-name {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+.meta-image-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.15rem;
+}
+.meta-file-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.watch-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.watch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  color: inherit;
+  cursor: pointer;
+}
+.watch-chip:hover {
+  border-color: var(--accent, #8b5cf6);
+  background: var(--accent-soft, rgba(139, 92, 246, 0.12));
+}
 .bar {
   margin-top: 0.85rem;
   height: 4px;
