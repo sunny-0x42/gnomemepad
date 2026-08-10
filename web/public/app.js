@@ -24,6 +24,9 @@ const state = {
   creator: null,
   // from /api/health
   pkg: DEFAULT_NETWORK.pkg || null,
+  hub: null,
+  profilePkg: null,
+  modules: {},
   chainId: DEFAULT_NETWORK.chainId,
   rpcUrl: DEFAULT_NETWORK.rpcUrl,
   readOnlyHost: false,
@@ -41,9 +44,34 @@ function networkForAdena() {
 function pkgPath() {
   return (
     state.pkg ||
+    state.modules?.pad ||
     state.walletsMeta?.pkg ||
-    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad"
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv4"
   );
+}
+
+function profilePkgPath() {
+  return (
+    state.profilePkg ||
+    state.modules?.profile ||
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
+  );
+}
+
+/** Call any realm func via Adena (not only pad). */
+async function broadcastPkg(pkg, func, args = [], send = "") {
+  if (state.wallet?.type === "adena" && state.wallet.canSign) {
+    return doContractCall({
+      caller: state.wallet.address,
+      pkgPath: pkg,
+      func,
+      args,
+      send: send || "",
+      gasWanted: 40_000_000,
+      gasFee: 1_000_000,
+    });
+  }
+  throw new Error("Connect Adena to sign (profile uses on-chain realm)");
 }
 
 /**
@@ -325,12 +353,18 @@ async function refreshHealth() {
   try {
     const h = await api("/api/health");
     if (h.pkg) state.pkg = h.pkg;
+    if (h.hub) state.hub = h.hub;
+    if (h.profile) state.profilePkg = h.profile;
+    if (h.modules) state.modules = h.modules;
     if (h.chainId) state.chainId = h.chainId;
     if (h.rpc) state.rpcUrl = h.rpc;
     if (h && h.signing === false) state.readOnlyHost = true;
     if (h && h.hosting === "netlify") state.hosting = "netlify";
     if (h.ok) {
-      setNet(true, h.chainId || "online");
+      const tag = h.modules?.pad
+        ? String(h.modules.pad).split("/").pop()
+        : h.chainId || "online";
+      setNet(true, tag);
     } else setNet(false, "offline");
   } catch (e) {
     setNet(false, "offline");
@@ -426,6 +460,7 @@ function showView(name) {
     token: "view-token",
     portfolio: "view-portfolio",
     creator: "view-creator",
+    profile: "view-profile",
     docs: "view-docs",
   };
   $(`#${map[name] || "view-home"}`)?.classList.remove("hidden");
@@ -437,9 +472,9 @@ function showView(name) {
   );
   if (name === "portfolio") refreshPortfolio();
   if (name === "creator") refreshCreator();
+  if (name === "profile") refreshProfileView();
   if (name === "create") updateCreateHint();
   if (name === "docs") {
-    // smooth-ish: scroll page top when opening docs
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 }
@@ -1339,11 +1374,47 @@ function wireToken(m) {
   });
 }
 
+async function refreshProfileView() {
+  const hint = $("#profileWalletHint");
+  const prev = $("#profilePreview");
+  const form = $("#profileForm");
+  if (!isConnected()) {
+    if (hint) hint.innerHTML = `Connect <strong>Adena</strong> to edit your on-chain profile.`;
+    if (prev) prev.textContent = "";
+    return;
+  }
+  if (hint) {
+    hint.innerHTML = `Editing as <span class="mono">${escapeHtml(shortAddr(state.wallet.address))}</span>
+      <div class="muted" style="font-size:0.75rem;margin-top:0.35rem">Realm: <code class="mono">${escapeHtml(profilePkgPath())}</code></div>`;
+  }
+  try {
+    const data = await api(`/api/profile?address=${encodeURIComponent(state.wallet.address)}`);
+    const p = data.profile;
+    if (p && form) {
+      if (form.name) form.name.value = p.name || "";
+      if (form.bio) form.bio.value = p.bio || "";
+      if (form.uri) form.uri.value = p.uri || "";
+    }
+    if (prev) {
+      if (p) {
+        prev.innerHTML = `<strong>${escapeHtml(p.name)}</strong>
+          ${p.bio ? `<div>${escapeHtml(p.bio)}</div>` : ""}
+          ${p.uri ? `<div class="mono muted">${escapeHtml(p.uri)}</div>` : ""}
+          <div class="muted">Updated height ${escapeHtml(String(p.updated || "—"))}</div>`;
+      } else {
+        prev.textContent = "No profile on-chain yet — fill the form and save.";
+      }
+    }
+  } catch (e) {
+    if (prev) prev.textContent = String(e.message || e);
+  }
+}
+
 function wireGlobal() {
   $$("[data-nav]").forEach((el) => {
     el.addEventListener("click", () => {
       const v = el.dataset.nav;
-      if (["home", "create", "portfolio", "creator", "docs"].includes(v)) showView(v);
+      if (["home", "create", "portfolio", "creator", "profile", "docs"].includes(v)) showView(v);
     });
   });
   $("#btnRefresh")?.addEventListener("click", () => {
@@ -1414,6 +1485,29 @@ function wireGlobal() {
       refreshCreator();
       if (r.result) openToken(r.result);
       else showView("home");
+    } catch (err) {
+      if (log) log.textContent = String(err.message || err);
+      toast(String(err.message || err), false);
+    }
+  });
+  $("#profileForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!requireSigner("save profile")) return;
+    const fd = new FormData(e.target);
+    const name = String(fd.get("name") || "").trim();
+    const bio = String(fd.get("bio") || "").trim();
+    const uri = String(fd.get("uri") || "").trim();
+    const log = $("#profileLog");
+    if (log) {
+      log.hidden = false;
+      log.textContent = "Approve in Adena…";
+    }
+    try {
+      const r = await broadcastPkg(profilePkgPath(), "SetProfile", [name, bio, uri], "");
+      if (log) log.textContent = r.hash ? `Submitted\n${r.hash}` : "Submitted";
+      toast("Profile saved");
+      await new Promise((res) => setTimeout(res, 1500));
+      refreshProfileView();
     } catch (err) {
       if (log) log.textContent = String(err.message || err);
       toast(String(err.message || err), false);

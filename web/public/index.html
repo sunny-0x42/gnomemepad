@@ -22,6 +22,7 @@
       <button type="button" class="nav-btn" data-nav="create">Create</button>
       <button type="button" class="nav-btn" data-nav="portfolio">Portfolio</button>
       <button type="button" class="nav-btn" data-nav="creator">Creator</button>
+      <button type="button" class="nav-btn" data-nav="profile">Profile</button>
       <button type="button" class="nav-btn" data-nav="docs">Guide</button>
     </nav>
     <div class="header-right">
@@ -92,6 +93,22 @@
 
     <section id="view-creator" class="view hidden">
       <div id="creatorPanel"><div class="empty">Connect wallet for creator tools.</div></div>
+    </section>
+
+    <section id="view-profile" class="view hidden">
+      <div class="panel create-panel" id="profilePanel">
+        <h1>Profile</h1>
+        <p class="lede">On-chain card (separate realm — upgrade without redeploying pad)</p>
+        <div id="profileWalletHint" class="callout"></div>
+        <form id="profileForm" class="form">
+          <label>Display name<input name="name" required maxlength="48" placeholder="Name" /></label>
+          <label>Bio<textarea name="bio" maxlength="280" rows="3" placeholder="Short bio"></textarea></label>
+          <label>URI <span class="opt">(https / ipfs)</span><input name="uri" placeholder="https://" /></label>
+          <button type="submit" class="btn primary wide" id="btnProfileSave">Save profile</button>
+        </form>
+        <pre class="log" id="profileLog" hidden></pre>
+        <div id="profilePreview" class="muted" style="margin-top:1rem;font-size:0.85rem"></div>
+      </div>
     </section>
 
     <section id="view-docs" class="view hidden">
