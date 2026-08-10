@@ -1437,6 +1437,42 @@ function exportTradesCsv(points, symbol) {
   toast("CSV downloaded");
 }
 
+function activityItemHtml(e) {
+  const side = e.side === 0 ? "buy" : e.side === 1 ? "sell" : "open";
+  const vol =
+    e.side === 2
+      ? "new"
+      : e.side === 0
+        ? fmtGnot(e.volumeGnot, { alreadyGnot: true })
+        : `${fmtNum(e.tokens)} tok`;
+  return `<button type="button" class="act-item act-${side}" data-open="${escapeHtml(e.id)}" data-pkg="${escapeHtml(e.pkg || "")}">
+    <span class="act-side">${side}</span>
+    <span class="act-sym">$${escapeHtml(e.symbol)}</span>
+    <span class="act-vol mono">${escapeHtml(String(vol))}</span>
+    <span class="act-pad muted">${escapeHtml(e.padLabel || "")}</span>
+    <span class="act-h mono muted">h${escapeHtml(String(e.height))}</span>
+  </button>`;
+}
+
+function bindActivityClicks(root) {
+  $$(".act-item", root).forEach((b) =>
+    b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
+  );
+}
+
+function setActivityMarquee(feed, sequenceHtml, sequenceLen) {
+  // Two identical halves → seamless translateX(-50%) loop
+  const n = Math.max(1, sequenceLen || 1);
+  const track = document.createElement("div");
+  track.className = "activity-track marquee";
+  track.innerHTML = sequenceHtml + sequenceHtml;
+  // ~2.1s per chip across one half; clamp for readability
+  const secs = Math.min(56, Math.max(14, n * 2.1));
+  track.style.animationDuration = `${secs}s`;
+  feed.replaceChildren(track);
+  bindActivityClicks(feed);
+}
+
 async function refreshActivity() {
   const feed = $("#activityFeed");
   const meta = $("#activityMeta");
@@ -1444,34 +1480,18 @@ async function refreshActivity() {
   try {
     const data = await api("/api/activity?limit=24");
     const events = data.events || [];
-    if (meta) meta.textContent = `${events.length} events · ${data.scannedMarkets || 0} markets`;
+    if (meta) meta.textContent = events.length ? `${events.length}` : "";
     if (!events.length) {
-      feed.innerHTML = `<span class="muted">No recent trades yet.</span>`;
+      feed.innerHTML = `<div class="activity-track activity-empty muted">No recent trades yet.</div>`;
       return;
     }
-    feed.innerHTML = events
-      .map((e) => {
-        const side = e.side === 0 ? "buy" : e.side === 1 ? "sell" : "open";
-        const vol =
-          e.side === 2
-            ? "mark"
-            : e.side === 0
-              ? fmtGnot(e.volumeGnot, { alreadyGnot: true })
-              : `${fmtNum(e.tokens)} tok`;
-        return `<button type="button" class="act-item act-${side}" data-open="${escapeHtml(e.id)}" data-pkg="${escapeHtml(e.pkg || "")}">
-          <span class="act-side">${side}</span>
-          <span class="act-sym">$${escapeHtml(e.symbol)}</span>
-          <span class="act-vol mono">${escapeHtml(String(vol))}</span>
-          <span class="act-pad muted">${escapeHtml(e.padLabel || "")}</span>
-          <span class="act-h mono muted">h${escapeHtml(String(e.height))}</span>
-        </button>`;
-      })
-      .join("");
-    $$(".act-item", feed).forEach((b) =>
-      b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
-    );
+    // Pad short feeds so the ticker never looks empty on wide screens
+    let seq = events.slice();
+    while (seq.length < 10) seq = seq.concat(events);
+    const sequenceHtml = seq.map(activityItemHtml).join("");
+    setActivityMarquee(feed, sequenceHtml, seq.length);
   } catch (e) {
-    feed.innerHTML = `<span class="muted">Activity unavailable: ${escapeHtml(e.message || e)}</span>`;
+    feed.innerHTML = `<div class="activity-track activity-empty muted">Activity unavailable: ${escapeHtml(e.message || e)}</div>`;
   }
 }
 

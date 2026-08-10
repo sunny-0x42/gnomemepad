@@ -59,11 +59,14 @@
       </div>
 
       <div class="activity-strip panel" id="activityStrip">
-        <div class="activity-head">
-          <strong>Recent activity</strong>
-          <span class="muted" id="activityMeta" style="font-size:0.75rem"></span>
+        <div class="activity-label" title="Recent activity">
+          <span class="activity-live" aria-hidden="true"></span>
+          <strong>LIVE</strong>
+          <span class="muted" id="activityMeta"></span>
         </div>
-        <div id="activityFeed" class="activity-feed muted">Loading…</div>
+        <div class="activity-viewport" id="activityFeed" aria-live="polite">
+          <div class="activity-track muted">Loading…</div>
+        </div>
       </div>
 
       <div class="toolbar">
