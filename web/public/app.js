@@ -771,6 +771,7 @@ async function refreshMarkets() {
     const creators = state.markets.map((m) => m.creator).filter(Boolean);
     await Promise.all([prefetchProfiles(creators), prefetchMarketMeta(state.markets)]);
     renderMarketGrid();
+    checkAlmostGraduateAlerts(state.markets);
     refreshActivity();
   } catch (e) {
     if (grid) {
@@ -1033,6 +1034,7 @@ function showView(name) {
     creator: "view-creator",
     profile: "view-profile",
     rewards: "view-rewards",
+    ops: "view-ops",
     docs: "view-docs",
   };
   $(`#${map[name] || "view-home"}`)?.classList.remove("hidden");
@@ -1046,9 +1048,91 @@ function showView(name) {
   if (name === "creator") refreshCreator();
   if (name === "profile") refreshProfileView();
   if (name === "rewards") refreshRewardsView();
+  if (name === "ops") refreshOpsView();
   if (name === "create") updateCreateHint();
   if (name === "docs") {
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+}
+
+/** Almost-graduate toast throttle (id|pkg -> last toast ms) */
+const almostGradToastAt = new Map();
+
+function checkAlmostGraduateAlerts(markets) {
+  const now = Date.now();
+  for (const m of markets || []) {
+    if (!m || m.error || m.status === 1) continue;
+    const pct = Number(m.progressPct) || 0;
+    if (pct < 80) continue;
+    const k = marketKey(m.id, m.pkg);
+    const last = almostGradToastAt.get(k) || 0;
+    if (now - last < 10 * 60 * 1000) continue; // 10 min
+    almostGradToastAt.set(k, now);
+    toast(`🚀 $${m.symbol || m.id} is ${pct}% to graduate`, true);
+  }
+}
+
+async function refreshOpsView() {
+  const summary = $("#opsSummary");
+  const grid = $("#opsGrid");
+  if (!summary || !grid) return;
+  summary.textContent = "Loading ops…";
+  grid.innerHTML = "";
+  try {
+    const data = await api("/api/ops");
+    const ok = !!data.ok;
+    summary.className = `callout ${ok ? "ok" : ""}`;
+    summary.innerHTML = `
+      <strong>${ok ? "Stack healthy" : "Issues detected"}</strong>
+      <div class="muted" style="font-size:0.78rem;margin-top:0.35rem">
+        Height <code class="mono">${escapeHtml(String(data.height || "—"))}</code>
+        · chain <code class="mono">${escapeHtml(String(data.chainId || "—"))}</code>
+        · hub <code class="mono">${escapeHtml(String(data.hub || "—").split("/").pop() || "—")}</code>
+        ${data.hubError ? ` · <span class="bad-uri">${escapeHtml(data.hubError)}</span>` : ""}
+        ${data.rpcError ? ` · <span class="bad-uri">${escapeHtml(data.rpcError)}</span>` : ""}
+      </div>`;
+    const mods = data.modules || {};
+    const cards = Object.entries(mods).map(([name, m]) => {
+      const path = m?.path || "";
+      const short = path.split("/").pop() || name;
+      let body = "";
+      if (m?.kind === "pad") {
+        body = `Launches: <strong>${fmtNum(m.launchCount)}</strong>
+          ${m.params ? `<div class="muted" style="font-size:0.72rem">bond ${escapeHtml(String(m.params.createBondGnot))} · grad ${escapeHtml(String(m.params.graduationGnot))} · fee ${(Number(m.params.feeBps) / 100).toFixed(2)}%</div>` : ""}`;
+      } else if (m?.kind === "profile") {
+        body = `Profiles: <strong>${fmtNum(m.count)}</strong>`;
+      } else if (m?.kind === "meta") {
+        body = `Entries: <strong>${fmtNum(m.count)}</strong>`;
+      } else if (m?.kind === "points") {
+        body = `Users: <strong>${fmtNum(m.userCount)}</strong>`;
+      } else if (m?.kind === "hub") {
+        body = `Modules: <strong>${fmtNum(m.moduleCount)}</strong>
+          ${m.admins?.length ? `<div class="muted mono" style="font-size:0.7rem">${m.admins.map((a) => escapeHtml(shortAddr(a))).join(", ")}</div>` : m.admin ? `<div class="muted mono" style="font-size:0.7rem">${escapeHtml(shortAddr(m.admin))}</div>` : ""}`;
+      } else {
+        body = m?.ok ? "ok" : escapeHtml(m?.error || "—");
+      }
+      return `<div class="ops-card ${m?.ok ? "ok" : "err"}">
+        <div class="ops-card-top">
+          <strong>${escapeHtml(name)}</strong>
+          <span class="badge ${m?.ok ? "graduated" : "curve"}">${m?.ok ? "ok" : "err"}</span>
+        </div>
+        <div class="mono muted" style="font-size:0.7rem;margin:0.25rem 0">${escapeHtml(short)}</div>
+        <div style="font-size:0.82rem">${body}</div>
+        ${m?.error ? `<div class="bad-uri" style="font-size:0.72rem;margin-top:0.25rem">${escapeHtml(m.error)}</div>` : ""}
+      </div>`;
+    });
+    // pads summary strip
+    const pads = (data.pads || [])
+      .map(
+        (p) =>
+          `<span class="badge ${p.active ? "active-pad" : "legacy"}">${escapeHtml(p.key)} · ${fmtNum(p.launchCount)}</span>`,
+      )
+      .join(" ");
+    grid.innerHTML =
+      (pads ? `<div class="ops-pads">${pads}</div>` : "") + cards.join("");
+  } catch (e) {
+    summary.className = "callout";
+    summary.innerHTML = `<strong>Ops unavailable</strong><div class="muted">${escapeHtml(e.message || e)}</div>`;
   }
 }
 
@@ -1898,11 +1982,15 @@ function renderToken(m) {
       </div>
       ${
         m.gnoswapReady || isPool
-          ? `<div class="callout ok" style="margin-top:0.75rem">
-          <strong>GRC20 ready for Gnoswap.</strong>
-          Create a permissionless GNOT/${escapeHtml(m.symbol)} pool on
-          <a href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Gnoswap</a>
-          using the Token ID above. Pad keeps a locked CPMM; Gnoswap is a separate venue.
+          ? `<div class="callout ok gnoswap-checklist" style="margin-top:0.75rem">
+          <strong>GRC20 ready for Gnoswap</strong>
+          <ol class="checklist">
+            <li>Copy <strong>Token ID</strong> / Adena path above</li>
+            <li>Open <a href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Gnoswap onboarding</a></li>
+            <li>Create permissionless GNOT / $${escapeHtml(m.symbol)} pool</li>
+            <li>Seed liquidity (holders/creator) — pad CPMM stays locked in parallel</li>
+          </ol>
+          <p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">Prices may diverge across venues; arbitrage is expected.</p>
         </div>`
           : ""
       }
@@ -2474,9 +2562,28 @@ async function refreshRewardsView() {
     $("#rwPoints").textContent = addr ? fmtNum(data.points || 0) : "—";
     $("#rwRefBonus").textContent = `+${p.referrerBonus ?? 50}`;
     $("#rwCheckIn").textContent = `+${p.checkIn ?? 5}`;
+    const v2box = $("#rewardsV2Stats");
+    const v2note = $("#rewardsV2Note");
+    if (p.version === 2) {
+      v2box?.classList.remove("hidden");
+      v2note?.classList.remove("hidden");
+      if ($("#rwCreate")) $("#rwCreate").textContent = `+${p.createBonus ?? 30}`;
+      if ($("#rwBuyPts"))
+        $("#rwBuyPts").textContent = `+${p.buyBase ?? 2} +${p.ptsPerGnotBuy ?? 10}/GNOT`;
+      if ($("#rwSellPts"))
+        $("#rwSellPts").textContent = `+${p.sellBase ?? 1} +${p.ptsPerGnotSell ?? 3}/GNOT`;
+      if (v2note) {
+        v2note.innerHTML = `Trade/create points are awarded <strong>on-chain via pad</strong> (pointsv2 allowlist). Cap ${escapeHtml(String(p.maxPerHeight || 200))} pts/height.
+          Issued: trade <strong>${fmtNum(p.tradePtsTotal)}</strong> · create <strong>${fmtNum(p.createPtsTotal)}</strong>.
+          Needs <code class="mono">padv6.SetPointsEnabled(true)</code> + <code class="mono">AllowPad</code>.`;
+      }
+    } else {
+      v2box?.classList.add("hidden");
+      v2note?.classList.add("hidden");
+    }
     if (hint) {
       if (!isConnected()) {
-        hint.innerHTML = `Connect <strong>Adena</strong> to set a referrer and check in. Realm: <code class="mono">${escapeHtml(pointsPkgPath())}</code>`;
+        hint.innerHTML = `Connect <strong>Adena</strong> to set a referrer and check in. Realm: <code class="mono">${escapeHtml(pointsPkgPath())}</code>${p.version === 2 ? " · <span class='badge heat-hot'>v2</span>" : ""}`;
       } else {
         const ref = data.referrer
           ? `Referrer: ${renderPersonChip(data.referrer)}`
@@ -2552,11 +2659,12 @@ function wireGlobal() {
   $$("[data-nav]").forEach((el) => {
     el.addEventListener("click", () => {
       const v = el.dataset.nav;
-      if (["home", "create", "portfolio", "creator", "profile", "rewards", "docs"].includes(v))
+      if (["home", "create", "portfolio", "creator", "profile", "rewards", "ops", "docs"].includes(v))
         showView(v);
     });
   });
   $("#btnRewardsRefresh")?.addEventListener("click", () => refreshRewardsView());
+  $("#btnOpsRefresh")?.addEventListener("click", () => refreshOpsView());
   $("#btnSetReferrer")?.addEventListener("click", async () => {
     if (!requireSigner("set referrer")) return;
     const ref = ($("#rwReferrer")?.value || "").trim();

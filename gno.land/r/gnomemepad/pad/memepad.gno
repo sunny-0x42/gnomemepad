@@ -22,6 +22,9 @@ import (
 	"gno.land/p/nt/avl/v0"
 	"gno.land/p/nt/seqid/v0"
 	"gno.land/r/demo/defi/grc20reg"
+	// pointsv2: optional trade/create awards (off by default until SetPointsEnabled).
+	// Deploy prepare rewrites this import to the Sapphire personal-namespace path.
+	pointsv2 "gno.land/r/gnomemepad/pointsv2"
 )
 
 var (
@@ -35,6 +38,9 @@ var (
 	// testSkipBanker: when true, sendUgnot is a no-op (unit tests without funded realm bank).
 	// Always false in production.
 	testSkipBanker bool
+	// pointsEnabled: when true, notify pointsv2 after Create / Buy / Sell / Swap*.
+	// Admin must also AllowPad(this package) on pointsv2.
+	pointsEnabled bool
 )
 
 // Trade is one price sample for charts (capped history per launch).
@@ -107,6 +113,39 @@ func requireInit() {
 	if !inited {
 		panic("pad: call Init first")
 	}
+}
+
+// SetPointsEnabled toggles pointsv2 notifications (protocol admin only).
+// pointsv2 must AllowPad(this package path) or OnTrade/OnCreate will panic and revert the trade.
+func SetPointsEnabled(cur realm, on bool) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: EOA only")
+	}
+	if cur.Previous().Address() != protocolAddr {
+		panic("pad: not protocol")
+	}
+	pointsEnabled = on
+	chain.Emit("SetPointsEnabled", "on", strconv.FormatBool(on))
+}
+
+// PointsEnabled reports whether pad notifies pointsv2 after trades/creates.
+func PointsEnabled() bool {
+	return pointsEnabled
+}
+
+func notifyTrade(cur realm, trader address, id string, side int64, volumeUgnot int64) {
+	if !pointsEnabled || testSkipBanker {
+		return
+	}
+	_ = pointsv2.OnTrade(cross(cur), trader, id, side, volumeUgnot)
+}
+
+func notifyCreate(cur realm, creator address, id string) {
+	if !pointsEnabled || testSkipBanker {
+		return
+	}
+	_ = pointsv2.OnCreate(cross(cur), creator, id)
 }
 
 func mustLaunch(id string) *Launch {
@@ -344,6 +383,7 @@ func Create(cur realm, name, symbol, uri string) string {
 		"token", l.TokenID,
 		"reg", regKey,
 	)
+	notifyCreate(cur, creator, id)
 	return id
 }
 
@@ -420,6 +460,7 @@ func Buy(cur realm, id string, minTokensOut int64) int64 {
 		"ugnot", strconv.FormatInt(sent, 10),
 		"tokens", strconv.FormatInt(tokensOut, 10),
 	)
+	notifyTrade(cur, buyer, id, 0, sent)
 
 	if ammmath.CanGraduate(l.RaisedUgnot, GraduationThreshold) || l.RealSold >= CurveSupply {
 		if l.RaisedUgnot >= GraduationThreshold {
@@ -480,6 +521,7 @@ func Sell(cur realm, id string, tokensIn, minUgnotOut int64) int64 {
 		"tokens", strconv.FormatInt(tokensIn, 10),
 		"ugnot", strconv.FormatInt(fee.Net, 10),
 	)
+	notifyTrade(cur, seller, id, 1, fee.Net)
 	return fee.Net
 }
 
@@ -593,6 +635,7 @@ func SwapBuy(cur realm, id string, minTokensOut int64) int64 {
 		"ugnot", strconv.FormatInt(sent, 10),
 		"tokens", strconv.FormatInt(tokensOut, 10),
 	)
+	notifyTrade(cur, buyer, id, 0, sent)
 	return tokensOut
 }
 
@@ -635,6 +678,7 @@ func SwapSell(cur realm, id string, tokensIn, minUgnotOut int64) int64 {
 		"tokens", strconv.FormatInt(tokensIn, 10),
 		"ugnot", strconv.FormatInt(fee.Net, 10),
 	)
+	notifyTrade(cur, seller, id, 1, fee.Net)
 	return fee.Net
 }
 
@@ -907,9 +951,11 @@ func resetForTest() {
 	launches = avl.Tree{}
 	bySymbol = avl.Tree{}
 	nextID = 0
+	nextTokenID = 0
 	var zero address
 	protocolAddr = zero
 	protocolFees = 0
 	inited = false
+	pointsEnabled = false
 	testSkipBanker = true // unit tests skip banker; integration/chain tests leave false
 }

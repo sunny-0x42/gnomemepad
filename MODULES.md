@@ -8,9 +8,13 @@ Pad packages (`padv2`…`padv4`) are immutable on-chain. Upgrading a monolith me
 
 | Module | Path | Role |
 |--------|------|------|
-| **hub** | `…/gnomemepad/hub` | Module registry: `SetModule` / `GetModule` / `ListModules` |
+| **hubv2** | `…/gnomemepad/hubv2` | Multi-admin module registry |
 | **profile** | `…/gnomemepad/profile` | User cards: `SetProfile` / `GetProfile` |
-| **pad** | `…/gnomemepad/padv4` | Launch + trade (registered as hub key `pad`) |
+| **meta** | `…/gnomemepad/meta` | Token description / image / socials |
+| **points** | `…/gnomemepad/pointsv2` | Referral + check-in + trade/create points |
+| **pad** | `…/gnomemepad/padv6` (active) | Launch + trade + optional points hooks (`padv5`/`v4`/`v3` as legacy) |
+
+See **DEPLOY_V6.md** for pointsv2 + padv6 deploy order.
 
 ## Deploy
 

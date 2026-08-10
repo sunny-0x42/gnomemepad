@@ -24,6 +24,7 @@
       <button type="button" class="nav-btn" data-nav="creator">Creator</button>
       <button type="button" class="nav-btn" data-nav="profile">Profile</button>
       <button type="button" class="nav-btn" data-nav="rewards">Rewards</button>
+      <button type="button" class="nav-btn" data-nav="ops">Ops</button>
       <button type="button" class="nav-btn" data-nav="docs">Guide</button>
     </nav>
     <div class="header-right">
@@ -150,13 +151,19 @@
     <section id="view-rewards" class="view hidden">
       <div class="panel create-panel" id="rewardsPanel">
         <h1>Rewards</h1>
-        <p class="lede">Points &amp; referral (separate realm — independent of pad upgrades)</p>
+        <p class="lede">Points &amp; referral — v2 awards create/trade pts when pad hooks are on</p>
         <div id="rewardsHint" class="callout"></div>
         <div class="stat-row" id="rewardsStats" style="margin:0.75rem 0">
           <div class="stat"><span class="stat-k">Your points</span><span class="stat-v" id="rwPoints">—</span></div>
           <div class="stat"><span class="stat-k">Referrer bonus</span><span class="stat-v" id="rwRefBonus">—</span></div>
           <div class="stat"><span class="stat-k">Check-in</span><span class="stat-v" id="rwCheckIn">—</span></div>
         </div>
+        <div id="rewardsV2Stats" class="stat-row hidden" style="margin:0.5rem 0">
+          <div class="stat"><span class="stat-k">Create bonus</span><span class="stat-v" id="rwCreate">—</span></div>
+          <div class="stat"><span class="stat-k">Buy pts</span><span class="stat-v" id="rwBuyPts">—</span></div>
+          <div class="stat"><span class="stat-k">Sell pts</span><span class="stat-v" id="rwSellPts">—</span></div>
+        </div>
+        <div id="rewardsV2Note" class="callout muted hidden" style="font-size:0.8rem;margin-bottom:0.75rem"></div>
         <div class="form">
           <label>Set referrer (once)
             <input id="rwReferrer" class="mono" placeholder="g1…" maxlength="64" />
@@ -170,6 +177,20 @@
         <pre class="log" id="rewardsLog" hidden></pre>
         <h3 style="margin:1.25rem 0 0.5rem">Leaderboard</h3>
         <div id="rewardsLeaderboard" class="muted">Connect wallet or refresh…</div>
+      </div>
+    </section>
+
+    <section id="view-ops" class="view hidden">
+      <div class="panel create-panel" id="opsPanel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">
+          <div>
+            <h1 style="margin:0">Ops</h1>
+            <p class="lede" style="margin:0.35rem 0 0">Module health · hub · pads (read-only)</p>
+          </div>
+          <button type="button" class="btn sm" id="btnOpsRefresh">Refresh</button>
+        </div>
+        <div id="opsSummary" class="callout" style="margin-top:0.85rem">Loading…</div>
+        <div id="opsGrid" class="ops-grid" style="margin-top:0.85rem"></div>
       </div>
     </section>
 

@@ -619,6 +619,48 @@ a.person-chip:hover .person-name {
   color: var(--bad);
   font-size: 0.75rem;
 }
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.65rem;
+}
+.ops-pads {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+.ops-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: var(--surface2);
+}
+.ops-card.ok {
+  border-color: rgba(52, 211, 153, 0.25);
+}
+.ops-card.err {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+.ops-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.35rem;
+}
+.checklist {
+  margin: 0.45rem 0 0;
+  padding-left: 1.15rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+.checklist li {
+  margin: 0.2rem 0;
+}
+.gnoswap-checklist a {
+  color: #a5b4fc;
+}
 .skeleton-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
