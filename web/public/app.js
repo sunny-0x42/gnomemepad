@@ -33,6 +33,8 @@ const state = {
   rpcUrl: DEFAULT_NETWORK.rpcUrl,
   readOnlyHost: false,
   hosting: null,
+  /** address -> { name, bio, uri, updated } | null (fetched empty) */
+  profileCache: {},
 };
 
 function networkForAdena() {
@@ -58,6 +60,70 @@ function profilePkgPath() {
     state.modules?.profile ||
     "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
   );
+}
+
+/** gnoweb profile deep-link on Sapphire. */
+function profileGnowebUrl(addr) {
+  const a = String(addr || "").trim();
+  if (!a) return "";
+  const realm = profilePkgPath().replace(/^gno\.land\//, "");
+  return `https://sapphire.testnets.gno.land/${realm}:user/${encodeURIComponent(a)}`;
+}
+
+/**
+ * Fetch + cache on-chain profile for address.
+ * @returns {Promise<{name,bio,uri,updated}|null>}
+ */
+async function fetchProfile(addr) {
+  const a = String(addr || "").trim();
+  if (!a || !/^g1[a-z0-9]{38,}$/i.test(a)) return null;
+  if (Object.prototype.hasOwnProperty.call(state.profileCache, a)) {
+    return state.profileCache[a];
+  }
+  try {
+    const data = await api(`/api/profile?address=${encodeURIComponent(a)}`);
+    const p = data.profile || null;
+    state.profileCache[a] = p;
+    return p;
+  } catch {
+    state.profileCache[a] = null;
+    return null;
+  }
+}
+
+/** Prefetch many addresses (unique, capped). */
+async function prefetchProfiles(addrs, limit = 24) {
+  const uniq = [...new Set((addrs || []).map((x) => String(x || "").trim()).filter(Boolean))];
+  const need = uniq
+    .filter((a) => !Object.prototype.hasOwnProperty.call(state.profileCache, a))
+    .slice(0, limit);
+  await Promise.all(need.map((a) => fetchProfile(a)));
+}
+
+/** Display name or short address. */
+function profileDisplayName(addr) {
+  const a = String(addr || "").trim();
+  const p = state.profileCache[a];
+  if (p?.name) return p.name;
+  return shortAddr(a);
+}
+
+/** HTML chip: name + short addr + optional link. */
+function renderPersonChip(addr, { link = true } = {}) {
+  const a = String(addr || "").trim();
+  if (!a) return "—";
+  const p = state.profileCache[a];
+  const name = p?.name ? escapeHtml(p.name) : "";
+  const short = escapeHtml(shortAddr(a));
+  const title = escapeHtml(a);
+  const body = name
+    ? `<span class="person-name">${name}</span> <span class="mono muted person-addr">${short}</span>`
+    : `<span class="mono person-addr">${short}</span>`;
+  if (!link) return `<span class="person-chip" title="${title}">${body}</span>`;
+  const href = profileGnowebUrl(a);
+  return `<a class="person-chip" href="${escapeHtml(href)}" target="_blank" rel="noreferrer" title="${title}">${body}${
+    p?.name ? `<span class="badge profile-on" title="On-chain profile">P</span>` : ""
+  }</a>`;
 }
 
 /** Call any realm func via Adena (not only pad). */
@@ -546,6 +612,10 @@ async function refreshMarkets() {
       $("#statFeeBps").textContent = `${(data.params.feeBps / 100).toFixed(2)}%`;
     }
     renderMarketGrid();
+    // Enrich creator names (async re-render when cache fills)
+    const creators = state.markets.map((m) => m.creator).filter(Boolean);
+    await prefetchProfiles(creators);
+    renderMarketGrid();
   } catch (e) {
     grid.innerHTML = `<div class="empty">Failed to load markets</div>`;
   }
@@ -588,12 +658,16 @@ function renderMarketGrid() {
       const padBadge = m.legacy
         ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
         : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
+      const creatorLine = m.creator
+        ? `<div class="card-creator">${renderPersonChip(m.creator)}</div>`
+        : "";
       return `
       <article class="card" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">
         <div class="card-top">
           <div>
             <div class="card-title">${escapeHtml(m.name)}</div>
             <div class="card-sym">$${escapeHtml(m.symbol)}</div>
+            ${creatorLine}
           </div>
           <div class="card-badges">
             <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${st}</span>
@@ -616,7 +690,11 @@ function renderMarketGrid() {
     })
     .join("");
   $$(".card", grid).forEach((c) =>
-    c.addEventListener("click", () => openToken(c.dataset.id, c.dataset.pkg || "")),
+    c.addEventListener("click", (e) => {
+      // Don't open token when clicking profile / external links
+      if (e.target.closest("a, button")) return;
+      openToken(c.dataset.id, c.dataset.pkg || "");
+    }),
   );
 }
 
@@ -765,11 +843,18 @@ async function refreshPortfolio() {
       })
       .sort((a, b) => (b.valueUgnotApprox || 0) - (a.valueUgnotApprox || 0));
     const totalMeme = rows.reduce((s, h) => s + (h.valueUgnotApprox || 0), 0);
+    await fetchProfile(p.address);
+    const me = state.profileCache[p.address];
     panel.innerHTML = `
       <div class="dash-head">
         <div>
           <h2 style="margin:0">Portfolio</h2>
-          <div class="mono muted" style="font-size:0.85rem;margin-top:0.25rem">${escapeHtml(p.address)}</div>
+          <div style="margin-top:0.35rem">${renderPersonChip(p.address)}</div>
+          ${
+            me?.bio
+              ? `<div class="muted" style="font-size:0.85rem;margin-top:0.35rem">${escapeHtml(me.bio)}</div>`
+              : `<div class="muted" style="font-size:0.8rem;margin-top:0.35rem"><button type="button" class="btn sm" data-nav="profile">${me ? "Edit profile" : "Set on-chain profile"}</button></div>`
+          }
           <div class="muted" style="font-size:0.8rem;margin-top:0.2rem">${p.canSign ? "Signer — can trade from this UI" : "View-only — balances visible, txs disabled"}</div>
         </div>
         <button type="button" class="btn sm" id="pfRefresh">Refresh</button>
@@ -815,6 +900,9 @@ async function refreshPortfolio() {
         }
       </div>`;
     $("#pfRefresh")?.addEventListener("click", refreshPortfolio);
+    $$("[data-nav]", panel).forEach((b) =>
+      b.addEventListener("click", () => showView(b.dataset.nav)),
+    );
     $$("[data-open]", panel).forEach((b) =>
       b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
     );
@@ -841,14 +929,23 @@ async function refreshCreator() {
   try {
     const c = await api(`/api/creator?address=${encodeURIComponent(state.wallet.address)}`);
     state.creator = c;
+    await fetchProfile(c.address);
+    await prefetchProfiles((c.launches || []).map((x) => x.creator).filter(Boolean));
+    const me = state.profileCache[c.address];
     panel.innerHTML = `
       <div class="dash-head">
         <div>
           <h2 style="margin:0">Creator hub</h2>
-          <div class="mono muted" style="font-size:0.85rem;margin-top:0.25rem">${escapeHtml(c.address)}</div>
+          <div style="margin-top:0.35rem">${renderPersonChip(c.address)}</div>
+          ${
+            me?.bio
+              ? `<div class="muted" style="font-size:0.85rem;margin-top:0.35rem">${escapeHtml(me.bio)}</div>`
+              : `<div class="muted" style="font-size:0.8rem;margin-top:0.35rem"><button type="button" class="btn sm" data-nav="profile">${me ? "Edit profile" : "Set on-chain profile"}</button></div>`
+          }
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
           <button type="button" class="btn sm" data-nav="create">+ New coin</button>
+          <button type="button" class="btn sm" data-nav="profile">Profile</button>
           <button type="button" class="btn sm" id="crRefresh">Refresh</button>
         </div>
       </div>
@@ -987,6 +1084,7 @@ async function openToken(id, pkg = "") {
     const m = await api(marketApiPath(id, pkg));
     state.selectedPkg = m.pkg || pkg || "";
     state.tradeMode = m.status === 1 ? "buy" : "buy";
+    if (m.creator) await fetchProfile(m.creator);
     panel.innerHTML = renderToken(m);
     wireToken(m);
     requestAnimationFrame(() => mountTradingViewChart(m));
@@ -1302,7 +1400,7 @@ function renderToken(m) {
         <div class="kv-row"><span>Raised</span><span>${fmtGnot(m.raisedGnot ?? m.raised, { alreadyGnot: m.raisedGnot != null })}</span></div>
         <div class="kv-row"><span>Buyers</span><span>${fmtNum(m.buyers)}</span></div>
         <div class="kv-row"><span>Creator fees</span><span>${fmtGnot(m.creatorFeesGnot ?? m.creatorFees, { alreadyGnot: m.creatorFeesGnot != null })}</span></div>
-        <div class="kv-row"><span>Creator</span><span title="${escapeHtml(m.creator || "")}">${shortAddr(m.creator)}</span></div>
+        <div class="kv-row"><span>Creator</span><span>${renderPersonChip(m.creator)}</span></div>
         ${
           m.gnoswapReady || isPool
             ? `<div class="kv-row"><span>Gnoswap</span><span class="badge graduated">Ready to list</span></div>`
@@ -1698,8 +1796,10 @@ async function refreshProfileView() {
     return;
   }
   if (hint) {
-    hint.innerHTML = `Editing as <span class="mono">${escapeHtml(shortAddr(state.wallet.address))}</span>
-      <div class="muted" style="font-size:0.75rem;margin-top:0.35rem">Realm: <code class="mono">${escapeHtml(profilePkgPath())}</code></div>`;
+    const gw = profileGnowebUrl(state.wallet.address);
+    hint.innerHTML = `Editing as ${renderPersonChip(state.wallet.address, { link: false })}
+      <div class="muted" style="font-size:0.75rem;margin-top:0.35rem">Realm: <code class="mono">${escapeHtml(profilePkgPath())}</code>
+      · <a href="${escapeHtml(gw)}" target="_blank" rel="noreferrer">View on gnoweb</a></div>`;
   }
   try {
     const data = await api(`/api/profile?address=${encodeURIComponent(state.wallet.address)}`);

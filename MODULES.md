@@ -36,6 +36,13 @@ Script: addpkg hub + profile → Init → `SetModule(pad, padv4)` + `SetModule(p
 | Trade/security | Deploy `padv5`, hub `SetModule("pad", newPath)` |
 | Markets on old pad | Keep path; register `legacy_*` on hub — UI aggregates all |
 
+## Profile in UI (Phase 2C)
+
+- Cache `/api/profile?address=` client-side
+- Market cards + token page show creator **name** (if set) + short addr + gnoweb link
+- Portfolio / Creator headers show own profile + CTA to set profile
+- Badge `P` when profile exists
+
 ## Multi-pad markets (Phase 2A)
 
 - `/api/markets` scans hub `pad` + every `legacy*` / `pad*` module key
