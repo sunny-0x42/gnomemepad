@@ -371,7 +371,7 @@ function padPkgPath() {
   return (
     state.pkg ||
     state.walletsMeta?.pkg ||
-    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv4"
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv5"
   );
 }
 
