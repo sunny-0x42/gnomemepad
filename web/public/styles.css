@@ -311,6 +311,39 @@ a.person-chip:hover .person-name {
   padding: 0.1rem 0.35rem;
   text-transform: none;
 }
+.meta-box {
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--bg);
+}
+.meta-img-wrap {
+  margin-bottom: 0.5rem;
+}
+.meta-img {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.meta-desc {
+  margin: 0 0 0.4rem;
+  line-height: 1.45;
+  font-size: 0.88rem;
+  color: #e2e8f0;
+}
+.meta-links {
+  font-size: 0.82rem;
+}
+.meta-links a {
+  color: #a5b4fc;
+}
+.meta-edit summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 .card-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;

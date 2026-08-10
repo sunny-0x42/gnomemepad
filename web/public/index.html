@@ -23,6 +23,7 @@
       <button type="button" class="nav-btn" data-nav="portfolio">Portfolio</button>
       <button type="button" class="nav-btn" data-nav="creator">Creator</button>
       <button type="button" class="nav-btn" data-nav="profile">Profile</button>
+      <button type="button" class="nav-btn" data-nav="rewards">Rewards</button>
       <button type="button" class="nav-btn" data-nav="docs">Guide</button>
     </nav>
     <div class="header-right">
@@ -108,6 +109,32 @@
         </form>
         <pre class="log" id="profileLog" hidden></pre>
         <div id="profilePreview" class="muted" style="margin-top:1rem;font-size:0.85rem"></div>
+      </div>
+    </section>
+
+    <section id="view-rewards" class="view hidden">
+      <div class="panel create-panel" id="rewardsPanel">
+        <h1>Rewards</h1>
+        <p class="lede">Points &amp; referral (separate realm — independent of pad upgrades)</p>
+        <div id="rewardsHint" class="callout"></div>
+        <div class="stat-row" id="rewardsStats" style="margin:0.75rem 0">
+          <div class="stat"><span class="stat-k">Your points</span><span class="stat-v" id="rwPoints">—</span></div>
+          <div class="stat"><span class="stat-k">Referrer bonus</span><span class="stat-v" id="rwRefBonus">—</span></div>
+          <div class="stat"><span class="stat-k">Check-in</span><span class="stat-v" id="rwCheckIn">—</span></div>
+        </div>
+        <div class="form">
+          <label>Set referrer (once)
+            <input id="rwReferrer" class="mono" placeholder="g1…" maxlength="64" />
+          </label>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <button type="button" class="btn primary" id="btnSetReferrer">Save referrer</button>
+            <button type="button" class="btn" id="btnCheckIn">Check in</button>
+            <button type="button" class="btn ghost" id="btnRewardsRefresh">Refresh</button>
+          </div>
+        </div>
+        <pre class="log" id="rewardsLog" hidden></pre>
+        <h3 style="margin:1.25rem 0 0.5rem">Leaderboard</h3>
+        <div id="rewardsLeaderboard" class="muted">Connect wallet or refresh…</div>
       </div>
     </section>
 

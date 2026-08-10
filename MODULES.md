@@ -36,6 +36,19 @@ Script: addpkg hub + profile → Init → `SetModule(pad, padv4)` + `SetModule(p
 | Trade/security | Deploy `padv5`, hub `SetModule("pad", newPath)` |
 | Markets on old pad | Keep path; register `legacy_*` on hub — UI aggregates all |
 
+## Meta + Points (Phase 3A / 3B)
+
+| Module | Path | Role |
+|--------|------|------|
+| **meta** | `…/gnomemepad/meta` | Token description, image, socials (first writer owns) |
+| **points** | `…/gnomemepad/points` | Referral, check-in, leaderboard |
+
+```powershell
+.\scripts\deploy-sapphire-meta-points.ps1
+```
+
+UI: token page **Token info** + **Rewards** nav.
+
 ## Profile in UI (Phase 2C)
 
 - Cache `/api/profile?address=` client-side

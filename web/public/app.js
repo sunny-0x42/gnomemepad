@@ -28,6 +28,8 @@ const state = {
   pkg: DEFAULT_NETWORK.pkg || null,
   hub: null,
   profilePkg: null,
+  metaPkg: null,
+  pointsPkg: null,
   modules: {},
   chainId: DEFAULT_NETWORK.chainId,
   rpcUrl: DEFAULT_NETWORK.rpcUrl,
@@ -59,6 +61,22 @@ function profilePkgPath() {
     state.profilePkg ||
     state.modules?.profile ||
     "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
+  );
+}
+
+function metaPkgPath() {
+  return (
+    state.metaPkg ||
+    state.modules?.meta ||
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/meta"
+  );
+}
+
+function pointsPkgPath() {
+  return (
+    state.pointsPkg ||
+    state.modules?.points ||
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/points"
   );
 }
 
@@ -577,6 +595,8 @@ async function refreshHealth() {
     if (h.pkg) state.pkg = h.pkg;
     if (h.hub) state.hub = h.hub;
     if (h.profile) state.profilePkg = h.profile;
+    if (h.meta) state.metaPkg = h.meta;
+    if (h.points) state.pointsPkg = h.points;
     if (h.modules) state.modules = h.modules;
     if (h.chainId) state.chainId = h.chainId;
     if (h.rpc) state.rpcUrl = h.rpc;
@@ -708,6 +728,7 @@ function showView(name) {
     portfolio: "view-portfolio",
     creator: "view-creator",
     profile: "view-profile",
+    rewards: "view-rewards",
     docs: "view-docs",
   };
   $(`#${map[name] || "view-home"}`)?.classList.remove("hidden");
@@ -720,6 +741,7 @@ function showView(name) {
   if (name === "portfolio") refreshPortfolio();
   if (name === "creator") refreshCreator();
   if (name === "profile") refreshProfileView();
+  if (name === "rewards") refreshRewardsView();
   if (name === "create") updateCreateHint();
   if (name === "docs") {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1408,6 +1430,22 @@ function renderToken(m) {
         }
       </div>
       ${renderContractBox(m)}
+      <div id="tokenMetaBox" class="meta-box" data-pkg="${escapeHtml(m.pkg || "")}" data-id="${escapeHtml(m.id || "")}">
+        <div class="contract-box-title" style="font-weight:650;font-size:0.9rem;margin-bottom:0.35rem">Token info</div>
+        <div id="tokenMetaView" class="muted" style="font-size:0.85rem">Loading metadata…</div>
+        <details id="tokenMetaEdit" class="meta-edit" style="margin-top:0.65rem">
+          <summary>Edit metadata (first writer owns)</summary>
+          <form id="metaForm" class="form" style="margin-top:0.5rem">
+            <label>Description<textarea name="description" maxlength="500" rows="2" placeholder="About this coin"></textarea></label>
+            <label>Image URI<input name="imageURI" placeholder="https://… or ipfs://" /></label>
+            <label>Website<input name="website" placeholder="https://" /></label>
+            <label>Twitter / X<input name="twitter" placeholder="handle" maxlength="64" /></label>
+            <label>Telegram<input name="telegram" placeholder="handle or t.me/…" maxlength="64" /></label>
+            <button type="submit" class="btn sm primary">Save metadata</button>
+          </form>
+          <pre class="log" id="metaLog" hidden></pre>
+        </details>
+      </div>
       ${
         m.gnoswapReady || isPool
           ? `<div class="callout ok" style="margin-top:0.75rem">
@@ -1551,6 +1589,40 @@ function wireToken(m) {
   };
   const marketPkg = m.pkg || state.selectedPkg || pkgPath();
   refreshTradeBalances(m.id, marketPkg);
+  loadTokenMeta(marketPkg, m.id);
+  $("#metaForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!requireSigner("save metadata")) return;
+    const fd = new FormData(e.target);
+    const log = $("#metaLog");
+    if (log) {
+      log.hidden = false;
+      log.textContent = "Approve in Adena…";
+    }
+    try {
+      const r = await broadcastPkg(
+        metaPkgPath(),
+        "SetMeta",
+        [
+          marketPkg,
+          m.id,
+          String(fd.get("description") || ""),
+          String(fd.get("imageURI") || ""),
+          String(fd.get("website") || ""),
+          String(fd.get("twitter") || ""),
+          String(fd.get("telegram") || ""),
+        ],
+        "",
+      );
+      if (log) log.textContent = r.hash ? `Submitted\n${r.hash}` : "Submitted";
+      toast("Metadata saved");
+      await new Promise((res) => setTimeout(res, 1500));
+      loadTokenMeta(marketPkg, m.id);
+    } catch (err) {
+      if (log) log.textContent = String(err.message || err);
+      toast(String(err.message || err), false);
+    }
+  });
 
   let slipPct = loadSlippagePct();
   const slipCustom = $("#slipCustom");
@@ -1786,6 +1858,114 @@ function wireToken(m) {
   });
 }
 
+function renderMetaHtml(meta) {
+  if (!meta) {
+    return `<div class="muted">No metadata yet — open <em>Edit metadata</em> to add description &amp; links.</div>`;
+  }
+  const links = [];
+  if (meta.website) {
+    links.push(
+      `<a href="${escapeHtml(meta.website)}" target="_blank" rel="noreferrer">Website</a>`,
+    );
+  }
+  if (meta.twitter) {
+    const tw = meta.twitter.replace(/^@/, "");
+    const href = meta.twitter.startsWith("http")
+      ? meta.twitter
+      : `https://x.com/${encodeURIComponent(tw)}`;
+    links.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">X/@${escapeHtml(tw)}</a>`);
+  }
+  if (meta.telegram) {
+    const tg = meta.telegram.replace(/^@/, "");
+    const href = meta.telegram.startsWith("http")
+      ? meta.telegram
+      : `https://t.me/${encodeURIComponent(tg)}`;
+    links.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">Telegram</a>`);
+  }
+  return `
+    ${meta.imageURI ? `<div class="meta-img-wrap"><img class="meta-img" src="${escapeHtml(meta.imageURI)}" alt="" loading="lazy" referrerpolicy="no-referrer" /></div>` : ""}
+    ${meta.description ? `<p class="meta-desc">${escapeHtml(meta.description)}</p>` : `<p class="muted">No description</p>`}
+    ${links.length ? `<div class="meta-links">${links.join(" · ")}</div>` : ""}
+    <div class="muted mono" style="font-size:0.7rem;margin-top:0.35rem">owner ${escapeHtml(shortAddr(meta.owner))} · h${escapeHtml(String(meta.updated || "—"))}</div>`;
+}
+
+async function loadTokenMeta(pkg, id) {
+  const view = $("#tokenMetaView");
+  const form = $("#metaForm");
+  if (!view) return;
+  try {
+    const data = await api(
+      `/api/meta?pkg=${encodeURIComponent(pkg)}&id=${encodeURIComponent(id)}`,
+    );
+    const meta = data.meta;
+    view.innerHTML = renderMetaHtml(meta);
+    if (meta && form) {
+      if (form.description) form.description.value = meta.description || "";
+      if (form.imageURI) form.imageURI.value = meta.imageURI || "";
+      if (form.website) form.website.value = meta.website || "";
+      if (form.twitter) form.twitter.value = meta.twitter || "";
+      if (form.telegram) form.telegram.value = meta.telegram || "";
+    }
+  } catch (e) {
+    view.innerHTML = `<div class="muted">Metadata unavailable (deploy meta realm?). ${escapeHtml(e.message || e)}</div>`;
+  }
+}
+
+async function refreshRewardsView() {
+  const hint = $("#rewardsHint");
+  const lb = $("#rewardsLeaderboard");
+  const log = $("#rewardsLog");
+  try {
+    const addr = state.wallet?.address || "";
+    const q = addr ? `?address=${encodeURIComponent(addr)}` : "";
+    const data = await api(`/api/points${q}`);
+    if (data.error && !data.leaderboard?.length) {
+      if (hint) {
+        hint.innerHTML = `Points realm not ready — deploy with <code>deploy-sapphire-meta-points.ps1</code>. <span class="muted">${escapeHtml(data.error)}</span>`;
+      }
+      if (lb) lb.textContent = "—";
+      return;
+    }
+    const p = data.params || {};
+    $("#rwPoints").textContent = addr ? fmtNum(data.points || 0) : "—";
+    $("#rwRefBonus").textContent = `+${p.referrerBonus ?? 50}`;
+    $("#rwCheckIn").textContent = `+${p.checkIn ?? 5}`;
+    if (hint) {
+      if (!isConnected()) {
+        hint.innerHTML = `Connect <strong>Adena</strong> to set a referrer and check in. Realm: <code class="mono">${escapeHtml(pointsPkgPath())}</code>`;
+      } else {
+        const ref = data.referrer
+          ? `Referrer: ${renderPersonChip(data.referrer)}`
+          : "No referrer set yet (once only).";
+        hint.innerHTML = `Signed in as ${renderPersonChip(addr, { link: false })} · ${ref}
+          <div class="muted" style="font-size:0.75rem;margin-top:0.35rem">Check-in every ~${escapeHtml(String(p.checkInInterval || 100))} heights · <code class="mono">${escapeHtml(pointsPkgPath())}</code></div>`;
+      }
+    }
+    const rows = data.leaderboard || [];
+    if (lb) {
+      if (!rows.length) {
+        lb.innerHTML = `<div class="muted">No scores yet — be first to check in.</div>`;
+      } else {
+        await prefetchProfiles(rows.map((r) => r.address));
+        lb.innerHTML = `<table class="trade-table"><thead><tr><th>#</th><th>User</th><th>Points</th></tr></thead><tbody>
+          ${rows
+            .map(
+              (r, i) => `<tr>
+              <td class="mono">${i + 1}</td>
+              <td>${renderPersonChip(r.address)}</td>
+              <td class="mono">${fmtNum(r.points)}</td>
+            </tr>`,
+            )
+            .join("")}
+        </tbody></table>`;
+      }
+    }
+    if (log) log.hidden = true;
+  } catch (e) {
+    if (hint) hint.textContent = String(e.message || e);
+  }
+}
+
 async function refreshProfileView() {
   const hint = $("#profileWalletHint");
   const prev = $("#profilePreview");
@@ -1828,8 +2008,51 @@ function wireGlobal() {
   $$("[data-nav]").forEach((el) => {
     el.addEventListener("click", () => {
       const v = el.dataset.nav;
-      if (["home", "create", "portfolio", "creator", "profile", "docs"].includes(v)) showView(v);
+      if (["home", "create", "portfolio", "creator", "profile", "rewards", "docs"].includes(v))
+        showView(v);
     });
+  });
+  $("#btnRewardsRefresh")?.addEventListener("click", () => refreshRewardsView());
+  $("#btnSetReferrer")?.addEventListener("click", async () => {
+    if (!requireSigner("set referrer")) return;
+    const ref = ($("#rwReferrer")?.value || "").trim();
+    if (!/^g1[a-z0-9]{38,}$/i.test(ref)) {
+      toast("Invalid referrer g1 address", false);
+      return;
+    }
+    const log = $("#rewardsLog");
+    if (log) {
+      log.hidden = false;
+      log.textContent = "Approve SetReferrer…";
+    }
+    try {
+      const r = await broadcastPkg(pointsPkgPath(), "SetReferrer", [ref], "");
+      if (log) log.textContent = r.hash ? `OK\n${r.hash}` : "OK";
+      toast("Referrer set");
+      await new Promise((res) => setTimeout(res, 1500));
+      refreshRewardsView();
+    } catch (e) {
+      if (log) log.textContent = String(e.message || e);
+      toast(String(e.message || e), false);
+    }
+  });
+  $("#btnCheckIn")?.addEventListener("click", async () => {
+    if (!requireSigner("check in")) return;
+    const log = $("#rewardsLog");
+    if (log) {
+      log.hidden = false;
+      log.textContent = "Approve CheckIn…";
+    }
+    try {
+      const r = await broadcastPkg(pointsPkgPath(), "CheckIn", [], "");
+      if (log) log.textContent = r.hash ? `OK\n${r.hash}` : "OK";
+      toast("Check-in submitted");
+      await new Promise((res) => setTimeout(res, 1500));
+      refreshRewardsView();
+    } catch (e) {
+      if (log) log.textContent = String(e.message || e);
+      toast(String(e.message || e), false);
+    }
   });
   $("#btnRefresh")?.addEventListener("click", () => {
     refreshHealth();
