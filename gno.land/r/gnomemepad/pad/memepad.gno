@@ -47,6 +47,7 @@ type Trade struct {
 }
 
 // Launch is one meme market: curve phase then locked pool phase.
+// token/ledger are unexported so external packages cannot Mint/Burn via field access.
 type Launch struct {
 	ID      string
 	Name    string
@@ -56,9 +57,9 @@ type Launch struct {
 	Status  int
 	Created int64 // block height
 
-	// GRC20 (mint/burn via pad; transferable off-pad after buy)
-	Token   *grc20.Token
-	Ledger  *grc20.PrivateLedger
+	// GRC20 (mint/burn only via pad-owned private ledger)
+	token   *grc20.Token
+	ledger  *grc20.PrivateLedger
 	TokenID string // Token.ID() — registry / Gnoswap identity
 
 	// Virtual curve reserves
@@ -75,8 +76,10 @@ type Launch struct {
 	CreatorFees  int64
 	BondUgnot    int64
 	BondRefunded bool
-	UniqueBuyers avl.Tree
+	UniqueBuyers avl.Tree // address -> true
 	BuyerCount   int
+	// snipeBought: address -> cumulative tokens bought during anti-snipe window
+	snipeBought avl.Tree
 
 	// Gnoswap listing readiness (GRC20 exists from Create; pool on Gnoswap is external)
 	GnoswapReady bool // true after graduate — token may be paired on Gnoswap
@@ -116,29 +119,63 @@ func mustLaunch(id string) *Launch {
 }
 
 func balOf(l *Launch, addr address) int64 {
-	if l == nil || l.Token == nil {
+	if l == nil || l.token == nil {
 		return 0
 	}
-	return l.Token.BalanceOf(addr)
+	return l.token.BalanceOf(addr)
 }
 
 // addBal mints (delta>0) or burns (delta<0) GRC20 via pad-owned PrivateLedger.
 func addBal(l *Launch, addr address, delta int64) {
-	if l == nil || l.Ledger == nil {
+	if l == nil || l.ledger == nil {
 		panic("pad: missing GRC20 ledger")
 	}
 	if delta == 0 {
 		return
 	}
 	if delta > 0 {
-		if err := l.Ledger.Mint(addr, delta); err != nil {
+		if err := l.ledger.Mint(addr, delta); err != nil {
 			panic("pad: mint: " + err.Error())
 		}
 		return
 	}
-	if err := l.Ledger.Burn(addr, -delta); err != nil {
+	if err := l.ledger.Burn(addr, -delta); err != nil {
 		panic("pad: burn: " + err.Error())
 	}
+}
+
+func requireMinOut(got, minOut int64, what string) {
+	if minOut < 0 {
+		panic("pad: minOut must be non-negative")
+	}
+	if minOut > 0 && got < minOut {
+		panic("pad: " + what + " below minOut (slippage)")
+	}
+}
+
+func snipeBoughtOf(l *Launch, buyer address) int64 {
+	v := l.snipeBought.Get(buyer.String())
+	if v == nil {
+		return 0
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return 0
+	}
+	return n
+}
+
+func checkAndAddSnipe(l *Launch, buyer address, tokensOut int64) {
+	height := runtime.ChainHeight()
+	if height-l.Created >= AntiSnipeHeights {
+		return
+	}
+	maxTok := TotalSupply * AntiSnipeMaxBuyBPS / 10000
+	prev := snipeBoughtOf(l, buyer)
+	if prev+tokensOut > maxTok {
+		panic("pad: anti-snipe cumulative max buy exceeded")
+	}
+	l.snipeBought.Set(buyer.String(), prev+tokensOut)
 }
 
 func sendUgnot(cur realm, to address, amount int64) {
@@ -225,6 +262,10 @@ func maybeRefundBond(cur realm, l *Launch) {
 	if l.BuyerCount < BondRefundBuyers {
 		return
 	}
+	// Quality gate: pure sybil micro-buys cannot refund bond.
+	if l.RaisedUgnot < BondRefundMinRaised {
+		return
+	}
 	if runtime.ChainHeight()-l.Created > BondRefundMaxHeights {
 		return
 	}
@@ -281,12 +322,13 @@ func Create(cur realm, name, symbol, uri string) string {
 		Creator:      creator,
 		Status:       StatusCurve,
 		Created:      runtime.ChainHeight(),
-		Token:        token,
-		Ledger:       ledger,
+		token:        token,
+		ledger:       ledger,
 		TokenID:      token.ID(),
 		VirtualUgnot: VirtualUgnot0,
 		VirtualToken: VirtualToken0,
 		UniqueBuyers: avl.Tree{},
+		snipeBought:  avl.Tree{},
 		BondUgnot:    CreateBondUgnot,
 		Trades:       avl.Tree{},
 	}
@@ -331,8 +373,9 @@ func adenaKeyFromTokenID(tokenID, symbol string) string {
 }
 
 // Buy spends -send ugnot on the bonding curve; credits tokens to the caller.
-// Auto-graduates when RaisedUgnot >= GraduationThreshold.
-func Buy(cur realm, id string) int64 {
+// minTokensOut: slippage floor (0 = disabled). Auto-graduates at threshold.
+// Oversized buys that would exceed remaining curve supply panic (no silent dust).
+func Buy(cur realm, id string, minTokensOut int64) int64 {
 	requireInit()
 	sent := requireUserPayment(cur)
 	l := mustLaunch(id)
@@ -340,7 +383,6 @@ func Buy(cur realm, id string) int64 {
 		panic("pad: not on curve (use SwapBuy)")
 	}
 	buyer := cur.Previous().Address()
-	height := runtime.ChainHeight()
 
 	remaining := CurveSupply - l.RealSold
 	if remaining <= 0 {
@@ -352,33 +394,12 @@ func Buy(cur realm, id string) int64 {
 	netIn := fee.Net + fee.Remainder
 
 	tokensOut, newVU, newVT := ammmath.BuyTokens(l.VirtualUgnot, l.VirtualToken, netIn)
-	// Cap at remaining curve float (large buys can outrun CurveSupply on virtual CPMM).
+	// Hard fail instead of partial fill + dust (audit Y2).
 	if tokensOut > remaining {
-		lo, hi := int64(1), netIn
-		bestTok, bestVU, bestVT, bestNet := int64(0), l.VirtualUgnot, l.VirtualToken, int64(0)
-		for lo <= hi {
-			mid := (lo + hi) / 2
-			tok, vu, vt := ammmath.BuyTokens(l.VirtualUgnot, l.VirtualToken, mid)
-			if tok <= remaining {
-				bestTok, bestVU, bestVT, bestNet = tok, vu, vt, mid
-				lo = mid + 1
-			} else {
-				hi = mid - 1
-			}
-		}
-		if bestTok <= 0 {
-			panic("pad: buy too large for remaining curve supply")
-		}
-		tokensOut, newVU, newVT, netIn = bestTok, bestVU, bestVT, bestNet
-		// MVP: full `sent` still paid; excess stays in realm as protocol dust.
-		_ = sent
+		panic("pad: buy exceeds remaining curve supply — reduce amount")
 	}
-	if height-l.Created < AntiSnipeHeights {
-		maxTok := TotalSupply * AntiSnipeMaxBuyBPS / 10000
-		if tokensOut > maxTok {
-			panic("pad: anti-snipe max buy exceeded")
-		}
-	}
+	requireMinOut(tokensOut, minTokensOut, "tokens out")
+	checkAndAddSnipe(l, buyer, tokensOut)
 
 	// Mutate only after all checks pass.
 	l.CreatorFees += fee.Creator
@@ -386,11 +407,7 @@ func Buy(cur realm, id string) int64 {
 	l.VirtualUgnot = newVU
 	l.VirtualToken = newVT
 	l.RealSold += tokensOut
-	raisedAdd := netIn
-	if raisedAdd > fee.Net+fee.Remainder {
-		raisedAdd = fee.Net + fee.Remainder
-	}
-	l.RaisedUgnot += raisedAdd
+	l.RaisedUgnot += netIn
 
 	addBal(l, buyer, tokensOut)
 	noteBuyer(l, buyer)
@@ -413,7 +430,8 @@ func Buy(cur realm, id string) int64 {
 }
 
 // Sell burns curve tokens and pays ugnot (fee on output).
-func Sell(cur realm, id string, tokensIn int64) int64 {
+// minUgnotOut: slippage floor (0 = disabled).
+func Sell(cur realm, id string, tokensIn, minUgnotOut int64) int64 {
 	requireInit()
 	if !cur.Previous().IsUserCall() {
 		panic("pad: must be EOA MsgCall")
@@ -432,6 +450,7 @@ func Sell(cur realm, id string, tokensIn int64) int64 {
 
 	gross, newVU, newVT := ammmath.SellTokens(l.VirtualUgnot, l.VirtualToken, tokensIn)
 	fee := ammmath.ApplyFeeOnOutput(gross, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
+	requireMinOut(fee.Net, minUgnotOut, "ugnot out")
 
 	// Full gross left virtual reserves; retain fee in virtual ugnot (cash stays in realm).
 	l.VirtualUgnot = newVU + fee.Fee
@@ -448,8 +467,6 @@ func Sell(cur realm, id string, tokensIn int64) int64 {
 	} else {
 		l.RaisedUgnot = 0
 	}
-	// remainder stays inside Raised/virtual (already in fee.Fee re-add portion for remainder+vaults)
-	// Raised should still include remainder: payOut excludes remainder ✓
 	l.CreatorFees += fee.Creator
 	protocolFees += fee.Protocol
 
@@ -536,16 +553,18 @@ func TokenIDOf(id string) string {
 }
 
 // GRC20Bank returns the underlying *grc20.Token for interop (metadata / external DEX).
+// Does not expose PrivateLedger — mint/burn stay pad-only.
 func GRC20Bank(id string) *grc20.Token {
 	l := mustLaunch(id)
-	if l.Token == nil {
+	if l.token == nil {
 		panic("pad: no token")
 	}
-	return l.Token
+	return l.token
 }
 
 // SwapBuy buys tokens from the graduated pool with -send ugnot.
-func SwapBuy(cur realm, id string) int64 {
+// minTokensOut: slippage floor (0 = disabled).
+func SwapBuy(cur realm, id string, minTokensOut int64) int64 {
 	requireInit()
 	sent := requireUserPayment(cur)
 	l := mustLaunch(id)
@@ -555,12 +574,13 @@ func SwapBuy(cur realm, id string) int64 {
 	buyer := cur.Previous().Address()
 
 	fee := ammmath.ApplyFee(sent, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
-	l.CreatorFees += fee.Creator
-	protocolFees += fee.Protocol
-
 	tokensOut, newPU, newPT := ammmath.PoolSwapUgnotForToken(
 		l.PoolUgnot, l.PoolToken, fee.Net, fee.Remainder,
 	)
+	requireMinOut(tokensOut, minTokensOut, "tokens out")
+
+	l.CreatorFees += fee.Creator
+	protocolFees += fee.Protocol
 	l.PoolUgnot = newPU
 	l.PoolToken = newPT
 	addBal(l, buyer, tokensOut)
@@ -577,7 +597,8 @@ func SwapBuy(cur realm, id string) int64 {
 }
 
 // SwapSell sells tokens into the graduated pool for ugnot.
-func SwapSell(cur realm, id string, tokensIn int64) int64 {
+// minUgnotOut: slippage floor (0 = disabled).
+func SwapSell(cur realm, id string, tokensIn, minUgnotOut int64) int64 {
 	requireInit()
 	if !cur.Previous().IsUserCall() {
 		panic("pad: must be EOA MsgCall")
@@ -596,6 +617,7 @@ func SwapSell(cur realm, id string, tokensIn int64) int64 {
 
 	gross, newPU, newPT := ammmath.PoolSwapTokenForUgnot(l.PoolUgnot, l.PoolToken, tokensIn)
 	fee := ammmath.ApplyFeeOnOutput(gross, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
+	requireMinOut(fee.Net, minUgnotOut, "ugnot out")
 
 	// Retain fee in pool ugnot (cash stays); user gets net.
 	l.PoolUgnot = newPU + fee.Fee
@@ -633,11 +655,10 @@ func Transfer(cur realm, id string, to address, amount int64) {
 	if from == to {
 		panic("pad: self transfer")
 	}
-	if l.Ledger == nil {
+	if l.ledger == nil {
 		panic("pad: no GRC20 ledger")
 	}
-	// Proper GRC20 transfer (not mint/burn).
-	if err := l.Ledger.Transfer(from, to, amount); err != nil {
+	if err := l.ledger.Transfer(from, to, amount); err != nil {
 		panic("pad: transfer: " + err.Error())
 	}
 	chain.Emit("Transfer", "id", id, "from", from.String(), "to", to.String(),
@@ -654,15 +675,43 @@ func Approve(cur realm, id string, spender address, amount int64) {
 		panic("pad: invalid spender")
 	}
 	l := mustLaunch(id)
-	if l.Ledger == nil {
+	if l.ledger == nil {
 		panic("pad: no GRC20 ledger")
 	}
 	owner := cur.Previous().Address()
-	if err := l.Ledger.Approve(owner, spender, amount); err != nil {
+	if err := l.ledger.Approve(owner, spender, amount); err != nil {
 		panic("pad: approve: " + err.Error())
 	}
 	chain.Emit("Approval", "id", id, "owner", owner.String(), "spender", spender.String(),
 		"amount", strconv.FormatInt(amount, 10))
+}
+
+// TransferFrom spends allowance: spender = MsgCall EOA caller.
+// Enables DEX / routers that hold allowance from Approve.
+func TransferFrom(cur realm, id string, from, to address, amount int64) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	if amount <= 0 {
+		panic("pad: amount must be positive")
+	}
+	if !from.IsValid() || !to.IsValid() {
+		panic("pad: invalid address")
+	}
+	if from == to {
+		panic("pad: self transfer")
+	}
+	l := mustLaunch(id)
+	if l.ledger == nil {
+		panic("pad: no GRC20 ledger")
+	}
+	spender := cur.Previous().Address()
+	if err := l.ledger.TransferFrom(from, spender, to, amount); err != nil {
+		panic("pad: transferFrom: " + err.Error())
+	}
+	chain.Emit("TransferFrom", "id", id, "from", from.String(), "to", to.String(),
+		"spender", spender.String(), "amount", strconv.FormatInt(amount, 10))
 }
 
 // ClaimCreatorFees withdraws accrued creator fees for a launch.
@@ -704,6 +753,31 @@ func ClaimProtocolFees(cur realm) int64 {
 	sendUgnot(cur, caller, amt)
 	chain.Emit("ClaimProtocol", "amount", strconv.FormatInt(amt, 10))
 	return amt
+}
+
+// TransferProtocol rotates the protocol fee recipient (current protocol only).
+func TransferProtocol(cur realm, newAddr address) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	if cur.Previous().Address() != protocolAddr {
+		panic("pad: not protocol")
+	}
+	if !newAddr.IsValid() {
+		panic("pad: invalid new protocol address")
+	}
+	if newAddr == protocolAddr {
+		panic("pad: same protocol address")
+	}
+	old := protocolAddr
+	protocolAddr = newAddr
+	chain.Emit("TransferProtocol", "from", old.String(), "to", newAddr.String())
+}
+
+// ProtocolAddress returns the current protocol treasury address.
+func ProtocolAddress() string {
+	return protocolAddr.String()
 }
 
 // --- read helpers (non-crossing) ---

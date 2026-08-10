@@ -31,7 +31,7 @@ func TestInitAndCreateBuy(cur realm, t *testing.T) {
 	buyer := address("g1u7y667z64x2h7vc6fmpcprgey4ck233jaww9zq")
 	testing.SetRealm(testing.NewUserRealm(buyer))
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 100000}})
-	tok := Buy(cross(cur), id)
+	tok := Buy(cross(cur), id, 0)
 	if tok <= 0 {
 		t.Fatalf("tokens=%d", tok)
 	}
@@ -60,12 +60,12 @@ func TestSellCurve(cur realm, t *testing.T) {
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 500000}})
 	// Test env: ensure realm has ugnot to pay sells (OriginSend may not fund banker balance).
 	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 2000000}})
-	tok := Buy(cross(cur), id)
+	tok := Buy(cross(cur), id, 0)
 	half := tok / 2
 	if half <= 0 {
 		t.Fatal("half")
 	}
-	ug := Sell(cross(cur), id, half)
+	ug := Sell(cross(cur), id, half, 0)
 	if ug <= 0 {
 		t.Fatalf("ugnot out=%d", ug)
 	}
@@ -96,7 +96,7 @@ func TestGraduateAndSwap(cur realm, t *testing.T) {
 			break
 		}
 		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10000000}}) // 10 GNOT each
-		Buy(cross(cur), id)
+		Buy(cross(cur), id, 0)
 	}
 	if GetStatus(id) != StatusGraduated {
 		t.Fatalf("status=%d raised=%d", GetStatus(id), GetRaised(id))
@@ -107,7 +107,7 @@ func TestGraduateAndSwap(cur realm, t *testing.T) {
 	}
 
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 1000000}})
-	t2 := SwapBuy(cross(cur), id)
+	t2 := SwapBuy(cross(cur), id, 0)
 	if t2 <= 0 {
 		t.Fatal("swap buy")
 	}
@@ -116,7 +116,7 @@ func TestGraduateAndSwap(cur realm, t *testing.T) {
 	if sellAmt <= 0 {
 		sellAmt = 1
 	}
-	u2 := SwapSell(cross(cur), id, sellAmt)
+	u2 := SwapSell(cross(cur), id, sellAmt, 0)
 	if u2 <= 0 {
 		t.Fatalf("swap sell %d", u2)
 	}
@@ -138,7 +138,7 @@ func TestClaimCreator(cur realm, t *testing.T) {
 	testing.SetRealm(testing.NewUserRealm(buyer))
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 1000000}})
 	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 2000000}})
-	Buy(cross(cur), id)
+	Buy(cross(cur), id, 0)
 
 	if GetCreatorFees(id) <= 0 {
 		t.Fatal("expected creator fees")
@@ -204,14 +204,50 @@ func TestTradeHistoryChart(cur realm, t *testing.T) {
 	buyer := address("g1u7y667z64x2h7vc6fmpcprgey4ck233jaww9zq")
 	testing.SetRealm(testing.NewUserRealm(buyer))
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 300000}})
-	Buy(cross(cur), id)
+	Buy(cross(cur), id, 0)
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 400000}})
-	Buy(cross(cur), id)
+	Buy(cross(cur), id, 0)
 	if TradeCount(id) < 3 {
 		t.Fatalf("trade count=%d want >=3", TradeCount(id))
 	}
 	hist := TradeHistory(id)
 	if hist == "" {
 		t.Fatal("empty history")
+	}
+}
+
+func TestSlippageMinOutOk(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := Create(cross(cur), "Slip", "SLP", "")
+	testing.SkipHeights(21)
+
+	buyer := address("g1u7y667z64x2h7vc6fmpcprgey4ck233jaww9zq")
+	testing.SetRealm(testing.NewUserRealm(buyer))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 100000}})
+	// minTokensOut=1 should pass for a normal small buy
+	tok := Buy(cross(cur), id, 1)
+	if tok < 1 {
+		t.Fatalf("tokens=%d", tok)
+	}
+}
+
+func TestTransferProtocol(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	if ProtocolAddress() != admin.String() {
+		t.Fatal("protocol addr")
+	}
+	newP := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	TransferProtocol(cross(cur), newP)
+	if ProtocolAddress() != newP.String() {
+		t.Fatal("not rotated")
 	}
 }

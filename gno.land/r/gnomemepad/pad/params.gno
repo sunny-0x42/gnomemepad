@@ -23,14 +23,16 @@ const (
 	CreatorFeeShareBPS int64 = 4000
 	ProtocolFeeShareBPS int64 = 4000
 
-	// Anti-spam create bond (1 GNOT). Refunded if min unique buyers hit before expire.
+	// Anti-spam create bond (1 GNOT). Refunded only if quality thresholds met before expire.
 	CreateBondUgnot      int64 = 1_000_000
 	BondRefundBuyers     int   = 5
-	BondRefundMaxHeights int64 = 100_000 // ~ loosely long window; chain-dependent
+	BondRefundMinRaised  int64 = 5_000_000 // ≥5 GNOT raised (blocks pure sybil micro-buys)
+	BondRefundMaxHeights int64 = 100_000   // ~ loosely long window; chain-dependent
 
-	// Anti-snipe: first N heights after create, max buy as % of total supply (BPS of TotalSupply).
+	// Anti-snipe: first N heights after create, max cumulative tokens per address
+	// (BPS of TotalSupply). Multi-tx from same wallet still capped.
 	AntiSnipeHeights   int64 = 20
-	AntiSnipeMaxBuyBPS int64 = 500 // 5% of total supply per tx in first windows
+	AntiSnipeMaxBuyBPS int64 = 500 // 5% of total supply per address in window
 
 	// Status
 	StatusCurve     = 0

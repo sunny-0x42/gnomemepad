@@ -17,7 +17,7 @@
   NODE_VERSION = "20"
   RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
   CHAIN_ID = "sapphire-1"
-  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv3"
+  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv4"
   SIGNER_ADDR = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr"
   # Expose to functions (Netlify prefixes)
   # Already available as process.env.* in functions when set here

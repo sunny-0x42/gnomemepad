@@ -254,7 +254,7 @@ function padPkgPath() {
   return (
     state.pkg ||
     state.walletsMeta?.pkg ||
-    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv3"
+    "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv4"
   );
 }
 
@@ -1257,7 +1257,8 @@ function wireToken(m) {
     log(`Broadcasting buy ${amountGnot} GNOT…`);
     try {
       const func = m.status === 1 ? "SwapBuy" : "Buy";
-      const r = await broadcastRealm(func, [m.id], `${amountUgnot}ugnot`);
+      // minTokensOut=0 disables on-chain slippage check (quote+UI later)
+      const r = await broadcastRealm(func, [m.id, "0"], `${amountUgnot}ugnot`);
       const got = r.result || "?";
       log(`OK height ${r.height}\nhash ${r.hash}\n+${got} tokens`);
       toast("Buy submitted");
@@ -1311,7 +1312,8 @@ function wireToken(m) {
     log(`Broadcasting sell ${fmtNum(tokens)} tokens…`);
     try {
       const func = m.status === 1 ? "SwapSell" : "Sell";
-      const r = await broadcastRealm(func, [m.id, String(tokens)], "");
+      // minUgnotOut=0 disables on-chain slippage check
+      const r = await broadcastRealm(func, [m.id, String(tokens), "0"], "");
       log(`OK height ${r.height}\nhash ${r.hash}\nout ${r.result != null ? fmtGnot(r.result) : "see tx"}`);
       toast("Sell submitted");
       await refreshTradeBalances(m.id);

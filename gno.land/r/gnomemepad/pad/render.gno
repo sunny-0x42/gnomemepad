@@ -150,10 +150,11 @@ func renderHelp() string {
 	out += "## Lifecycle\n\n"
 	out += "1. Init() — once; caller becomes protocol treasury\n"
 	out += "2. Create(name, symbol, uri) + CreateBondUgnot — fair launch\n"
-	out += "3. Buy(id) / Sell(id, amount) — bonding curve\n"
+	out += "3. Buy(id, minTokensOut) / Sell(id, amount, minUgnotOut) — bonding curve\n"
 	out += "4. Auto or Graduate(id) at threshold\n"
-	out += "5. SwapBuy(id) / SwapSell(id, amount) — locked CPMM\n"
-	out += "6. ClaimCreatorFees(id) / ClaimProtocolFees()\n\n"
+	out += "5. SwapBuy(id, minTokensOut) / SwapSell(id, amount, minUgnotOut) — locked CPMM\n"
+	out += "6. Transfer / Approve / TransferFrom — GRC20\n"
+	out += "7. ClaimCreatorFees(id) / ClaimProtocolFees() / TransferProtocol(newAddr)\n\n"
 	out += "## Params (MVP)\n\n"
 	out += ufmt.Sprintf("- Total supply: %d\n", TotalSupply)
 	out += ufmt.Sprintf("- Curve sale: %d\n", CurveSupply)
