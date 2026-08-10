@@ -514,6 +514,81 @@ main {
   font-size: 0.72rem;
 }
 
+.slip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin-bottom: 0.85rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.8rem;
+}
+.slip-label {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.slip-quick {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.slip-quick button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.slip-quick button.active,
+.slip-quick button:hover {
+  border-color: var(--accent, #8b5cf6);
+  color: #e9d5ff;
+  background: var(--accent-soft, rgba(139, 92, 246, 0.12));
+}
+.slip-custom {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  color: var(--muted);
+}
+.slip-custom input {
+  width: 3.5rem;
+  padding: 0.25rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  font-size: 0.8rem;
+}
+.quote-box {
+  margin: 0.65rem 0 0.85rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+.quote-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.quote-row.muted {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .trade-tabs {
   display: flex;
   gap: 0.3rem;

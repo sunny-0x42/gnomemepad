@@ -290,6 +290,157 @@ function padPkgPath() {
   );
 }
 
+/** Default fee split matches pad params (padv4). */
+const FEE_CREATOR_SHARE_BPS = 4000;
+const FEE_PROTOCOL_SHARE_BPS = 4000;
+const LS_SLIPPAGE = "gnomemepad.slippage.v1";
+
+function loadSlippagePct() {
+  try {
+    const v = Number(localStorage.getItem(LS_SLIPPAGE));
+    if (Number.isFinite(v) && v >= 0 && v <= 50) return v;
+  } catch {
+    /* ignore */
+  }
+  return 1; // 1%
+}
+
+function saveSlippagePct(pct) {
+  try {
+    localStorage.setItem(LS_SLIPPAGE, String(pct));
+  } catch {
+    /* ignore */
+  }
+}
+
+function feeBpsOf(m) {
+  const p = m?.params || state.params;
+  const b = Number(p?.feeBps);
+  return Number.isFinite(b) && b >= 0 ? b : 120;
+}
+
+function applyFeeIn(gross, feeBps) {
+  const fee = Math.floor((gross * feeBps) / 10000);
+  const net = gross - fee;
+  const creator = Math.floor((fee * FEE_CREATOR_SHARE_BPS) / 10000);
+  const protocol = Math.floor((fee * FEE_PROTOCOL_SHARE_BPS) / 10000);
+  const remainder = fee - creator - protocol;
+  return { gross, fee, net, creator, protocol, remainder, netIn: net + remainder };
+}
+
+function applyFeeOut(grossOut, feeBps) {
+  const fee = Math.floor((grossOut * feeBps) / 10000);
+  const net = grossOut - fee;
+  return { gross: grossOut, fee, net };
+}
+
+/** Curve buy: tokens out for ugnotIn (base units). */
+function quoteCurveBuy(vu, vt, ugnotIn, feeBps) {
+  if (ugnotIn <= 0 || vu <= 0 || vt <= 0) return { ok: false, reason: "invalid" };
+  const f = applyFeeIn(ugnotIn, feeBps);
+  if (f.netIn <= 0) return { ok: false, reason: "fee" };
+  const newVU = vu + f.netIn;
+  const k = vu * vt;
+  const newVT = Math.floor(k / newVU);
+  if (newVT <= 0 || newVT >= vt) return { ok: false, reason: "zero-out" };
+  const tokensOut = vt - newVT;
+  return { ok: true, tokensOut, netIn: f.netIn, fee: f.fee };
+}
+
+/** Curve sell: net ugnot out for tokensIn. */
+function quoteCurveSell(vu, vt, tokensIn, feeBps) {
+  if (tokensIn <= 0 || vu <= 0 || vt <= 0) return { ok: false, reason: "invalid" };
+  const newVT = vt + tokensIn;
+  const k = vu * vt;
+  const newVU = Math.floor(k / newVT);
+  if (newVU <= 0 || newVU >= vu) return { ok: false, reason: "zero-out" };
+  const gross = vu - newVU;
+  const f = applyFeeOut(gross, feeBps);
+  if (f.net <= 0) return { ok: false, reason: "fee" };
+  return { ok: true, ugnotOut: f.net, gross, fee: f.fee };
+}
+
+/** Pool swap buy. */
+function quotePoolBuy(pu, pt, ugnotIn, feeBps) {
+  if (ugnotIn <= 0 || pu <= 0 || pt <= 0) return { ok: false, reason: "invalid" };
+  const f = applyFeeIn(ugnotIn, feeBps);
+  if (f.net <= 0) return { ok: false, reason: "fee" };
+  const tokensOut = Math.floor((pt * f.net) / (pu + f.net));
+  if (tokensOut <= 0 || tokensOut >= pt) return { ok: false, reason: "zero-out" };
+  return { ok: true, tokensOut, fee: f.fee };
+}
+
+/** Pool swap sell. */
+function quotePoolSell(pu, pt, tokensIn, feeBps) {
+  if (tokensIn <= 0 || pu <= 0 || pt <= 0) return { ok: false, reason: "invalid" };
+  const gross = Math.floor((pu * tokensIn) / (pt + tokensIn));
+  if (gross <= 0 || gross >= pu) return { ok: false, reason: "zero-out" };
+  const f = applyFeeOut(gross, feeBps);
+  if (f.net <= 0) return { ok: false, reason: "fee" };
+  return { ok: true, ugnotOut: f.net, gross, fee: f.fee };
+}
+
+/**
+ * Full quote for market m.
+ * side: "buy" | "sell"
+ * amount: buy = GNOT display; sell = token amount
+ */
+function quoteTrade(m, side, amount) {
+  const feeBps = feeBpsOf(m);
+  const isPool = m.status === 1;
+  if (side === "buy") {
+    const ugnotIn = gnotToUgnot(amount);
+    if (ugnotIn <= 0) return { ok: false, reason: "amount" };
+    const q = isPool
+      ? quotePoolBuy(Number(m.poolUgnot) || 0, Number(m.poolToken) || 0, ugnotIn, feeBps)
+      : quoteCurveBuy(Number(m.virtualUgnot) || 0, Number(m.virtualToken) || 0, ugnotIn, feeBps);
+    if (!q.ok) return q;
+    return {
+      ok: true,
+      side: "buy",
+      ugnotIn,
+      expectedOut: q.tokensOut,
+      outUnit: "tokens",
+      feeUgnot: q.fee,
+      feeBps,
+    };
+  }
+  const tokensIn = Math.floor(Number(amount) || 0);
+  if (tokensIn <= 0) return { ok: false, reason: "amount" };
+  const q = isPool
+    ? quotePoolSell(Number(m.poolUgnot) || 0, Number(m.poolToken) || 0, tokensIn, feeBps)
+    : quoteCurveSell(Number(m.virtualUgnot) || 0, Number(m.virtualToken) || 0, tokensIn, feeBps);
+  if (!q.ok) return q;
+  return {
+    ok: true,
+    side: "sell",
+    tokensIn,
+    expectedOut: q.ugnotOut,
+    outUnit: "ugnot",
+    feeUgnot: q.fee,
+    feeBps,
+  };
+}
+
+/** minOut after slippage% (0 = disabled). Integer floor. */
+function minOutFromQuote(expectedOut, slipPct) {
+  const exp = Math.floor(Number(expectedOut) || 0);
+  if (exp <= 0) return 0;
+  const slip = Number(slipPct);
+  if (!Number.isFinite(slip) || slip <= 0) return 0; // 0% → no min (or exact)
+  if (slip >= 100) return 0;
+  // min = expected * (1 - slip/100)
+  return Math.floor((exp * (10000 - Math.floor(slip * 100))) / 10000);
+}
+
+/** padv4+ has minOut args; padv3 / original pad do not. */
+function padSupportsMinOut(pkg) {
+  const p = String(pkg || "");
+  if (!p) return true;
+  if (p.includes("/padv3") || /\/pad$/.test(p)) return false;
+  return true;
+}
+
 /**
  * Path for Adena “Add Custom Token” = grc20reg key packagePath.SYMBOL.
  * Adena ignores Token.ID (…SYMBOL.seq) and returns “Invalid path” if the token
@@ -1188,6 +1339,19 @@ function renderToken(m) {
         <button type="button" class="tab-buy active" data-mode="buy">${buyLabel}</button>
         <button type="button" class="tab-sell" data-mode="sell">${sellLabel}</button>
       </div>
+      <div class="slip-row" id="slipRow">
+        <span class="slip-label">Slippage</span>
+        <div class="slip-quick" id="slipQuick">
+          <button type="button" data-slip="0.5">0.5%</button>
+          <button type="button" data-slip="1" class="active">1%</button>
+          <button type="button" data-slip="2">2%</button>
+          <button type="button" data-slip="5">5%</button>
+        </div>
+        <label class="slip-custom">
+          <input type="number" id="slipCustom" min="0" max="50" step="0.1" value="1" class="mono" />
+          <span>%</span>
+        </label>
+      </div>
       <div id="tradeBuy">
         <form class="form" id="buyForm">
           <label>Amount (GNOT)
@@ -1203,6 +1367,11 @@ function renderToken(m) {
             <button type="button" data-pct="75">75%</button>
             <button type="button" data-pct="100">MAX</button>
           </div>
+          <div class="quote-box" id="buyQuote">
+            <div class="quote-row"><span>Est. tokens</span><span class="mono" id="buyEst">—</span></div>
+            <div class="quote-row"><span>Min received</span><span class="mono" id="buyMin">—</span></div>
+            <div class="quote-row muted"><span>Fee (~${(feeBpsOf(m) / 100).toFixed(2)}%)</span><span class="mono" id="buyFee">—</span></div>
+          </div>
           <button class="btn primary wide" type="submit">Buy</button>
         </form>
       </div>
@@ -1216,6 +1385,11 @@ function renderToken(m) {
             <button type="button" data-pct="50">50%</button>
             <button type="button" data-pct="75">75%</button>
             <button type="button" data-pct="100">MAX</button>
+          </div>
+          <div class="quote-box" id="sellQuote">
+            <div class="quote-row"><span>Est. GNOT</span><span class="mono" id="sellEst">—</span></div>
+            <div class="quote-row"><span>Min received</span><span class="mono" id="sellMin">—</span></div>
+            <div class="quote-row muted"><span>Fee (~${(feeBpsOf(m) / 100).toFixed(2)}%)</span><span class="mono" id="sellFee">—</span></div>
           </div>
           <button class="btn danger wide" type="submit">Sell</button>
         </form>
@@ -1280,6 +1454,73 @@ function wireToken(m) {
   const marketPkg = m.pkg || state.selectedPkg || pkgPath();
   refreshTradeBalances(m.id, marketPkg);
 
+  let slipPct = loadSlippagePct();
+  const slipCustom = $("#slipCustom");
+  if (slipCustom) slipCustom.value = String(slipPct);
+
+  function setSlipActive(pct) {
+    slipPct = pct;
+    saveSlippagePct(pct);
+    if (slipCustom) slipCustom.value = String(pct);
+    $$("#slipQuick button").forEach((b) => {
+      b.classList.toggle("active", Math.abs(Number(b.dataset.slip) - pct) < 0.001);
+    });
+    updateBuyQuote();
+    updateSellQuote();
+  }
+
+  $$("#slipQuick button").forEach((b) => {
+    b.classList.toggle("active", Math.abs(Number(b.dataset.slip) - slipPct) < 0.001);
+    b.addEventListener("click", () => setSlipActive(Number(b.dataset.slip)));
+  });
+  slipCustom?.addEventListener("input", () => {
+    const v = Number(slipCustom.value);
+    if (!Number.isFinite(v) || v < 0) return;
+    slipPct = Math.min(50, v);
+    saveSlippagePct(slipPct);
+    $$("#slipQuick button").forEach((b) => b.classList.remove("active"));
+    updateBuyQuote();
+    updateSellQuote();
+  });
+
+  function updateBuyQuote() {
+    const amt = $("#buyAmount")?.value;
+    const q = quoteTrade(m, "buy", amt);
+    const estEl = $("#buyEst");
+    const minEl = $("#buyMin");
+    const feeEl = $("#buyFee");
+    if (!q.ok) {
+      if (estEl) estEl.textContent = "—";
+      if (minEl) minEl.textContent = "—";
+      if (feeEl) feeEl.textContent = "—";
+      return { minOut: 0, expected: 0 };
+    }
+    const minOut = minOutFromQuote(q.expectedOut, slipPct);
+    if (estEl) estEl.textContent = fmtNum(q.expectedOut);
+    if (minEl) minEl.textContent = slipPct > 0 ? fmtNum(minOut) : "none (0% slip)";
+    if (feeEl) feeEl.textContent = fmtGnot(q.feeUgnot);
+    return { minOut, expected: q.expectedOut };
+  }
+
+  function updateSellQuote() {
+    const amt = $("#sellAmount")?.value;
+    const q = quoteTrade(m, "sell", amt);
+    const estEl = $("#sellEst");
+    const minEl = $("#sellMin");
+    const feeEl = $("#sellFee");
+    if (!q.ok) {
+      if (estEl) estEl.textContent = "—";
+      if (minEl) minEl.textContent = "—";
+      if (feeEl) feeEl.textContent = "—";
+      return { minOut: 0, expected: 0 };
+    }
+    const minOut = minOutFromQuote(q.expectedOut, slipPct);
+    if (estEl) estEl.textContent = fmtGnot(q.expectedOut);
+    if (minEl) minEl.textContent = slipPct > 0 ? fmtGnot(minOut) : "none (0% slip)";
+    if (feeEl) feeEl.textContent = fmtGnot(q.feeUgnot);
+    return { minOut, expected: q.expectedOut };
+  }
+
   $$(".trade-tabs button").forEach((b) => {
     b.addEventListener("click", () => {
       $$(".trade-tabs button").forEach((x) => x.classList.remove("active"));
@@ -1287,6 +1528,8 @@ function wireToken(m) {
       const mode = b.dataset.mode;
       $("#tradeBuy").classList.toggle("hidden", mode !== "buy");
       $("#tradeSell").classList.toggle("hidden", mode !== "sell");
+      if (mode === "buy") updateBuyQuote();
+      else updateSellQuote();
     });
   });
 
@@ -1304,8 +1547,10 @@ function wireToken(m) {
       } else {
         input.value = b.dataset.v;
       }
+      updateBuyQuote();
     });
   });
+  $("#buyAmount")?.addEventListener("input", updateBuyQuote);
 
   // Sell quick: % of token balance
   $$("#sellQuick button").forEach((b) => {
@@ -1315,8 +1560,13 @@ function wireToken(m) {
       const pct = Number(b.dataset.pct || 100) / 100;
       const amt = Math.floor(tradeBal.tokens * pct);
       input.value = String(amt > 0 ? amt : 0);
+      updateSellQuote();
     });
   });
+  $("#sellAmount")?.addEventListener("input", updateSellQuote);
+
+  updateBuyQuote();
+  updateSellQuote();
 
   $("#buyForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1328,13 +1578,26 @@ function wireToken(m) {
       toast("Invalid GNOT amount", false);
       return;
     }
+    const { minOut, expected } = updateBuyQuote();
+    if (expected <= 0) {
+      toast("Cannot quote this buy (check amount / pool)", false);
+      return;
+    }
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
-    log(`Broadcasting buy ${amountGnot} GNOT on ${m.padLabel || "pad"}…`);
+    log(
+      `Broadcasting buy ${amountGnot} GNOT on ${m.padLabel || "pad"}…\nest ${fmtNum(expected)} tokens · min ${fmtNum(minOut)} (slip ${slipPct}%)`,
+    );
     try {
       const func = m.status === 1 ? "SwapBuy" : "Buy";
-      // minTokensOut=0 disables on-chain slippage check (quote+UI later)
-      const r = await broadcastRealm(func, [m.id, "0"], `${amountUgnot}ugnot`, marketPkg);
+      // padv4+: Buy/SwapBuy(id, minTokensOut). padv3: Buy/SwapBuy(id) only.
+      const useMinOut = padSupportsMinOut(marketPkg);
+      const r = await broadcastRealm(
+        func,
+        useMinOut ? [m.id, String(minOut)] : [m.id],
+        `${amountUgnot}ugnot`,
+        marketPkg,
+      );
       const got = r.result || "?";
       log(`OK height ${r.height}\nhash ${r.hash}\n+${got} tokens`);
       toast("Buy submitted");
@@ -1382,10 +1645,24 @@ function wireToken(m) {
     }
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
-    log(`Broadcasting sell ${fmtNum(tokens)} tokens…`);
+    const { minOut, expected } = updateSellQuote();
+    if (expected <= 0) {
+      toast("Cannot quote this sell (check amount / pool)", false);
+      btn.disabled = false;
+      return;
+    }
+    log(
+      `Broadcasting sell ${fmtNum(tokens)} tokens…\nest ${fmtGnot(expected)} · min ${fmtGnot(minOut)} (slip ${slipPct}%)`,
+    );
     try {
       const func = m.status === 1 ? "SwapSell" : "Sell";
-      const r = await broadcastRealm(func, [m.id, String(tokens), "0"], "", marketPkg);
+      const useMinOut = padSupportsMinOut(marketPkg);
+      const r = await broadcastRealm(
+        func,
+        useMinOut ? [m.id, String(tokens), String(minOut)] : [m.id, String(tokens)],
+        "",
+        marketPkg,
+      );
       log(`OK height ${r.height}\nhash ${r.hash}\nout ${r.result != null ? fmtGnot(r.result) : "see tx"}`);
       toast("Sell submitted");
       await refreshTradeBalances(m.id, marketPkg);
