@@ -17,6 +17,8 @@ const state = {
   markets: [],
   params: null,
   selectedId: null,
+  selectedPkg: null,
+  padSources: [],
   tradeMode: "buy",
   wallet: null, // { address, label, canSign, type: 'adena'|'local'|'view' }
   walletsMeta: null,
@@ -76,12 +78,14 @@ async function broadcastPkg(pkg, func, args = [], send = "") {
 
 /**
  * Broadcast a realm call: Adena if connected as type=adena, else server gnokey API.
+ * @param {string} [pkgOverride] — market pad path (legacy or active); default active pad
  */
-async function broadcastRealm(func, args = [], send = "") {
+async function broadcastRealm(func, args = [], send = "", pkgOverride = "") {
+  const path = (pkgOverride || pkgPath()).trim();
   if (state.wallet?.type === "adena" && state.wallet.canSign) {
     return doContractCall({
       caller: state.wallet.address,
-      pkgPath: pkgPath(),
+      pkgPath: path,
       func,
       args,
       send: send || "",
@@ -302,7 +306,8 @@ function adenaWalletPath(m) {
     if (i >= 0) return full.slice(0, i) + `.${sym}`;
     if (full.endsWith(`.${sym}`)) return full;
   }
-  return `${padPkgPath()}.${sym}`;
+  const base = (m?.pkg || padPkgPath()).trim();
+  return `${base}.${sym}`;
 }
 
 function renderContractBox(m) {
@@ -377,6 +382,7 @@ async function refreshMarkets() {
     const data = await api("/api/markets");
     state.markets = data.markets || [];
     state.params = data.params;
+    state.padSources = data.sources || state.padSources || [];
     $("#statMarkets").textContent = String(data.count ?? state.markets.length);
     $("#statFees").textContent = fmtGnot(data.protocolFeesGnot ?? data.protocolFees, {
       alreadyGnot: data.protocolFeesGnot != null,
@@ -392,6 +398,12 @@ async function refreshMarkets() {
   } catch (e) {
     grid.innerHTML = `<div class="empty">Failed to load markets</div>`;
   }
+}
+
+function marketApiPath(id, pkg) {
+  let u = `/api/market/${encodeURIComponent(id)}`;
+  if (pkg) u += `?pkg=${encodeURIComponent(pkg)}`;
+  return u;
 }
 
 function escapeHtml(s) {
@@ -422,14 +434,20 @@ function renderMarketGrid() {
     .map((m) => {
       const pct = m.progressPct ?? 0;
       const st = m.status === 1 ? "Live" : "Curve";
+      const padBadge = m.legacy
+        ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
+        : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
       return `
-      <article class="card" data-id="${escapeHtml(m.id)}">
+      <article class="card" data-id="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">
         <div class="card-top">
           <div>
             <div class="card-title">${escapeHtml(m.name)}</div>
             <div class="card-sym">$${escapeHtml(m.symbol)}</div>
           </div>
-          <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${st}</span>
+          <div class="card-badges">
+            <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${st}</span>
+            ${padBadge}
+          </div>
         </div>
         <div class="card-meta">
           <div>Price<strong>${fmtPriceGnot(m.priceGnot)}</strong></div>
@@ -447,7 +465,7 @@ function renderMarketGrid() {
     })
     .join("");
   $$(".card", grid).forEach((c) =>
-    c.addEventListener("click", () => openToken(c.dataset.id)),
+    c.addEventListener("click", () => openToken(c.dataset.id, c.dataset.pkg || "")),
   );
 }
 
@@ -623,6 +641,7 @@ async function refreshPortfolio() {
                 const tid = adenaWalletPath(h.market || h) || adenaWalletPath(h);
                 return `<tr>
               <td><strong>${escapeHtml(h.name)}</strong> <span class="card-sym">$${escapeHtml(h.symbol)}</span>
+                ${h.legacy || h.padLabel ? `<span class="badge ${h.legacy ? "legacy" : "active-pad"}" style="margin-left:0.35rem">${escapeHtml(h.padLabel || "")}</span>` : ""}
                 <div class="muted mono" style="font-size:0.7rem">launch ${escapeHtml(h.id)}</div>
                 ${
                   tid
@@ -635,7 +654,7 @@ async function refreshPortfolio() {
               </td>
               <td class="mono">${fmtNum(h.balance)}</td>
               <td class="mono">${fmtGnot(h.valueGnotApprox ?? (h.valueUgnotApprox || 0) / UGNOT_PER_GNOT, { alreadyGnot: true })}</td>
-              <td><button type="button" class="btn sm" data-open="${escapeHtml(h.id)}">Trade</button></td>
+              <td><button type="button" class="btn sm" data-open="${escapeHtml(h.id)}" data-pkg="${escapeHtml(h.pkg || "")}">Trade</button></td>
             </tr>`;
               })
               .join("")}
@@ -646,7 +665,7 @@ async function refreshPortfolio() {
       </div>`;
     $("#pfRefresh")?.addEventListener("click", refreshPortfolio);
     $$("[data-open]", panel).forEach((b) =>
-      b.addEventListener("click", () => openToken(b.dataset.open)),
+      b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
     );
     wireCopyButtons(panel);
   } catch (e) {
@@ -702,7 +721,10 @@ async function refreshCreator() {
                     <div class="card-title">${escapeHtml(m.name)}</div>
                     <div class="card-sym">$${escapeHtml(m.symbol)}</div>
                   </div>
-                  <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${escapeHtml(m.statusLabel)}</span>
+                  <div class="card-badges">
+                    <span class="badge ${m.status === 1 ? "graduated" : "curve"}">${escapeHtml(m.statusLabel)}</span>
+                    ${m.padLabel ? `<span class="badge ${m.legacy ? "legacy" : "active-pad"}">${escapeHtml(m.padLabel)}</span>` : ""}
+                  </div>
                 </div>
                 <div class="card-meta">
                   <div>Price <strong>${fmtPriceGnot(m.priceGnot)}</strong></div>
@@ -712,8 +734,8 @@ async function refreshCreator() {
                 </div>
                 <div class="bar"><i style="width:${m.progressPct || 0}%"></i></div>
                 <div class="creator-actions">
-                  <button type="button" class="btn sm" data-open="${escapeHtml(m.id)}">Open</button>
-                  <button type="button" class="btn sm primary" data-claim="${escapeHtml(m.id)}" ${!c.canSign || !m.creatorFees ? "disabled" : ""}>
+                  <button type="button" class="btn sm" data-open="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}">Open</button>
+                  <button type="button" class="btn sm primary" data-claim="${escapeHtml(m.id)}" data-pkg="${escapeHtml(m.pkg || "")}" ${!c.canSign || !m.creatorFees ? "disabled" : ""}>
                     Claim fees
                   </button>
                 </div>
@@ -739,7 +761,7 @@ async function refreshCreator() {
       b.addEventListener("click", () => showView(b.dataset.nav)),
     );
     $$("[data-open]", panel).forEach((b) =>
-      b.addEventListener("click", () => openToken(b.dataset.open)),
+      b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
     );
     $$("[data-claim]", panel).forEach((b) =>
       b.addEventListener("click", async () => {
@@ -747,7 +769,12 @@ async function refreshCreator() {
         const log = $("#creatorLog");
         log.textContent = `Claiming ${b.dataset.claim}…`;
         try {
-          const r = await broadcastRealm("ClaimCreatorFees", [b.dataset.claim], "");
+          const r = await broadcastRealm(
+            "ClaimCreatorFees",
+            [b.dataset.claim],
+            "",
+            b.dataset.pkg || "",
+          );
           log.textContent = `Claimed\nheight ${r.height}\n${r.hash}`;
           toast("Claim submitted");
           refreshCreator();
@@ -798,18 +825,19 @@ function destroyTvChart() {
   }
 }
 
-async function openToken(id) {
+async function openToken(id, pkg = "") {
   state.selectedId = id;
+  state.selectedPkg = pkg || "";
   showView("token");
   destroyTvChart();
   const panel = $("#tokenPanel");
   panel.innerHTML = `<div class="empty">Loading ${escapeHtml(id)}…</div>`;
   try {
-    const m = await api(`/api/market/${encodeURIComponent(id)}`);
+    const m = await api(marketApiPath(id, pkg));
+    state.selectedPkg = m.pkg || pkg || "";
     state.tradeMode = m.status === 1 ? "buy" : "buy";
     panel.innerHTML = renderToken(m);
     wireToken(m);
-    // Mount TradingView chart after DOM paint
     requestAnimationFrame(() => mountTradingViewChart(m));
   } catch (e) {
     panel.innerHTML = `<div class="empty">Failed: ${escapeHtml(e.message)}</div>`;
@@ -1078,12 +1106,20 @@ function renderToken(m) {
   const sellLabel = isPool ? "Swap sell" : "Sell on curve";
   const chart = chartShell(m.chart || [], m.priceGnot);
   const trades = renderTradeTable(m.chart || []);
+  const padBadge = m.legacy
+    ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
+    : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
   return `
     <div class="panel">
       <div class="token-head">
         <div>
           <h2>${escapeHtml(m.name)} <span class="card-sym">$${escapeHtml(m.symbol)}</span></h2>
           <div class="mono muted" style="font-size:0.8rem;margin-top:0.25rem">launch ${escapeHtml(m.id)}</div>
+          ${
+            m.legacy
+              ? `<div class="callout" style="margin-top:0.5rem;font-size:0.8rem">Legacy pad <code class="mono">${escapeHtml(m.padLabel || "")}</code> — trade still works; new launches use active pad.</div>`
+              : ""
+          }
           <div class="price-mcap-row">
             <div class="pm-block">
               <div class="pm-k">Price</div>
@@ -1099,7 +1135,10 @@ function renderToken(m) {
             </div>
           </div>
         </div>
-        <span class="badge ${isPool ? "graduated" : "curve"}">${isPool ? "Live" : "Curve"}</span>
+        <div class="card-badges">
+          <span class="badge ${isPool ? "graduated" : "curve"}">${isPool ? "Live" : "Curve"}</span>
+          ${padBadge}
+        </div>
       </div>
       ${chart}
       ${
@@ -1186,9 +1225,9 @@ function renderToken(m) {
 }
 
 /** Live balances for the open token panel */
-const tradeBal = { tokens: 0, gnot: 0, id: null };
+const tradeBal = { tokens: 0, gnot: 0, id: null, pkg: "" };
 
-async function refreshTradeBalances(tokenId) {
+async function refreshTradeBalances(tokenId, pkg = "") {
   const tokEl = $("#balTokens");
   const gnotEl = $("#balGnot");
   const hint = $("#balHint");
@@ -1203,9 +1242,10 @@ async function refreshTradeBalances(tokenId) {
   }
   if (hint) hint.textContent = "Loading…";
   try {
-    const b = await api(
-      `/api/balance?id=${encodeURIComponent(tokenId)}&address=${encodeURIComponent(state.wallet.address)}`,
-    );
+    const pkgQ = pkg || state.selectedPkg || "";
+    let balUrl = `/api/balance?id=${encodeURIComponent(tokenId)}&address=${encodeURIComponent(state.wallet.address)}`;
+    if (pkgQ) balUrl += `&pkg=${encodeURIComponent(pkgQ)}`;
+    const b = await api(balUrl);
     tradeBal.tokens = Number(b.tokens) || 0;
     tradeBal.gnot = Number(b.gnot) || 0;
     tradeBal.id = tokenId;
@@ -1237,7 +1277,8 @@ function wireToken(m) {
     el.hidden = !t;
     el.textContent = t || "";
   };
-  refreshTradeBalances(m.id);
+  const marketPkg = m.pkg || state.selectedPkg || pkgPath();
+  refreshTradeBalances(m.id, marketPkg);
 
   $$(".trade-tabs button").forEach((b) => {
     b.addEventListener("click", () => {
@@ -1289,27 +1330,24 @@ function wireToken(m) {
     }
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
-    log(`Broadcasting buy ${amountGnot} GNOT…`);
+    log(`Broadcasting buy ${amountGnot} GNOT on ${m.padLabel || "pad"}…`);
     try {
       const func = m.status === 1 ? "SwapBuy" : "Buy";
       // minTokensOut=0 disables on-chain slippage check (quote+UI later)
-      const r = await broadcastRealm(func, [m.id, "0"], `${amountUgnot}ugnot`);
+      const r = await broadcastRealm(func, [m.id, "0"], `${amountUgnot}ugnot`, marketPkg);
       const got = r.result || "?";
       log(`OK height ${r.height}\nhash ${r.hash}\n+${got} tokens`);
       toast("Buy submitted");
-      await refreshTradeBalances(m.id);
-      // soft refresh market stats without full page wipe if possible
+      await refreshTradeBalances(m.id, marketPkg);
       try {
-        const fresh = await api(`/api/market/${encodeURIComponent(m.id)}`);
-        // update balance again after chain settles
-        await refreshTradeBalances(m.id);
+        const fresh = await api(marketApiPath(m.id, marketPkg));
+        await refreshTradeBalances(m.id, marketPkg);
         log(
           `OK height ${r.height}\n+${got} tokens\nWallet now: ${fmtNum(tradeBal.tokens)} $${m.symbol} · ${fmtGnot(tradeBal.gnot, { alreadyGnot: true })}`,
         );
-        // re-render chart/stats
         state.selectedId = m.id;
+        state.selectedPkg = marketPkg;
         const panel = $("#tokenPanel");
-        const savedLog = log;
         panel.innerHTML = renderToken(fresh);
         wireToken(fresh);
         mountTradingViewChart(fresh);
@@ -1318,7 +1356,7 @@ function wireToken(m) {
           tl.textContent = `OK height ${r.height}\nhash ${r.hash}\n+${got} tokens\nWallet: ${fmtNum(tradeBal.tokens)} $${m.symbol} · ${fmtGnot(tradeBal.gnot, { alreadyGnot: true })}`;
         }
       } catch {
-        await openToken(m.id);
+        await openToken(m.id, marketPkg);
       }
       refreshMarkets();
     } catch (err) {
@@ -1347,13 +1385,12 @@ function wireToken(m) {
     log(`Broadcasting sell ${fmtNum(tokens)} tokens…`);
     try {
       const func = m.status === 1 ? "SwapSell" : "Sell";
-      // minUgnotOut=0 disables on-chain slippage check
-      const r = await broadcastRealm(func, [m.id, String(tokens), "0"], "");
+      const r = await broadcastRealm(func, [m.id, String(tokens), "0"], "", marketPkg);
       log(`OK height ${r.height}\nhash ${r.hash}\nout ${r.result != null ? fmtGnot(r.result) : "see tx"}`);
       toast("Sell submitted");
-      await refreshTradeBalances(m.id);
+      await refreshTradeBalances(m.id, marketPkg);
       try {
-        const fresh = await api(`/api/market/${encodeURIComponent(m.id)}`);
+        const fresh = await api(marketApiPath(m.id, marketPkg));
         $("#tokenPanel").innerHTML = renderToken(fresh);
         wireToken(fresh);
         mountTradingViewChart(fresh);
@@ -1362,7 +1399,7 @@ function wireToken(m) {
           tl.textContent = `OK height ${r.height}\nout ${fmtGnot(r.result)}\nWallet: ${fmtNum(tradeBal.tokens)} $${m.symbol} · ${fmtGnot(tradeBal.gnot, { alreadyGnot: true })}`;
         }
       } catch {
-        await openToken(m.id);
+        await openToken(m.id, marketPkg);
       }
       refreshMarkets();
     } catch (err) {

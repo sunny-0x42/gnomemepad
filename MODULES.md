@@ -34,6 +34,13 @@ Script: addpkg hub + profile → Init → `SetModule(pad, padv4)` + `SetModule(p
 |--------|--------|
 | Profile fields | Deploy `profilev2`, hub `SetModule("profile", newPath)` |
 | Trade/security | Deploy `padv5`, hub `SetModule("pad", newPath)` |
-| Markets on old pad | Keep path; UI multi-pad later via `legacy_*` keys |
+| Markets on old pad | Keep path; register `legacy_*` on hub — UI aggregates all |
+
+## Multi-pad markets (Phase 2A)
+
+- `/api/markets` scans hub `pad` + every `legacy*` / `pad*` module key
+- Each market carries `pkg`, `legacy`, `padLabel`
+- Trade / claim fees use that market’s `pkg`; **Create** always uses active `pad`
+- `/api/market/:id?pkg=…` and `/api/balance?pkg=…` for disambiguation
 
 Hub admin = deploy key after Init. Rotate with `TransferAdmin`.
