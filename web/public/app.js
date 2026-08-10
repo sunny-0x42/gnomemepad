@@ -46,6 +46,13 @@ const state = {
   metaCache: {},
   /** Set of `${pkg}|${id}` */
   watchlist: new Set(),
+  /**
+   * Recent volume from /api/activity (ring samples, not calendar 24h).
+   * key -> { volumeGnot, trades, buyVol, sellVol }
+   */
+  recentVol: {},
+  /** Chart window: "all" | "32" | "16" */
+  chartRange: "all",
 };
 
 function marketKey(id, pkg) {
@@ -85,7 +92,7 @@ function toggleWatch(id, pkg) {
 function loadMarketSort() {
   try {
     const s = localStorage.getItem(LS_MARKET_SORT);
-    if (s && ["hot", "newest", "almost", "buyers", "raised", "mcap"].includes(s)) {
+    if (s && ["hot", "volume", "newest", "almost", "buyers", "raised", "mcap"].includes(s)) {
       state.marketSort = s;
     }
   } catch {
@@ -772,7 +779,8 @@ async function refreshMarkets() {
     await Promise.all([prefetchProfiles(creators), prefetchMarketMeta(state.markets)]);
     renderMarketGrid();
     checkAlmostGraduateAlerts(state.markets);
-    refreshActivity();
+    // activity also fills recentVol + re-renders cards
+    await refreshActivity();
   } catch (e) {
     if (grid) {
       grid.innerHTML = `<div class="empty empty-err">
@@ -799,14 +807,46 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
-/** Heat score for curve (raising) markets — buyers + raised volume. */
+function recentVolOf(m) {
+  if (!m) return { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+  const v = state.recentVol[marketKey(m.id, m.pkg || "")];
+  return v || { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+}
+
+/** Heat score for curve (raising) markets — buyers + raised + recent trade vol. */
 function marketHeatScore(m) {
   if (!m || m.error || m.status === 1) return 0;
   const raised = Number(m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT) || 0;
   const buyers = Number(m.buyers) || 0;
   const pct = Number(m.progressPct) || 0;
-  // Buyers weight activity; raised is cumulative buy volume on curve
-  return raised * 3 + buyers * 8 + pct * 0.35;
+  const rv = recentVolOf(m);
+  // Buyers weight activity; raised is cumulative; recentVol from activity ring
+  return raised * 3 + buyers * 8 + pct * 0.35 + (rv.volumeGnot || 0) * 12 + (rv.trades || 0) * 1.5;
+}
+
+/** Build recent volume map from activity events (client-side, no extra pad scans). */
+function applyActivityVolume(events) {
+  const map = {};
+  for (const e of events || []) {
+    const k = marketKey(e.id, e.pkg || "");
+    if (!map[k]) map[k] = { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+    const vol = Number(e.volumeGnot) || 0;
+    if (e.side === 2) continue;
+    map[k].trades += 1;
+    map[k].volumeGnot += vol;
+    if (e.side === 0) map[k].buyVol += vol;
+    else if (e.side === 1) map[k].sellVol += vol;
+  }
+  state.recentVol = map;
+}
+
+async function refreshRecentVolume() {
+  try {
+    const data = await api("/api/activity?limit=80");
+    applyActivityVolume(data.events || []);
+  } catch {
+    /* keep previous */
+  }
 }
 
 /**
@@ -886,6 +926,9 @@ function sortMarkets(list, sort, heat) {
     }
     if (sort === "mcap") {
       return (Number(b.mcapGnot) || 0) - (Number(a.mcapGnot) || 0);
+    }
+    if (sort === "volume") {
+      return (recentVolOf(b).volumeGnot || 0) - (recentVolOf(a).volumeGnot || 0);
     }
     // hot (default): heat tier → score → watch → created
     const ta = heat.get(keyOf(a)) || 0;
@@ -969,6 +1012,12 @@ function renderMarketGrid() {
       const buyers = Number(m.buyers) || 0;
       const raisedVal = m.raisedGnot ?? m.raised;
       const raisedAlready = m.raisedGnot != null;
+      const rv = recentVolOf(m);
+      const hasRv = (rv.volumeGnot || 0) > 0 || (rv.trades || 0) > 0;
+      const buyPct =
+        hasRv && rv.volumeGnot > 0
+          ? Math.min(100, Math.round((rv.buyVol / rv.volumeGnot) * 100))
+          : 50;
       const sym2 = escapeHtml(String(m.symbol || "?").slice(0, 2));
       const avatar = img
         ? `<img class="card-avatar" src="${escapeHtml(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-fallback="${sym2}" onerror="this.outerHTML='<div class=\\'card-avatar card-avatar-fallback\\'>'+this.dataset.fallback+'</div>'" />`
@@ -996,7 +1045,16 @@ function renderMarketGrid() {
           <div>MCap<strong>${fmtMcap(m.mcapGnot)}</strong></div>
           <div class="${tier >= 2 ? "meta-glow" : ""}">Raised<strong>${fmtGnot(raisedVal, { alreadyGnot: raisedAlready })}</strong></div>
           <div class="${tier >= 1 && buyers > 0 ? "meta-glow buyers" : ""}">Buyers<strong>${fmtNum(buyers)}</strong></div>
+          <div class="card-meta-span ${hasRv ? "meta-glow vol" : ""}">Recent vol<strong>${hasRv ? fmtGnot(rv.volumeGnot, { alreadyGnot: true }) + ` · ${fmtNum(rv.trades)} tx` : "—"}</strong></div>
         </div>
+        ${
+          hasRv
+            ? `<div class="vol-split" title="Buy ${buyPct}% / Sell ${100 - buyPct}% of recent sample vol">
+                <i class="buy" style="width:${buyPct}%"></i>
+                <i class="sell" style="width:${100 - buyPct}%"></i>
+              </div>`
+            : ""
+        }
         ${
           m.status === 1
             ? ""
@@ -1589,6 +1647,14 @@ function toVolumeSeries(pts) {
   }));
 }
 
+function sliceChartPoints(points, range) {
+  const pts = normalizeChartPoints(points);
+  if (!pts.length) return [];
+  if (range === "16") return pts.slice(-16);
+  if (range === "32") return pts.slice(-32);
+  return pts;
+}
+
 function chartShell(points, priceGnot) {
   const pts = normalizeChartPoints(points);
   if (!pts.length) {
@@ -1600,30 +1666,37 @@ function chartShell(points, priceGnot) {
   const firstP = first.priceGnot || first.price;
   const change = firstP > 0 ? (((lastP - firstP) / firstP) * 100).toFixed(2) : "0";
   const up = lastP >= firstP;
+  const range = state.chartRange || "all";
   return `
     <div class="chart-wrap">
       <div class="chart-toolbar">
         <div class="chart-title">
-          TradingView chart
-          <span class="muted">(price in GNOT)</span>
+          Price chart
+          <span class="muted">(GNOT · height)</span>
         </div>
         <div class="chart-meta">
           <span class="mono" id="tvSpot">${fmtPriceGnot(priceGnot || lastP)}</span>
-          <span class="${up ? "chg-up" : "chg-down"}">${up ? "+" : ""}${change}%</span>
-          <span class="muted">${pts.length} pts</span>
+          <span class="${up ? "chg-up" : "chg-down"}" id="tvChg">${up ? "+" : ""}${change}%</span>
+          <span class="muted" id="tvPts">${pts.length} pts</span>
         </div>
       </div>
-      <div class="tv-mode-tabs" id="tvModeTabs">
-        <button type="button" class="tv-mode active" data-mode="area">Area</button>
-        <button type="button" class="tv-mode" data-mode="candles">Candles</button>
-        <button type="button" class="tv-mode" data-mode="line">Line</button>
+      <div class="chart-controls">
+        <div class="tv-mode-tabs" id="tvRangeTabs" role="group" aria-label="Chart range">
+          <button type="button" class="tv-mode ${range === "all" ? "active" : ""}" data-range="all">All</button>
+          <button type="button" class="tv-mode ${range === "32" ? "active" : ""}" data-range="32">Last 32</button>
+          <button type="button" class="tv-mode ${range === "16" ? "active" : ""}" data-range="16">Last 16</button>
+        </div>
+        <div class="tv-mode-tabs" id="tvModeTabs" role="group" aria-label="Chart type">
+          <button type="button" class="tv-mode active" data-mode="area">Area</button>
+          <button type="button" class="tv-mode" data-mode="candles">Candles</button>
+          <button type="button" class="tv-mode" data-mode="line">Line</button>
+        </div>
       </div>
       <div id="tvChart" class="tv-chart" role="img" aria-label="TradingView price chart"></div>
       <div class="chart-legend">
-        <span><i class="lg buy"></i> buy vol (GNOT)</span>
-        <span><i class="lg sell"></i> sell vol (GNOT)</span>
-        <span class="muted">X = block height · Y = GNOT / token</span>
-        <span class="muted">TradingView Lightweight Charts</span>
+        <span><i class="lg buy"></i> buy vol</span>
+        <span><i class="lg sell"></i> sell vol</span>
+        <span class="muted">X = block height</span>
       </div>
     </div>`;
 }
@@ -1636,13 +1709,30 @@ function mountTradingViewChart(m, mode = "area") {
     el.innerHTML = `<div class="chart-empty">TradingView library failed to load (check network / CDN).</div>`;
     return;
   }
-  const pts = normalizeChartPoints(m.chart || []);
+  const range = state.chartRange || "all";
+  const pts = sliceChartPoints(m.chart || [], range);
   if (!pts.length) return;
 
+  // Update meta for selected range
+  const last = pts[pts.length - 1];
+  const first = pts[0];
+  const lastP = last.priceGnot || last.price;
+  const firstP = first.priceGnot || first.price;
+  const change = firstP > 0 ? (((lastP - firstP) / firstP) * 100).toFixed(2) : "0";
+  const up = lastP >= firstP;
+  const chgEl = $("#tvChg");
+  const ptsEl = $("#tvPts");
+  if (chgEl) {
+    chgEl.textContent = `${up ? "+" : ""}${change}%`;
+    chgEl.className = up ? "chg-up" : "chg-down";
+  }
+  if (ptsEl) ptsEl.textContent = `${pts.length} pts`;
+
   const w = Math.max(el.clientWidth || el.getBoundingClientRect().width || 600, 280);
+  const chartH = window.matchMedia("(max-width: 860px)").matches ? 260 : 320;
   const chart = LightweightCharts.createChart(el, {
     width: w,
-    height: 320,
+    height: chartH,
     layout: {
       background: { color: "transparent" },
       textColor: "#8b95b0",
@@ -1717,6 +1807,15 @@ function mountTradingViewChart(m, mode = "area") {
 
   chart.timeScale().fitContent();
 
+  // Range tabs
+  $$("#tvRangeTabs .tv-mode").forEach((b) => {
+    b.classList.toggle("active", b.dataset.range === range);
+    b.onclick = () => {
+      state.chartRange = b.dataset.range || "all";
+      mountTradingViewChart(m, mode);
+    };
+  });
+
   // Mode tabs
   $$("#tvModeTabs .tv-mode").forEach((b) => {
     b.classList.toggle("active", b.dataset.mode === mode);
@@ -1734,16 +1833,71 @@ function mountTradingViewChart(m, mode = "area") {
   }
 }
 
+function tradeVolGnot(p) {
+  return p.volumeGnot != null ? Number(p.volumeGnot) : (Number(p.ugnot) || 0) / UGNOT_PER_GNOT;
+}
+
+function renderLargestTrades(points) {
+  const trades = (points || [])
+    .filter((p) => Number(p.side) !== 2)
+    .map((p) => ({
+      ...p,
+      vg: tradeVolGnot(p),
+      pg:
+        p.priceGnot != null
+          ? Number(p.priceGnot)
+          : Number(p.price) / UGNOT_PER_GNOT / 1_000_000,
+    }))
+    .filter((p) => p.vg > 0)
+    .sort((a, b) => b.vg - a.vg)
+    .slice(0, 5);
+  if (!trades.length) return "";
+  return `
+    <div class="largest-trades">
+      <h4 class="trade-table-title" style="margin:0 0 0.45rem">Largest trades <span class="muted" style="font-weight:400">(ring sample)</span></h4>
+      <div class="largest-list">
+        ${trades
+          .map((p) => {
+            const side = p.side === 1 ? "sell" : "buy";
+            return `<div class="largest-row ${side}">
+              <span class="badge ${side === "buy" ? "graduated" : "curve"}">${side}</span>
+              <span class="mono">${fmtGnot(p.vg, { alreadyGnot: true })}</span>
+              <span class="muted mono">@ ${fmtPriceGnot(p.pg)}</span>
+              <span class="muted mono">h${escapeHtml(String(p.height))}</span>
+            </div>`;
+          })
+          .join("")}
+      </div>
+    </div>`;
+}
+
 function renderTradeTable(points, m) {
   const all = [...(points || [])].reverse();
   const rows = all.slice(0, 40);
   if (!rows.length) return `<div class="muted" style="font-size:0.85rem">No trade history.</div>`;
+  const stats = tradeStatsFromChart(points || []);
+  const buyPct =
+    stats.volumeGnot > 0
+      ? Math.min(100, Math.round((stats.buyVolumeGnot / stats.volumeGnot) * 100))
+      : 50;
   return `
+    ${renderLargestTrades(points)}
+    <div class="trade-flow" style="margin:0.75rem 0 0.5rem">
+      <div class="trade-flow-labels">
+        <span class="chg-up">Buy ${fmtGnot(stats.buyVolumeGnot || 0, { alreadyGnot: true })} (${buyPct}%)</span>
+        <span class="chg-down">Sell ${fmtGnot(stats.sellVolumeGnot || 0, { alreadyGnot: true })} (${100 - buyPct}%)</span>
+      </div>
+      <div class="vol-split tall">
+        <i class="buy" style="width:${buyPct}%"></i>
+        <i class="sell" style="width:${100 - buyPct}%"></i>
+      </div>
+    </div>
     <div class="trade-table-wrap">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.45rem">
         <h4 class="trade-table-title" style="margin:0">Trade history <span class="muted" style="font-weight:400">(${all.length} samples)</span></h4>
         <button type="button" class="btn sm" id="btnExportTrades">Export CSV</button>
       </div>
+      <div class="table-scroll">
       <table class="trade-table" id="tradeHistoryTable">
         <thead><tr><th>Height</th><th>Side</th><th>Price (GNOT)</th><th>Volume (GNOT)</th><th>Tokens</th></tr></thead>
         <tbody>
@@ -1754,8 +1908,7 @@ function renderTradeTable(points, m) {
                 p.priceGnot != null
                   ? p.priceGnot
                   : Number(p.price) / UGNOT_PER_GNOT / 1_000_000;
-              const vg =
-                p.volumeGnot != null ? p.volumeGnot : (Number(p.ugnot) || 0) / UGNOT_PER_GNOT;
+              const vg = tradeVolGnot(p);
               return `<tr class="${cls}">
                 <td class="mono">${p.height}</td>
                 <td>${escapeHtml(p.sideLabel)}</td>
@@ -1767,6 +1920,7 @@ function renderTradeTable(points, m) {
             .join("")}
         </tbody>
       </table>
+      </div>
       ${all.length > 40 ? `<p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">Showing latest 40 of ${all.length}. Export CSV for full sample.</p>` : ""}
     </div>`;
 }
@@ -1830,16 +1984,20 @@ async function refreshActivity() {
   const meta = $("#activityMeta");
   if (!feed) return;
   try {
-    const data = await api("/api/activity?limit=24");
+    // Wider limit: marquee + recent-vol intel for market cards
+    const data = await api("/api/activity?limit=80");
     const events = data.events || [];
+    applyActivityVolume(events);
+    if (state.view === "home") renderMarketGrid();
     if (meta) meta.textContent = events.length ? `${events.length}` : "";
     if (!events.length) {
       feed.innerHTML = `<div class="activity-track activity-empty muted">No recent trades yet.</div>`;
       return;
     }
-    // Pad short feeds so the ticker never looks empty on wide screens
-    let seq = events.slice();
-    while (seq.length < 10) seq = seq.concat(events);
+    // Marquee uses a subset so chips stay readable
+    const marqueeEvents = events.slice(0, 28);
+    let seq = marqueeEvents.slice();
+    while (seq.length < 10) seq = seq.concat(marqueeEvents);
     const sequenceHtml = seq.map(activityItemHtml).join("");
     setActivityMarquee(feed, sequenceHtml, seq.length);
   } catch (e) {
