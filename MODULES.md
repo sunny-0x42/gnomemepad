@@ -36,6 +36,17 @@ Script: addpkg hub + profile → Init → `SetModule(pad, padv4)` + `SetModule(p
 | Trade/security | Deploy `padv5`, hub `SetModule("pad", newPath)` |
 | Markets on old pad | Keep path; register `legacy_*` on hub — UI aggregates all |
 
+## Phase 3C / 3D / 3F
+
+| Piece | What |
+|-------|------|
+| **3C Activity** | `/api/activity`, home feed, CSV trade export |
+| **3D padv5** | Stricter bond/graduate/anti-snipe/history — `deploy-sapphire-v5.ps1` |
+| **3F hubv2** | Multi-admin hub — `deploy-sapphire-hubv2.ps1` |
+| **Ops** | `/api/ops` + `scripts/ops-health.ps1` |
+
+See `DEPLOY_V5.md`.
+
 ## Meta + Points (Phase 3A / 3B)
 
 | Module | Path | Role |

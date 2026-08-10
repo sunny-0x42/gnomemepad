@@ -14,7 +14,7 @@ const (
 	VirtualToken0 int64 = 1_073_000_191   // virtual token side
 
 	// Graduation when net ugnot raised into the curve reaches this.
-	// 50 GNOT — testnet-friendly; raise for production.
+	// padv4 testnet default: 50 GNOT. padv5 deploy script patches to 100 GNOT.
 	// Keep below the ugnot needed to exhaust CurveSupply on the virtual CPMM.
 	GraduationThreshold int64 = 50_000_000
 
@@ -23,22 +23,21 @@ const (
 	CreatorFeeShareBPS int64 = 4000
 	ProtocolFeeShareBPS int64 = 4000
 
-	// Anti-spam create bond (1 GNOT). Refunded only if quality thresholds met before expire.
+	// Anti-spam create bond (1 GNOT padv4). padv5 deploy patches to 2 GNOT.
 	CreateBondUgnot      int64 = 1_000_000
 	BondRefundBuyers     int   = 5
-	BondRefundMinRaised  int64 = 5_000_000 // ≥5 GNOT raised (blocks pure sybil micro-buys)
-	BondRefundMaxHeights int64 = 100_000   // ~ loosely long window; chain-dependent
+	BondRefundMinRaised  int64 = 5_000_000 // ≥5 GNOT raised
+	BondRefundMaxHeights int64 = 100_000
 
-	// Anti-snipe: first N heights after create, max cumulative tokens per address
-	// (BPS of TotalSupply). Multi-tx from same wallet still capped.
+	// Anti-snipe: first N heights, max cumulative tokens per address (BPS of TotalSupply).
 	AntiSnipeHeights   int64 = 20
-	AntiSnipeMaxBuyBPS int64 = 500 // 5% of total supply per address in window
+	AntiSnipeMaxBuyBPS int64 = 500 // 5% per address in window
 
 	// Status
 	StatusCurve     = 0
 	StatusGraduated = 1
 
-	// Trade history cap for per-token price charts (ring buffer).
+	// Trade history ring buffer (padv4: 128; padv5 deploy patches to 256).
 	MaxTradeHistory = 128
 	// Trade sides stored in history
 	TradeSideBuy  = 0

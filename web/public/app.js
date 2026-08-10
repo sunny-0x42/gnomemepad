@@ -648,6 +648,7 @@ async function refreshMarkets() {
     const creators = state.markets.map((m) => m.creator).filter(Boolean);
     await prefetchProfiles(creators);
     renderMarketGrid();
+    refreshActivity();
   } catch (e) {
     if (grid) {
       grid.innerHTML = `<div class="empty empty-err">
@@ -1381,13 +1382,17 @@ function mountTradingViewChart(m, mode = "area") {
   }
 }
 
-function renderTradeTable(points) {
-  const rows = (points || []).slice().reverse().slice(0, 24);
+function renderTradeTable(points, m) {
+  const all = [...(points || [])].reverse();
+  const rows = all.slice(0, 40);
   if (!rows.length) return `<div class="muted" style="font-size:0.85rem">No trade history.</div>`;
   return `
     <div class="trade-table-wrap">
-      <h4 class="trade-table-title">Recent trades</h4>
-      <table class="trade-table">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.45rem">
+        <h4 class="trade-table-title" style="margin:0">Trade history <span class="muted" style="font-weight:400">(${all.length} samples)</span></h4>
+        <button type="button" class="btn sm" id="btnExportTrades">Export CSV</button>
+      </div>
+      <table class="trade-table" id="tradeHistoryTable">
         <thead><tr><th>Height</th><th>Side</th><th>Price (GNOT)</th><th>Volume (GNOT)</th><th>Tokens</th></tr></thead>
         <tbody>
           ${rows
@@ -1410,7 +1415,64 @@ function renderTradeTable(points) {
             .join("")}
         </tbody>
       </table>
+      ${all.length > 40 ? `<p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">Showing latest 40 of ${all.length}. Export CSV for full sample.</p>` : ""}
     </div>`;
+}
+
+function exportTradesCsv(points, symbol) {
+  const rows = [...(points || [])];
+  const lines = ["height,side,price_gnot,volume_gnot,tokens,ugnot"];
+  for (const p of rows) {
+    const pg =
+      p.priceGnot != null ? p.priceGnot : Number(p.price) / UGNOT_PER_GNOT / 1_000_000;
+    const vg = p.volumeGnot != null ? p.volumeGnot : (Number(p.ugnot) || 0) / UGNOT_PER_GNOT;
+    lines.push([p.height, p.sideLabel, pg, vg, p.tokens, p.ugnot].join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `gnomemepad-${symbol || "trades"}-history.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("CSV downloaded");
+}
+
+async function refreshActivity() {
+  const feed = $("#activityFeed");
+  const meta = $("#activityMeta");
+  if (!feed) return;
+  try {
+    const data = await api("/api/activity?limit=24");
+    const events = data.events || [];
+    if (meta) meta.textContent = `${events.length} events · ${data.scannedMarkets || 0} markets`;
+    if (!events.length) {
+      feed.innerHTML = `<span class="muted">No recent trades yet.</span>`;
+      return;
+    }
+    feed.innerHTML = events
+      .map((e) => {
+        const side = e.side === 0 ? "buy" : e.side === 1 ? "sell" : "open";
+        const vol =
+          e.side === 2
+            ? "mark"
+            : e.side === 0
+              ? fmtGnot(e.volumeGnot, { alreadyGnot: true })
+              : `${fmtNum(e.tokens)} tok`;
+        return `<button type="button" class="act-item act-${side}" data-open="${escapeHtml(e.id)}" data-pkg="${escapeHtml(e.pkg || "")}">
+          <span class="act-side">${side}</span>
+          <span class="act-sym">$${escapeHtml(e.symbol)}</span>
+          <span class="act-vol mono">${escapeHtml(String(vol))}</span>
+          <span class="act-pad muted">${escapeHtml(e.padLabel || "")}</span>
+          <span class="act-h mono muted">h${escapeHtml(String(e.height))}</span>
+        </button>`;
+      })
+      .join("");
+    $$(".act-item", feed).forEach((b) =>
+      b.addEventListener("click", () => openToken(b.dataset.open, b.dataset.pkg || "")),
+    );
+  } catch (e) {
+    feed.innerHTML = `<span class="muted">Activity unavailable: ${escapeHtml(e.message || e)}</span>`;
+  }
 }
 
 function renderToken(m) {
@@ -1418,7 +1480,7 @@ function renderToken(m) {
   const buyLabel = isPool ? "Swap buy" : "Buy on curve";
   const sellLabel = isPool ? "Swap sell" : "Sell on curve";
   const chart = chartShell(m.chart || [], m.priceGnot);
-  const trades = renderTradeTable(m.chart || []);
+  const trades = renderTradeTable(m.chart || [], m);
   const padBadge = m.legacy
     ? `<span class="badge legacy" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "legacy")}</span>`
     : `<span class="badge active-pad" title="${escapeHtml(m.pkg || "")}">${escapeHtml(m.padLabel || "pad")}</span>`;
@@ -1633,6 +1695,9 @@ function wireToken(m) {
   const marketPkg = m.pkg || state.selectedPkg || pkgPath();
   refreshTradeBalances(m.id, marketPkg);
   loadTokenMeta(marketPkg, m.id);
+  $("#btnExportTrades")?.addEventListener("click", () =>
+    exportTradesCsv(m.chart || [], m.symbol),
+  );
   $("#metaForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!requireSigner("save metadata")) return;
@@ -2110,6 +2175,7 @@ function wireGlobal() {
   $("#btnRefresh")?.addEventListener("click", () => {
     refreshHealth();
     refreshMarkets();
+    refreshActivity();
   });
   $("#search")?.addEventListener("input", () => renderMarketGrid());
   $$("#padFilter .filter-btn").forEach((b) => {

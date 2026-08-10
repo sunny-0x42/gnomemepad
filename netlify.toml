@@ -17,6 +17,7 @@
   NODE_VERSION = "20"
   RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
   CHAIN_ID = "sapphire-1"
+  # Active pad still padv4 until you deploy padv5 + hub.SetModule("pad", …/padv5)
   PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv4"
   HUB = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/hub"
   PROFILE = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
