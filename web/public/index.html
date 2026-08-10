@@ -59,11 +59,18 @@
       </div>
 
       <div class="toolbar">
-        <input id="search" type="search" placeholder="Search…" autocomplete="off" />
+        <input id="search" type="search" placeholder="Search name, symbol, id…" autocomplete="off" />
+        <div class="filter-tabs" id="padFilter" role="group" aria-label="Pad filter">
+          <button type="button" class="filter-btn active" data-filter="all">All</button>
+          <button type="button" class="filter-btn" data-filter="active">Active pad</button>
+          <button type="button" class="filter-btn" data-filter="legacy">Legacy</button>
+        </div>
         <button type="button" class="btn sm" id="btnRefresh">Refresh</button>
       </div>
       <div id="marketGrid" class="market-grid">
-        <div class="empty">Loading…</div>
+        <div class="skeleton-grid" aria-hidden="true">
+          <div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div>
+        </div>
       </div>
     </section>
 
@@ -154,6 +161,7 @@
           <a href="#docs-mech">Mechanics</a>
           <a href="#docs-curve">Curve pricing</a>
           <a href="#docs-grc20">GRC20 &amp; Gnoswap</a>
+          <a href="#docs-modules">Modules</a>
           <a href="#docs-params">Parameters</a>
           <a href="#docs-fees">Fees</a>
           <a href="#docs-safety">Safety</a>
@@ -207,6 +215,47 @@
             <div class="docs-card">
               <h3>View-only</h3>
               <p>Paste any <code>g1…</code> address to browse. Create / Buy / Sell still require Adena to sign.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Profile</h3>
+              <p>On-chain display name &amp; bio (separate realm). Shown on market cards next to creators.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Rewards</h3>
+              <p>Referral + check-in points on a separate points realm. Leaderboard is public.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="docs-section" id="docs-modules">
+          <h2>Modular architecture</h2>
+          <p class="lede" style="margin-bottom:1rem">
+            Features live in separate packages so you can upgrade one without redeploying the whole pad.
+          </p>
+          <div class="docs-grid">
+            <div class="docs-card">
+              <h3>hub</h3>
+              <p>Registry of module paths (<code>pad</code>, <code>profile</code>, <code>meta</code>, <code>points</code>, <code>legacy_*</code>). UI resolves the active pad from hub.</p>
+            </div>
+            <div class="docs-card">
+              <h3>padv4 (+ legacy)</h3>
+              <p>Launch &amp; trade. Markets filter: <em>All / Active / Legacy</em>. Create always uses the active pad.</p>
+            </div>
+            <div class="docs-card">
+              <h3>profile</h3>
+              <p><code>SetProfile</code> / <code>GetProfile</code> — name, bio, URI per wallet.</p>
+            </div>
+            <div class="docs-card">
+              <h3>meta</h3>
+              <p>Token description, image, socials. First writer owns the entry for that pad+launch id.</p>
+            </div>
+            <div class="docs-card">
+              <h3>points</h3>
+              <p>Referrer once (+50 / +25), check-in (+5 / ~100 heights), leaderboard. Not tied to trade volume.</p>
+            </div>
+            <div class="docs-card">
+              <h3>Trade UX</h3>
+              <p>Client-side quotes + slippage % → <code>minOut</code> on padv4+ (legacy padv3 has no minOut args).</p>
             </div>
           </div>
         </section>

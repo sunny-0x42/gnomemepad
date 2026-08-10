@@ -19,6 +19,7 @@ const state = {
   selectedId: null,
   selectedPkg: null,
   padSources: [],
+  marketFilter: "all", // all | active | legacy
   tradeMode: "buy",
   wallet: null, // { address, label, canSign, type: 'adena'|'local'|'view' }
   walletsMeta: null,
@@ -613,14 +614,26 @@ async function refreshHealth() {
   }
 }
 
+function marketSkeletonHtml() {
+  return `<div class="skeleton-grid" aria-hidden="true">
+    <div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div>
+  </div>`;
+}
+
 async function refreshMarkets() {
   const grid = $("#marketGrid");
+  if (grid && !state.markets.length) {
+    grid.innerHTML = marketSkeletonHtml();
+  }
   try {
     const data = await api("/api/markets");
     state.markets = data.markets || [];
     state.params = data.params;
     state.padSources = data.sources || state.padSources || [];
-    $("#statMarkets").textContent = String(data.count ?? state.markets.length);
+    const nAll = state.markets.filter((m) => !m.error).length;
+    const nLeg = state.markets.filter((m) => !m.error && m.legacy).length;
+    $("#statMarkets").textContent =
+      nLeg > 0 ? `${nAll} (${nAll - nLeg} active)` : String(data.count ?? nAll);
     $("#statFees").textContent = fmtGnot(data.protocolFeesGnot ?? data.protocolFees, {
       alreadyGnot: data.protocolFeesGnot != null,
     });
@@ -632,12 +645,18 @@ async function refreshMarkets() {
       $("#statFeeBps").textContent = `${(data.params.feeBps / 100).toFixed(2)}%`;
     }
     renderMarketGrid();
-    // Enrich creator names (async re-render when cache fills)
     const creators = state.markets.map((m) => m.creator).filter(Boolean);
     await prefetchProfiles(creators);
     renderMarketGrid();
   } catch (e) {
-    grid.innerHTML = `<div class="empty">Failed to load markets</div>`;
+    if (grid) {
+      grid.innerHTML = `<div class="empty empty-err">
+        <strong>Could not load markets</strong>
+        <p class="muted">${escapeHtml(e.message || e)}</p>
+        <button type="button" class="btn sm" id="btnRetryMarkets">Retry</button>
+      </div>`;
+      $("#btnRetryMarkets")?.addEventListener("click", () => refreshMarkets());
+    }
   }
 }
 
@@ -656,19 +675,35 @@ function escapeHtml(s) {
 }
 
 function renderMarketGrid() {
-  const q = ($("#search").value || "").trim().toLowerCase();
+  const q = ($("#search")?.value || "").trim().toLowerCase();
+  const filter = state.marketFilter || "all";
   let list = state.markets.filter((m) => !m.error);
+  if (filter === "active") list = list.filter((m) => !m.legacy);
+  if (filter === "legacy") list = list.filter((m) => m.legacy);
   if (q) {
     list = list.filter(
       (m) =>
         m.name?.toLowerCase().includes(q) ||
         m.symbol?.toLowerCase().includes(q) ||
-        m.id?.toLowerCase().includes(q),
+        m.id?.toLowerCase().includes(q) ||
+        m.creator?.toLowerCase().includes(q) ||
+        (state.profileCache[m.creator]?.name || "").toLowerCase().includes(q),
     );
   }
   const grid = $("#marketGrid");
+  if (!grid) return;
   if (!list.length) {
-    grid.innerHTML = `<div class="empty">${state.markets.length ? "No results" : "No markets yet. Launch the first coin."}</div>`;
+    const msg = !state.markets.length
+      ? `No markets yet. <button type="button" class="btn sm primary" data-nav="create">Launch the first coin</button>`
+      : filter === "legacy"
+        ? "No legacy markets match."
+        : filter === "active"
+          ? "No active-pad markets match. Try <em>All</em> to include legacy."
+          : "No results for this search.";
+    grid.innerHTML = `<div class="empty">${msg}</div>`;
+    $$("[data-nav]", grid).forEach((b) =>
+      b.addEventListener("click", () => showView(b.dataset.nav)),
+    );
     return;
   }
   grid.innerHTML = list
@@ -867,6 +902,13 @@ async function refreshPortfolio() {
     const totalMeme = rows.reduce((s, h) => s + (h.valueUgnotApprox || 0), 0);
     await fetchProfile(p.address);
     const me = state.profileCache[p.address];
+    let pts = null;
+    try {
+      const pd = await api(`/api/points?address=${encodeURIComponent(p.address)}`);
+      if (!pd.error) pts = Number(pd.points) || 0;
+    } catch {
+      /* points optional */
+    }
     panel.innerHTML = `
       <div class="dash-head">
         <div>
@@ -885,7 +927,7 @@ async function refreshPortfolio() {
         <div class="stat"><div class="stat-k">GNOT balance</div><div class="stat-v">${fmtGnot(p.gnot ?? p.ugnot / UGNOT_PER_GNOT, { alreadyGnot: true })}</div></div>
         <div class="stat"><div class="stat-k">Meme positions</div><div class="stat-v">${p.memePositions}</div></div>
         <div class="stat"><div class="stat-k">Est. meme value</div><div class="stat-v">${fmtGnot(totalMeme / UGNOT_PER_GNOT, { alreadyGnot: true })}</div></div>
-        <div class="stat"><div class="stat-k">Mode</div><div class="stat-v" style="font-size:1rem">${p.canSign ? "Signer" : "View"}</div></div>
+        <div class="stat"><div class="stat-k">Points</div><div class="stat-v">${pts == null ? "—" : fmtNum(pts)}${pts != null ? ` <button type="button" class="btn sm" data-nav="rewards" style="margin-left:0.35rem;vertical-align:middle">Rewards</button>` : ""}</div></div>
       </div>
       <div class="panel" style="margin-top:1rem">
         <h3 style="margin-top:0">Holdings</h3>
@@ -1507,6 +1549,7 @@ function renderToken(m) {
             <div class="quote-row"><span>Est. tokens</span><span class="mono" id="buyEst">—</span></div>
             <div class="quote-row"><span>Min received</span><span class="mono" id="buyMin">—</span></div>
             <div class="quote-row muted"><span>Fee (~${(feeBpsOf(m) / 100).toFixed(2)}%)</span><span class="mono" id="buyFee">—</span></div>
+            <p class="quote-warn muted" id="buySlipWarn" hidden>0% slippage = no minOut protection on-chain.</p>
           </div>
           <button class="btn primary wide" type="submit">Buy</button>
         </form>
@@ -1667,8 +1710,15 @@ function wireToken(m) {
     }
     const minOut = minOutFromQuote(q.expectedOut, slipPct);
     if (estEl) estEl.textContent = fmtNum(q.expectedOut);
-    if (minEl) minEl.textContent = slipPct > 0 ? fmtNum(minOut) : "none (0% slip)";
+    if (minEl) {
+      minEl.textContent = slipPct > 0 ? fmtNum(minOut) : "none (0% slip)";
+      minEl.classList.toggle("warn-min", slipPct > 0 && minOut <= 0 && q.expectedOut > 0);
+    }
     if (feeEl) feeEl.textContent = fmtGnot(q.feeUgnot);
+    const warn = $("#buySlipWarn");
+    if (warn) {
+      warn.hidden = !(slipPct <= 0 && padSupportsMinOut(m.pkg || ""));
+    }
     return { minOut, expected: q.expectedOut };
   }
 
@@ -1686,7 +1736,10 @@ function wireToken(m) {
     }
     const minOut = minOutFromQuote(q.expectedOut, slipPct);
     if (estEl) estEl.textContent = fmtGnot(q.expectedOut);
-    if (minEl) minEl.textContent = slipPct > 0 ? fmtGnot(minOut) : "none (0% slip)";
+    if (minEl) {
+      minEl.textContent = slipPct > 0 ? fmtGnot(minOut) : "none (0% slip)";
+      minEl.classList.toggle("warn-min", slipPct > 0 && minOut <= 0 && q.expectedOut > 0);
+    }
     if (feeEl) feeEl.textContent = fmtGnot(q.feeUgnot);
     return { minOut, expected: q.expectedOut };
   }
@@ -2059,6 +2112,15 @@ function wireGlobal() {
     refreshMarkets();
   });
   $("#search")?.addEventListener("input", () => renderMarketGrid());
+  $$("#padFilter .filter-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.marketFilter = b.dataset.filter || "all";
+      $$("#padFilter .filter-btn").forEach((x) =>
+        x.classList.toggle("active", x.dataset.filter === state.marketFilter),
+      );
+      renderMarketGrid();
+    });
+  });
   $("#btnWallet")?.addEventListener("click", openWalletModal);
   $("#heroConnect")?.addEventListener("click", openWalletModal);
   $("#docsConnect")?.addEventListener("click", () => connectWithAdena());
