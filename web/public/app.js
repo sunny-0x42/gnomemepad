@@ -863,6 +863,91 @@ function adenaWalletPath(m) {
   return `${base}.${sym}`;
 }
 
+/** GRC20 package path for Gnoswap (realm path, not Adena SYMBOL key). */
+function gnoswapTokenPath(m) {
+  const pkg = (m?.pkg || padPkgPath()).trim();
+  return pkg;
+}
+
+/** Sapphire Gnoswap stack (live under gno.land/r/gnoswap/*). */
+const GNOSWAP = {
+  app: "https://beta.gnoswap.io",
+  router: "gno.land/r/gnoswap/router",
+  pool: "gno.land/r/gnoswap/pool",
+  position: "gno.land/r/gnoswap/position",
+  wugnot: "gno.land/r/gnoland/wugnot",
+  feeDefault: 3000, // 0.3% — volatile meme tier
+};
+
+function gnoswapRouteGnotToToken(tokenPkg, fee = GNOSWAP.feeDefault) {
+  return `${GNOSWAP.wugnot}:${tokenPkg}:${fee}`;
+}
+
+function gnoswapRouteTokenToGnot(tokenPkg, fee = GNOSWAP.feeDefault) {
+  return `${tokenPkg}:${GNOSWAP.wugnot}:${fee}`;
+}
+
+function gnoswapSwapAppUrl(tokenPkg) {
+  // beta app deep-link (best-effort query params)
+  return `${GNOSWAP.app}/swap?tokenA=ugnot&tokenB=${encodeURIComponent(tokenPkg)}`;
+}
+
+function renderGnoswapPanel(m) {
+  const isPool = m.status === 1 || m.gnoswapReady;
+  const tokenPkg = gnoswapTokenPath(m);
+  const adenaPath = adenaWalletPath(m);
+  const routeBuy = gnoswapRouteGnotToToken(tokenPkg);
+  const routeSell = gnoswapRouteTokenToGnot(tokenPkg);
+  const appUrl = gnoswapSwapAppUrl(tokenPkg);
+  if (!isPool) {
+    return `<div class="callout" style="margin-top:0.75rem">
+      <strong>Gnoswap (Sapphire)</strong>
+      <p class="muted" style="font-size:0.82rem;margin:0.35rem 0 0">
+        After graduation this GRC20 can be listed on concentrated-liquidity Gnoswap.
+        Router: <code class="mono">${escapeHtml(GNOSWAP.router)}</code>
+        · Pool: <code class="mono">${escapeHtml(GNOSWAP.pool)}</code>
+        · WUGNOT: <code class="mono">${escapeHtml(GNOSWAP.wugnot)}</code>
+      </p>
+    </div>`;
+  }
+  return `<div class="callout ok gnoswap-checklist" style="margin-top:0.75rem">
+    <strong>GRC20 ready for Gnoswap (Sapphire)</strong>
+    <ol class="checklist">
+      <li>Token realm path: <code class="mono">${escapeHtml(tokenPkg)}</code>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(tokenPkg)}" data-copy-label="Token path copied">Copy</button>
+      </li>
+      <li>Adena path: <code class="mono">${escapeHtml(adenaPath)}</code>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(adenaPath)}" data-copy-label="Adena path copied">Copy</button>
+      </li>
+      <li>Create pool (permissionless): <code class="mono">CreatePool</code> on
+        <code class="mono">${escapeHtml(GNOSWAP.pool)}</code>
+        with fee tier <strong>3000</strong> (0.3%) · costs <strong>~100 GNS</strong>
+      </li>
+      <li>Route GNOT→token:
+        <code class="mono">${escapeHtml(routeBuy)}</code>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(routeBuy)}" data-copy-label="Route copied">Copy</button>
+      </li>
+      <li>Route token→GNOT:
+        <code class="mono">${escapeHtml(routeSell)}</code>
+        <button type="button" class="btn sm copy-btn" data-copy="${escapeHtml(routeSell)}" data-copy-label="Route copied">Copy</button>
+      </li>
+      <li>Swap via router <code class="mono">ExactInSwapRoute</code>
+        (inputToken=<code>ugnot</code>, route uses <code>wugnot</code> path)
+      </li>
+      <li>
+        <a class="btn sm primary" href="${escapeHtml(appUrl)}" target="_blank" rel="noreferrer">Open Gnoswap app</a>
+        <a class="btn sm" href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Docs</a>
+        <button type="button" class="btn sm" id="btnGnoswapProbe">Probe pool (API)</button>
+      </li>
+    </ol>
+    <div id="gnoswapProbe" class="muted" style="font-size:0.75rem;margin-top:0.45rem"></div>
+    <p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">
+      Pad keeps locked CPMM after graduate. Gnoswap is a <em>separate</em> CL pool — prices may diverge.
+      Auto CreatePool from pad is not done on-chain (needs GNS fee + Mint LP); use app or Adena calls.
+    </p>
+  </div>`;
+}
+
 function renderContractBox(m) {
   const walletPath = adenaWalletPath(m);
   if (!walletPath) return "";
@@ -2781,20 +2866,7 @@ function renderToken(m) {
           <pre class="log" id="metaLog" hidden></pre>
         </details>
       </div>
-      ${
-        m.gnoswapReady || isPool
-          ? `<div class="callout ok gnoswap-checklist" style="margin-top:0.75rem">
-          <strong>GRC20 ready for Gnoswap</strong>
-          <ol class="checklist">
-            <li>Copy <strong>Token ID</strong> / Adena path above</li>
-            <li>Open <a href="https://docs.gnoswap.io/references/onboarding-guide" target="_blank" rel="noreferrer">Gnoswap onboarding</a></li>
-            <li>Create permissionless GNOT / $${escapeHtml(m.symbol)} pool</li>
-            <li>Seed liquidity (holders/creator) — pad CPMM stays locked in parallel</li>
-          </ol>
-          <p class="muted" style="font-size:0.75rem;margin:0.4rem 0 0">Prices may diverge across venues; arbitrage is expected.</p>
-        </div>`
-          : ""
-      }
+      ${renderGnoswapPanel(m)}
       ${trades}
     </div>
     <div class="panel">
@@ -2977,6 +3049,31 @@ function wireToken(m) {
     }
   });
   $("#btnShareCard")?.addEventListener("click", () => shareTokenCard(m));
+  $("#btnGnoswapProbe")?.addEventListener("click", async () => {
+    const box = $("#gnoswapProbe");
+    if (box) box.textContent = "Probing Gnoswap DrySwapRoute on Sapphire…";
+    try {
+      const tokenPkg = gnoswapTokenPath(m);
+      const data = await api(
+        `/api/gnoswap?token=${encodeURIComponent(tokenPkg)}&fee=3000&refresh=1`,
+        { force: true },
+      );
+      if (!box) return;
+      if (data.drySwap?.ok) {
+        box.innerHTML = `<span class="chg-up">DrySwap responded</span> · raw <code class="mono">${escapeHtml(String(data.drySwap.raw || "").slice(0, 120))}</code>
+          · route <code class="mono">${escapeHtml(data.suggestedRouteBuy || "")}</code>`;
+        toast("Gnoswap probe OK (pool may still need liquidity)");
+      } else {
+        box.innerHTML = `<span class="bad-uri">No liquid route yet</span> — create pool + mint LP on
+          <code class="mono">${escapeHtml(data.paths?.pool || GNOSWAP.pool)}</code>.
+          <div class="muted" style="margin-top:0.25rem">${escapeHtml(String(data.drySwap?.error || "pool missing / no liquidity").slice(0, 280))}</div>`;
+        toast("Pool not ready on Gnoswap — create + add liquidity", false);
+      }
+    } catch (e) {
+      if (box) box.textContent = String(e.message || e);
+      toast(String(e.message || e), false);
+    }
+  });
   $("#btnWatchToken")?.addEventListener("click", () => {
     const on = toggleWatch(m.id, marketPkg);
     const b = $("#btnWatchToken");
