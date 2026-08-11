@@ -999,6 +999,47 @@ a.person-chip:hover .person-name {
   border-radius: var(--radius, 10px);
   background: rgba(255, 255, 255, 0.02);
 }
+.grad-assist {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(108, 92, 231, 0.35);
+  border-radius: var(--radius, 10px);
+  background:
+    linear-gradient(135deg, rgba(108, 92, 231, 0.14), rgba(45, 212, 191, 0.06)),
+    rgba(255, 255, 255, 0.02);
+}
+.grad-assist-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin-bottom: 0.5rem;
+  color: #e9d5ff;
+}
+.grad-assist-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 0.75rem;
+  font-size: 0.78rem;
+  margin-bottom: 0.65rem;
+}
+.grad-assist-stats strong {
+  display: block;
+  margin-top: 0.1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.grad-assist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+@media (max-width: 860px) {
+  .grad-assist-stats {
+    grid-template-columns: 1fr;
+  }
+  .grad-assist-actions .btn {
+    flex: 1 1 auto;
+  }
+}
 .bar {
   margin-top: 0.85rem;
   height: 4px;

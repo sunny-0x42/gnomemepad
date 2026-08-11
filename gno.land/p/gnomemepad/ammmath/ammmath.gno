@@ -96,6 +96,29 @@ func BuyTokens(virtualUgnot, virtualToken, ugnotIn int64) (tokensOut, newVU, new
 	return tokensOut, newVU, newVT
 }
 
+// MaxNetInForTokenOut is the largest net ugnot in that yields tokensOut ≤ maxTokensOut
+// (integer CPMM, same floor rules as BuyTokens). Used to fill the last curve tokens
+// without panicking when the user sends too much GNOT.
+func MaxNetInForTokenOut(virtualUgnot, virtualToken, maxTokensOut int64) int64 {
+	if maxTokensOut <= 0 || virtualUgnot <= 0 || virtualToken <= 0 {
+		return 0
+	}
+	if maxTokensOut >= virtualToken {
+		return 0
+	}
+	targetNewVT := virtualToken - maxTokensOut
+	k, ok := overflow.Mul64(virtualUgnot, virtualToken)
+	if !ok {
+		panic("ammmath: k overflow")
+	}
+	// tokensOut ≤ max  ⇔  k/(vu+net) ≥ targetNewVT  ⇔  vu+net ≤ k/targetNewVT (floor)
+	maxNewVU := k / targetNewVT
+	if maxNewVU <= virtualUgnot {
+		return 0
+	}
+	return maxNewVU - virtualUgnot
+}
+
 // SellTokens quotes a virtual constant-product sell (gross ugnot out).
 func SellTokens(virtualUgnot, virtualToken, tokensIn int64) (ugnotOut, newVU, newVT int64) {
 	if tokensIn <= 0 {

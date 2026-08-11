@@ -412,9 +412,29 @@ func adenaKeyFromTokenID(tokenID, symbol string) string {
 	return tokenID
 }
 
+// maxGrossForNetIn finds largest gross ugnot ≤ sentMax whose fee-split netIn ≤ maxNet.
+func maxGrossForNetIn(maxNet, sentMax int64) int64 {
+	if maxNet <= 0 || sentMax <= 0 {
+		return 0
+	}
+	lo, hi := int64(0), sentMax
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		f := ammmath.ApplyFee(mid, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
+		net := f.Net + f.Remainder
+		if net <= maxNet {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
 // Buy spends -send ugnot on the bonding curve; credits tokens to the caller.
 // minTokensOut: slippage floor (0 = disabled). Auto-graduates at threshold.
-// Oversized buys that would exceed remaining curve supply panic (no silent dust).
+// If the buy would exceed remaining curve supply, the last tokens are filled and
+// excess ugnot is refunded (so users can "fill the curve" without exact amount).
 func Buy(cur realm, id string, minTokensOut int64) int64 {
 	requireInit()
 	sent := requireUserPayment(cur)
@@ -429,14 +449,40 @@ func Buy(cur realm, id string, minTokensOut int64) int64 {
 		panic("pad: curve sold out — call Graduate")
 	}
 
-	fee := ammmath.ApplyFee(sent, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
+	usedGross := sent
+	fee := ammmath.ApplyFee(usedGross, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
 	// Net enters curve; remainder boosts virtual ugnot (stays as collateral).
 	netIn := fee.Net + fee.Remainder
 
 	tokensOut, newVU, newVT := ammmath.BuyTokens(l.VirtualUgnot, l.VirtualToken, netIn)
-	// Hard fail instead of partial fill + dust (audit Y2).
+	// Last-fill: clamp to remaining curve tokens and refund unused GNOT.
 	if tokensOut > remaining {
-		panic("pad: buy exceeds remaining curve supply — reduce amount")
+		maxNet := ammmath.MaxNetInForTokenOut(l.VirtualUgnot, l.VirtualToken, remaining)
+		if maxNet <= 0 {
+			panic("pad: curve sold out — call Graduate")
+		}
+		usedGross = maxGrossForNetIn(maxNet, sent)
+		if usedGross <= 0 {
+			panic("pad: buy too small for remaining supply")
+		}
+		fee = ammmath.ApplyFee(usedGross, FeeBPS, CreatorFeeShareBPS, ProtocolFeeShareBPS)
+		netIn = fee.Net + fee.Remainder
+		if netIn > maxNet {
+			netIn = maxNet
+		}
+		tokensOut, newVU, newVT = ammmath.BuyTokens(l.VirtualUgnot, l.VirtualToken, netIn)
+		// Tiny integer edge: step down net until ≤ remaining
+		for tokensOut > remaining && netIn > 1 {
+			netIn--
+			tokensOut, newVU, newVT = ammmath.BuyTokens(l.VirtualUgnot, l.VirtualToken, netIn)
+		}
+		if tokensOut > remaining || tokensOut <= 0 {
+			panic("pad: cannot fill remaining curve supply")
+		}
+		refund := sent - usedGross
+		if refund > 0 {
+			sendUgnot(cur, buyer, refund)
+		}
 	}
 	requireMinOut(tokensOut, minTokensOut, "tokens out")
 	checkAndAddSnipe(l, buyer, tokensOut)
@@ -452,15 +498,22 @@ func Buy(cur realm, id string, minTokensOut int64) int64 {
 	addBal(l, buyer, tokensOut)
 	noteBuyer(l, buyer)
 	maybeRefundBond(cur, l)
-	recordTrade(l, TradeSideBuy, sent, tokensOut)
+	recordTrade(l, TradeSideBuy, usedGross, tokensOut)
 
 	chain.Emit("Buy",
 		"id", id,
 		"buyer", buyer.String(),
-		"ugnot", strconv.FormatInt(sent, 10),
+		"ugnot", strconv.FormatInt(usedGross, 10),
 		"tokens", strconv.FormatInt(tokensOut, 10),
 	)
-	notifyTrade(cur, buyer, id, 0, sent)
+	if usedGross < sent {
+		chain.Emit("BuyRefund",
+			"id", id,
+			"buyer", buyer.String(),
+			"refund", strconv.FormatInt(sent-usedGross, 10),
+		)
+	}
+	notifyTrade(cur, buyer, id, 0, usedGross)
 
 	if ammmath.CanGraduate(l.RaisedUgnot, GraduationThreshold) || l.RealSold >= CurveSupply {
 		if l.RaisedUgnot >= GraduationThreshold {

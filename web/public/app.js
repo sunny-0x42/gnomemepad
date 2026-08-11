@@ -630,9 +630,47 @@ function quoteCurveSell(vu, vt, tokensIn, feeBps) {
   }
 }
 
+/** Max net ugnot in for tokensOut ≤ remaining (matches chain floor CPMM). */
+function maxNetInForRemaining(vu, vt, remaining) {
+  if (remaining <= 0 || vu <= 0 || vt <= 0 || remaining >= vt) return 0;
+  try {
+    const vuB = BigInt(vu);
+    const vtB = BigInt(vt);
+    const rem = BigInt(remaining);
+    const targetNewVT = vtB - rem;
+    const k = vuB * vtB;
+    const maxNewVU = k / targetNewVT;
+    if (maxNewVU <= vuB) return 0;
+    return Number(maxNewVU - vuB);
+  } catch {
+    return 0;
+  }
+}
+
+/** Gross ugnot whose fee-split netIn is ≤ maxNet (max such gross ≤ hiCap). */
+function maxGrossForNetIn(maxNet, feeBps, hiCap = 1e15) {
+  if (maxNet <= 0) return 0;
+  let lo = 0;
+  let hi = Math.min(Math.max(maxNet * 2, 1), hiCap);
+  // expand
+  while (hi < hiCap) {
+    const f = applyFeeIn(hi, feeBps);
+    if (f.netIn > maxNet) break;
+    lo = hi;
+    hi = Math.min(hi * 2, hiCap);
+  }
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    const f = applyFeeIn(mid, feeBps);
+    if (f.netIn <= maxNet) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /**
- * Max gross ugnot that still yields tokensOut <= remaining on the curve.
- * Binary search — pad panics if buy would exceed remaining (no partial fill).
+ * Max gross ugnot that still yields tokensOut ≤ remaining on the curve.
+ * Exact net-in bound + fee reverse (tiny haircut for safety on old pads without clamp).
  */
 function maxUgnotForCurveRemaining(m) {
   const remaining = curveRemainingTokens(m);
@@ -641,24 +679,79 @@ function maxUgnotForCurveRemaining(m) {
   const vt = Number(m.virtualToken) || 0;
   const feeBps = feeBpsOf(m);
   if (vu <= 0 || vt <= 0) return 0;
-  // Upper bound: enough to nearly empty virtual tokens (very large) — clamp practically
-  let lo = 0;
-  let hi = 50_000_000_000; // 50k GNOT ugnot upper search
-  // Expand hi until overshoot or cap
-  while (hi < 1e15) {
-    const q = quoteCurveBuy(vu, vt, hi, feeBps);
-    if (!q.ok || q.tokensOut > remaining) break;
-    lo = hi;
-    hi *= 2;
+  const maxNet = maxNetInForRemaining(vu, vt, remaining);
+  if (maxNet <= 0) return 0;
+  let gross = maxGrossForNetIn(maxNet, feeBps);
+  // Verify with quote; step down if still over
+  for (let i = 0; i < 20; i++) {
+    const q = quoteCurveBuy(vu, vt, gross, feeBps);
+    if (q.ok && q.tokensOut <= remaining) break;
+    gross = Math.floor(gross * 0.999);
+    if (gross <= 0) return 0;
   }
+  return gross;
+}
+
+/** Gross ugnot needed so raised + netIn ≥ graduation threshold. */
+function ugnotToGraduate(m) {
+  if (!m || m.status === 1) return 0;
+  const gradUgnot = Number(
+    m.params?.graduation ??
+      (m.params?.graduationGnot != null
+        ? m.params.graduationGnot * UGNOT_PER_GNOT
+        : state.params?.graduation) ??
+      (state.params?.graduationGnot != null
+        ? state.params.graduationGnot * UGNOT_PER_GNOT
+        : 100_000_000),
+  );
+  const raised = Number(m.raised) || 0;
+  const needNet = gradUgnot - raised;
+  if (needNet <= 0) return 0;
+  const feeBps = feeBpsOf(m);
+  // netIn = gross - creator - protocol ≈ gross * (1 - 0.8 * feeBps/10000)
+  // binary search gross
+  let lo = needNet;
+  let hi = needNet * 3 + 1_000_000;
   while (lo < hi) {
-    const mid = Math.floor((lo + hi + 1) / 2);
-    const q = quoteCurveBuy(vu, vt, mid, feeBps);
-    if (q.ok && q.tokensOut <= remaining) lo = mid;
-    else hi = mid - 1;
+    const mid = Math.floor((lo + hi) / 2);
+    const f = applyFeeIn(mid, feeBps);
+    if (f.netIn >= needNet) hi = mid;
+    else lo = mid + 1;
   }
-  // Safety haircut 0.1% so chain rounding never exceeds remaining
-  return Math.floor((lo * 999) / 1000);
+  // Cap by remaining curve so buy succeeds
+  const maxRem = maxUgnotForCurveRemaining(m);
+  if (maxRem > 0 && lo > maxRem) {
+    // Cannot graduate in one buy if remaining tokens run out first — return max rem
+    // (caller should still buy remaining / wait)
+    return maxRem;
+  }
+  // Small buffer so rounding still crosses threshold
+  return Math.min(lo + Math.ceil(lo * 0.002), maxRem > 0 ? maxRem : lo + 1000);
+}
+
+function graduationMeta(m) {
+  if (!m || m.status === 1) {
+    return { ready: true, needGnot: 0, remainingTokens: 0, pct: 100, maxBuyGnot: 0, gradGnot: 0 };
+  }
+  const gradUgnot = Number(
+    m.params?.graduation ??
+      (m.params?.graduationGnot != null ? m.params.graduationGnot * UGNOT_PER_GNOT : null) ??
+      state.params?.graduation ??
+      100_000_000,
+  );
+  const raised = Number(m.raised) || 0;
+  const needUgnot = Math.max(0, gradUgnot - raised);
+  const rem = curveRemainingTokens(m);
+  const maxBuy = maxUgnotForCurveRemaining(m);
+  return {
+    ready: needUgnot <= 0,
+    needGnot: needUgnot / UGNOT_PER_GNOT,
+    remainingTokens: rem,
+    pct: m.progressPct ?? Math.min(100, Math.floor((raised * 100) / gradUgnot)),
+    maxBuyGnot: maxBuy / UGNOT_PER_GNOT,
+    gradGnot: gradUgnot / UGNOT_PER_GNOT,
+    toGradUgnot: ugnotToGraduate(m),
+  };
 }
 
 /** Pool swap buy. */
@@ -2735,6 +2828,28 @@ function renderToken(m) {
         </label>
       </div>
       <div id="tradeBuy">
+        ${
+          !isPool
+            ? `<div class="grad-assist" id="gradAssist">
+          <div class="grad-assist-title">Finish curve → Gnoswap</div>
+          <div class="grad-assist-stats">
+            <div><span class="muted">Raised / grad</span><strong id="gradRaisedLine">—</strong></div>
+            <div><span class="muted">Need more</span><strong id="gradNeedLine">—</strong></div>
+            <div><span class="muted">Curve tokens left</span><strong id="gradRemLine">—</strong></div>
+            <div><span class="muted">Safe max buy</span><strong id="gradMaxLine">—</strong></div>
+          </div>
+          <div class="grad-assist-actions">
+            <button type="button" class="btn sm primary" id="btnBuyToGrad" title="Fill amount to hit graduation threshold">Buy to graduate</button>
+            <button type="button" class="btn sm" id="btnBuyRemaining" title="Fill amount to buy all remaining curve tokens">Buy remaining curve</button>
+            <button type="button" class="btn sm" id="btnGraduate" hidden title="Permissionless graduate when threshold met">Graduate now</button>
+          </div>
+          <p class="muted" style="font-size:0.72rem;margin:0.4rem 0 0">
+            Graduation needs <strong>raised GNOT</strong> ≥ threshold (not 100% of supply).
+            Pad may auto-graduate on the buy that crosses the line. Then list GRC20 on Gnoswap.
+          </p>
+        </div>`
+            : ""
+        }
         <form class="form" id="buyForm">
           <label>Amount (GNOT)
             <input name="amount" id="buyAmount" type="number" min="0.000001" step="any" value="0.3" class="mono" required />
@@ -3085,6 +3200,99 @@ function wireToken(m) {
     });
   });
 
+  function setBuyAmountGnot(gnot) {
+    const input = $("#buyAmount") || $('#buyForm [name="amount"]');
+    if (!input) return;
+    const g = Math.max(0, Number(gnot) || 0);
+    input.value = g > 0 ? (Math.floor(g * 1e6) / 1e6).toString() : "0";
+    updateBuyQuote();
+  }
+
+  function refreshGradAssist() {
+    if (m.status === 1) return;
+    const meta = graduationMeta(m);
+    const raisedEl = $("#gradRaisedLine");
+    const needEl = $("#gradNeedLine");
+    const remEl = $("#gradRemLine");
+    const maxEl = $("#gradMaxLine");
+    const raisedG = Number(m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT);
+    if (raisedEl)
+      raisedEl.textContent = `${fmtGnot(raisedG, { alreadyGnot: true })} / ${fmtGnot(meta.gradGnot, { alreadyGnot: true })} (${meta.pct}%)`;
+    if (needEl)
+      needEl.textContent = meta.ready
+        ? "Ready — graduate"
+        : `~${meta.needGnot.toFixed(4)} GNOT net`;
+    if (remEl) remEl.textContent = fmtNum(meta.remainingTokens);
+    if (maxEl)
+      maxEl.textContent =
+        meta.maxBuyGnot > 0 ? `~${meta.maxBuyGnot.toFixed(6)} GNOT` : "—";
+    const btnG = $("#btnGraduate");
+    if (btnG) btnG.hidden = !meta.ready;
+    const btnToGrad = $("#btnBuyToGrad");
+    if (btnToGrad) {
+      btnToGrad.disabled = meta.ready || meta.toGradUgnot <= 0;
+      btnToGrad.textContent = meta.ready
+        ? "Threshold met"
+        : `Buy to graduate (~${(meta.toGradUgnot / UGNOT_PER_GNOT).toFixed(4)} GNOT)`;
+    }
+    const btnRem = $("#btnBuyRemaining");
+    if (btnRem) {
+      btnRem.disabled = meta.remainingTokens <= 0 || meta.maxBuyGnot <= 0;
+      btnRem.textContent =
+        meta.maxBuyGnot > 0
+          ? `Buy remaining (~${meta.maxBuyGnot.toFixed(4)} GNOT)`
+          : "Curve empty";
+    }
+  }
+
+  $("#btnBuyToGrad")?.addEventListener("click", () => {
+    const meta = graduationMeta(m);
+    if (meta.ready) {
+      toast("Already at graduation threshold — click Graduate now");
+      return;
+    }
+    let g = meta.toGradUgnot / UGNOT_PER_GNOT;
+    // Don't exceed wallet (leave gas dust)
+    if (tradeBal.gnot > 0) g = Math.min(g, Math.max(0, tradeBal.gnot - 0.05));
+    if (g <= 0) {
+      toast("Need more GNOT in wallet to graduate", false);
+      return;
+    }
+    setBuyAmountGnot(g);
+    // Looser minOut for fill buys (size may clamp on-chain)
+    toast(`Filled ~${g.toFixed(6)} GNOT to cross graduate line`);
+  });
+  $("#btnBuyRemaining")?.addEventListener("click", () => {
+    const meta = graduationMeta(m);
+    let g = meta.maxBuyGnot;
+    if (tradeBal.gnot > 0) g = Math.min(g, Math.max(0, tradeBal.gnot - 0.05));
+    if (g <= 0) {
+      toast("No remaining curve room or need GNOT", false);
+      return;
+    }
+    setBuyAmountGnot(g);
+    toast(`Filled max ~${g.toFixed(6)} GNOT for remaining curve tokens`);
+  });
+  $("#btnGraduate")?.addEventListener("click", async () => {
+    if (!requireSigner("graduate")) return;
+    const logEl = $("#txLog");
+    if (logEl) {
+      logEl.hidden = false;
+      logEl.textContent = "Broadcasting Graduate…";
+    }
+    try {
+      const r = await broadcastRealm("Graduate", [m.id], "", marketPkg);
+      toast("Graduate submitted");
+      if (logEl) logEl.textContent = `Graduate OK\n${r.hash || ""}`;
+      await openToken(m.id, marketPkg);
+      refreshMarkets({ force: true });
+    } catch (err) {
+      toast(String(err.message || err), false);
+      if (logEl) logEl.textContent = String(err.message || err);
+    }
+  });
+  refreshGradAssist();
+
   // Buy quick: fixed GNOT or % of wallet GNOT (capped by remaining curve supply)
   $$("#buyQuick button").forEach((b) => {
     b.addEventListener("click", () => {
@@ -3151,6 +3359,7 @@ function wireToken(m) {
       return;
     }
     // Double-check remaining right before send (fresh sold if available on m)
+    let sendMinOut = minOut;
     if (m.status !== 1) {
       const rem = curveRemainingTokens(m);
       const qCheck = quoteCurveBuy(
@@ -3160,14 +3369,23 @@ function wireToken(m) {
         feeBpsOf(m),
       );
       if (qCheck.ok && rem > 0 && qCheck.tokensOut > rem) {
-        toast(`Would buy ${fmtNum(qCheck.tokensOut)} but only ${fmtNum(rem)} left on curve — reduce GNOT`, false);
+        // Old pads panic; new pads clamp+refund — still guide user to safe amount
+        const maxU = maxUgnotForCurveRemaining(m);
+        toast(
+          `Would buy ${fmtNum(qCheck.tokensOut)} but only ${fmtNum(rem)} left. Use "Buy remaining" (~${(maxU / UGNOT_PER_GNOT).toFixed(6)} GNOT) or reduce.`,
+          false,
+        );
         return;
+      }
+      // Near full remaining fill: loosen minOut so last-token clamp / rounding won't fail slippage
+      if (qCheck.ok && rem > 0 && qCheck.tokensOut >= rem * 0.9) {
+        sendMinOut = Math.min(sendMinOut, Math.max(1, Math.floor(rem * 0.5)));
       }
     }
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     log(
-      `Broadcasting buy ${amountGnot} GNOT on ${m.padLabel || "pad"}…\nest ${fmtNum(expected)} tokens · min ${fmtNum(minOut)} (slip ${slipPct}%)`,
+      `Broadcasting buy ${amountGnot} GNOT on ${m.padLabel || "pad"}…\nest ${fmtNum(expected)} tokens · min ${fmtNum(sendMinOut)} (slip ${slipPct}%)`,
     );
     try {
       const func = m.status === 1 ? "SwapBuy" : "Buy";
@@ -3175,7 +3393,7 @@ function wireToken(m) {
       const useMinOut = padSupportsMinOut(marketPkg);
       const r = await broadcastRealm(
         func,
-        useMinOut ? [m.id, String(minOut)] : [m.id],
+        useMinOut ? [m.id, String(sendMinOut)] : [m.id],
         `${amountUgnot}ugnot`,
         marketPkg,
       );
