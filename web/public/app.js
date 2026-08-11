@@ -580,30 +580,85 @@ function applyFeeOut(grossOut, feeBps) {
   return { gross: grossOut, fee, net };
 }
 
-/** Curve buy: tokens out for ugnotIn (base units). */
+/** Curve remaining tokens that can still be bought (CurveSupply - sold). */
+function curveRemainingTokens(m) {
+  if (!m || m.status === 1) return 0;
+  const curve = Number(m.params?.curveSupply ?? state.params?.curveSupply ?? 800_000_000);
+  const sold = Number(m.sold) || 0;
+  return Math.max(0, curve - sold);
+}
+
+/** Curve buy: tokens out for ugnotIn (base units). BigInt k to match chain. */
 function quoteCurveBuy(vu, vt, ugnotIn, feeBps) {
   if (ugnotIn <= 0 || vu <= 0 || vt <= 0) return { ok: false, reason: "invalid" };
   const f = applyFeeIn(ugnotIn, feeBps);
   if (f.netIn <= 0) return { ok: false, reason: "fee" };
-  const newVU = vu + f.netIn;
-  const k = vu * vt;
-  const newVT = Math.floor(k / newVU);
-  if (newVT <= 0 || newVT >= vt) return { ok: false, reason: "zero-out" };
-  const tokensOut = vt - newVT;
-  return { ok: true, tokensOut, netIn: f.netIn, fee: f.fee };
+  try {
+    const vuB = BigInt(vu);
+    const vtB = BigInt(vt);
+    const netB = BigInt(f.netIn);
+    const newVU = vuB + netB;
+    const k = vuB * vtB;
+    const newVT = k / newVU;
+    if (newVT <= 0n || newVT >= vtB) return { ok: false, reason: "zero-out" };
+    const tokensOut = Number(vtB - newVT);
+    if (!Number.isFinite(tokensOut) || tokensOut <= 0) return { ok: false, reason: "zero-out" };
+    return { ok: true, tokensOut, netIn: f.netIn, fee: f.fee };
+  } catch {
+    return { ok: false, reason: "overflow" };
+  }
 }
 
 /** Curve sell: net ugnot out for tokensIn. */
 function quoteCurveSell(vu, vt, tokensIn, feeBps) {
   if (tokensIn <= 0 || vu <= 0 || vt <= 0) return { ok: false, reason: "invalid" };
-  const newVT = vt + tokensIn;
-  const k = vu * vt;
-  const newVU = Math.floor(k / newVT);
-  if (newVU <= 0 || newVU >= vu) return { ok: false, reason: "zero-out" };
-  const gross = vu - newVU;
-  const f = applyFeeOut(gross, feeBps);
-  if (f.net <= 0) return { ok: false, reason: "fee" };
-  return { ok: true, ugnotOut: f.net, gross, fee: f.fee };
+  try {
+    const vuB = BigInt(vu);
+    const vtB = BigInt(vt);
+    const tin = BigInt(tokensIn);
+    const newVT = vtB + tin;
+    const k = vuB * vtB;
+    const newVU = k / newVT;
+    if (newVU <= 0n || newVU >= vuB) return { ok: false, reason: "zero-out" };
+    const gross = Number(vuB - newVU);
+    if (!Number.isFinite(gross) || gross <= 0) return { ok: false, reason: "zero-out" };
+    const f = applyFeeOut(gross, feeBps);
+    if (f.net <= 0) return { ok: false, reason: "fee" };
+    return { ok: true, ugnotOut: f.net, gross, fee: f.fee };
+  } catch {
+    return { ok: false, reason: "overflow" };
+  }
+}
+
+/**
+ * Max gross ugnot that still yields tokensOut <= remaining on the curve.
+ * Binary search — pad panics if buy would exceed remaining (no partial fill).
+ */
+function maxUgnotForCurveRemaining(m) {
+  const remaining = curveRemainingTokens(m);
+  if (remaining <= 0) return 0;
+  const vu = Number(m.virtualUgnot) || 0;
+  const vt = Number(m.virtualToken) || 0;
+  const feeBps = feeBpsOf(m);
+  if (vu <= 0 || vt <= 0) return 0;
+  // Upper bound: enough to nearly empty virtual tokens (very large) — clamp practically
+  let lo = 0;
+  let hi = 50_000_000_000; // 50k GNOT ugnot upper search
+  // Expand hi until overshoot or cap
+  while (hi < 1e15) {
+    const q = quoteCurveBuy(vu, vt, hi, feeBps);
+    if (!q.ok || q.tokensOut > remaining) break;
+    lo = hi;
+    hi *= 2;
+  }
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    const q = quoteCurveBuy(vu, vt, mid, feeBps);
+    if (q.ok && q.tokensOut <= remaining) lo = mid;
+    else hi = mid - 1;
+  }
+  // Safety haircut 0.1% so chain rounding never exceeds remaining
+  return Math.floor((lo * 999) / 1000);
 }
 
 /** Pool swap buy. */
@@ -641,14 +696,22 @@ function quoteTrade(m, side, amount) {
       ? quotePoolBuy(Number(m.poolUgnot) || 0, Number(m.poolToken) || 0, ugnotIn, feeBps)
       : quoteCurveBuy(Number(m.virtualUgnot) || 0, Number(m.virtualToken) || 0, ugnotIn, feeBps);
     if (!q.ok) return q;
+    const remaining = isPool ? null : curveRemainingTokens(m);
+    const exceeds =
+      !isPool && remaining != null && remaining >= 0 && q.tokensOut > remaining;
     return {
-      ok: true,
+      ok: !exceeds,
+      reason: exceeds ? "exceeds-curve" : undefined,
       side: "buy",
       ugnotIn,
       expectedOut: q.tokensOut,
+      remaining,
+      exceedsCurve: !!exceeds,
       outUnit: "tokens",
       feeUgnot: q.fee,
       feeBps,
+      // still expose quote numbers for UI even when exceeds
+      tokensOut: q.tokensOut,
     };
   }
   const tokensIn = Math.floor(Number(amount) || 0);
@@ -2691,6 +2754,7 @@ function renderToken(m) {
             <div class="quote-row"><span>Min received</span><span class="mono" id="buyMin">—</span></div>
             <div class="quote-row muted"><span>Fee (~${(feeBpsOf(m) / 100).toFixed(2)}%)</span><span class="mono" id="buyFee">—</span></div>
             <p class="quote-warn muted" id="buySlipWarn" hidden>0% slippage = no minOut protection on-chain.</p>
+            <p class="quote-warn bad-uri" id="buyCurveWarn" hidden>Buy exceeds remaining curve supply.</p>
           </div>
           <button class="btn primary wide" type="submit">Buy</button>
         </form>
@@ -2945,24 +3009,46 @@ function wireToken(m) {
     const estEl = $("#buyEst");
     const minEl = $("#buyMin");
     const feeEl = $("#buyFee");
-    if (!q.ok) {
+    const warn = $("#buySlipWarn");
+    const curveWarn = $("#buyCurveWarn");
+    if (!q.ok && !q.exceedsCurve) {
       if (estEl) estEl.textContent = "—";
       if (minEl) minEl.textContent = "—";
       if (feeEl) feeEl.textContent = "—";
-      return { minOut: 0, expected: 0 };
+      if (curveWarn) curveWarn.hidden = true;
+      if (warn) warn.hidden = true;
+      return { minOut: 0, expected: 0, exceedsCurve: false };
     }
-    const minOut = minOutFromQuote(q.expectedOut, slipPct);
-    if (estEl) estEl.textContent = fmtNum(q.expectedOut);
+    const expected = q.expectedOut || q.tokensOut || 0;
+    const minOut = minOutFromQuote(expected, slipPct);
+    if (estEl) {
+      estEl.textContent = fmtNum(expected);
+      if (q.exceedsCurve && q.remaining != null) {
+        estEl.textContent = `${fmtNum(expected)} (need ≤ ${fmtNum(q.remaining)} left on curve)`;
+      }
+    }
     if (minEl) {
       minEl.textContent = slipPct > 0 ? fmtNum(minOut) : "none (0% slip)";
-      minEl.classList.toggle("warn-min", slipPct > 0 && minOut <= 0 && q.expectedOut > 0);
+      minEl.classList.toggle("warn-min", slipPct > 0 && minOut <= 0 && expected > 0);
     }
     if (feeEl) feeEl.textContent = fmtGnot(q.feeUgnot);
-    const warn = $("#buySlipWarn");
     if (warn) {
-      warn.hidden = !(slipPct <= 0 && padSupportsMinOut(m.pkg || ""));
+      warn.hidden = !(slipPct <= 0 && padSupportsMinOut(m.pkg || "") && !q.exceedsCurve);
     }
-    return { minOut, expected: q.expectedOut };
+    if (curveWarn) {
+      curveWarn.hidden = !q.exceedsCurve;
+      if (q.exceedsCurve) {
+        const maxU = maxUgnotForCurveRemaining(m);
+        const maxG = maxU / UGNOT_PER_GNOT;
+        curveWarn.textContent = `Buy too large for remaining curve supply (${fmtNum(q.remaining)} tokens left). Max ~${maxG > 0 ? maxG.toFixed(6) : "0"} GNOT — reduce amount or wait for graduate.`;
+      }
+    }
+    return {
+      minOut: q.exceedsCurve ? 0 : minOut,
+      expected: q.exceedsCurve ? 0 : expected,
+      exceedsCurve: !!q.exceedsCurve,
+      remaining: q.remaining,
+    };
   }
 
   function updateSellQuote() {
@@ -2999,7 +3085,7 @@ function wireToken(m) {
     });
   });
 
-  // Buy quick: fixed GNOT or % of wallet GNOT
+  // Buy quick: fixed GNOT or % of wallet GNOT (capped by remaining curve supply)
   $$("#buyQuick button").forEach((b) => {
     b.addEventListener("click", () => {
       const input = $("#buyAmount") || $('#buyForm [name="amount"]');
@@ -3008,7 +3094,13 @@ function wireToken(m) {
         const pct = Number(b.dataset.pct) / 100;
         const g = tradeBal.gnot * pct;
         // leave a tiny dust for gas if MAX
-        const use = b.dataset.pct === "100" ? Math.max(0, tradeBal.gnot - 0.05) : g;
+        let use = b.dataset.pct === "100" ? Math.max(0, tradeBal.gnot - 0.05) : g;
+        // Cap by remaining curve tokens (Buy panics if tokensOut > remaining)
+        if (m.status !== 1) {
+          const maxU = maxUgnotForCurveRemaining(m);
+          const maxG = maxU / UGNOT_PER_GNOT;
+          if (maxG > 0 && use > maxG) use = maxG;
+        }
         input.value = use > 0 ? (Math.floor(use * 1e6) / 1e6).toString() : "0";
       } else {
         input.value = b.dataset.v;
@@ -3044,10 +3136,33 @@ function wireToken(m) {
       toast("Invalid GNOT amount", false);
       return;
     }
-    const { minOut, expected } = updateBuyQuote();
+    const { minOut, expected, exceedsCurve, remaining } = updateBuyQuote();
+    if (exceedsCurve) {
+      const maxU = maxUgnotForCurveRemaining(m);
+      const maxG = maxU / UGNOT_PER_GNOT;
+      toast(
+        `Buy exceeds remaining curve (${fmtNum(remaining)} tokens left). Max ~${maxG.toFixed(6)} GNOT`,
+        false,
+      );
+      return;
+    }
     if (expected <= 0) {
       toast("Cannot quote this buy (check amount / pool)", false);
       return;
+    }
+    // Double-check remaining right before send (fresh sold if available on m)
+    if (m.status !== 1) {
+      const rem = curveRemainingTokens(m);
+      const qCheck = quoteCurveBuy(
+        Number(m.virtualUgnot) || 0,
+        Number(m.virtualToken) || 0,
+        amountUgnot,
+        feeBpsOf(m),
+      );
+      if (qCheck.ok && rem > 0 && qCheck.tokensOut > rem) {
+        toast(`Would buy ${fmtNum(qCheck.tokensOut)} but only ${fmtNum(rem)} left on curve — reduce GNOT`, false);
+        return;
+      }
     }
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
