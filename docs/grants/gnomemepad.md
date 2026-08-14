@@ -5,7 +5,8 @@
 - **Team:** **Ekudo Research**
 - **Links**
   - **Live demo (Sapphire testnet):** https://gnomemepad-sapphire.netlify.app  
-  - **GitHub:** https://github.com/sunny-0x42/gnomemepad  
+  - **GitHub (public monorepo):** https://github.com/sunny-0x42/gnomemepad  
+  - **Backend API (private):** https://github.com/sunny-0x42/gnomemepad-backend  
   - **X / Twitter:** *To be added*  
   - **Primary on-chain package (Sapphire):**  
     `gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv22`  
@@ -13,7 +14,7 @@
   - **Ecosystem:** [Gnoswap](https://gnoswap.io/) · [Adena](https://adena.app/) · [docs.gno.land](https://docs.gno.land)
 
 **Open-source posture:**  
-The production **web UI and backend API** are not published as open source. **On-chain Gno packages are fully transparent** by Gno.land design (source readable on-chain / via gnoweb). Under this grant, Ekudo Research commits to **openly publishing realm sources, pure packages, the economic specification, and builder documentation**—the layer other developers need to reuse and audit—while keeping the proprietary frontend separate.
+The **public** repository hosts on-chain Gno packages, deploy trees, scripts, docs, and (as committed) the web UI. The **chain-read API / Netlify functions backend** is maintained in a **private** repo (`gnomemepad-backend`) and is gitignored from the public monorepo. **On-chain Gno packages remain fully transparent** by Gno.land design. Under this grant, Ekudo Research commits to **openly publishing realm sources, pure packages, the economic specification, and builder documentation**.
 
 **Grant request:** **USD $5,000** over **3 months**, milestone-based.
 
