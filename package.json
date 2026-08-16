@@ -1,14 +1,20 @@
 {
   "name": "gnomemepad",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Gno.land meme launchpad UI (Netlify static + serverless API)",
+  "description": "Gno.land meme launchpad — React UI + Netlify API → Sapphire",
   "scripts": {
+    "dev": "node web/api-dev.mjs",
+    "dev:ui": "npm run dev --prefix web/ui",
+    "dev:all": "node web/api-dev.mjs & npm run dev --prefix web/ui",
+    "build": "npm run build --prefix web/ui",
     "start": "node web/server.mjs",
     "start:sapphire": "node --env-file=web/.env.sapphire web/server.mjs",
     "netlify:dev": "npx netlify-cli dev",
-    "netlify:deploy": "npx netlify-cli deploy --prod"
+    "netlify:deploy": "npx netlify-cli deploy --prod",
+    "token-resource:plan": "node scripts/sync-token-resource.mjs --dry",
+    "token-resource:sync": "node scripts/sync-token-resource.mjs"
   },
   "engines": {
     "node": ">=18"

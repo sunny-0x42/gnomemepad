@@ -1,0 +1,55 @@
+# Auto-register gnomemepad tokens so Gnoswap/Adena can show logos.
+# Opens a PR against onbloc/gno-token-resource from your fork.
+#
+# Required secrets:
+#   TOKEN_RESOURCE_GITHUB_TOKEN  — PAT (repo) that can push to FORK + open PR upstream
+#   TOKEN_RESOURCE_FORK          — e.g. sunny-0x42/gno-token-resource
+# Optional vars:
+#   API_BASE — default https://gnomemepad-sapphire.netlify.app
+
+name: Sync token-resource (Gnoswap logos)
+
+on:
+  schedule:
+    - cron: "20 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (list missing only, no PR)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Sync missing tokens → gno-token-resource PR
+        env:
+          API_BASE: ${{ vars.API_BASE }}
+          TOKEN_RESOURCE_GITHUB_TOKEN: ${{ secrets.TOKEN_RESOURCE_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TOKEN_RESOURCE_GITHUB_TOKEN }}
+          TOKEN_RESOURCE_FORK: ${{ secrets.TOKEN_RESOURCE_FORK }}
+          TOKEN_RESOURCE_UPSTREAM: onbloc/gno-token-resource
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+        run: |
+          export API_BASE="${API_BASE:-https://gnomemepad-sapphire.netlify.app}"
+          if [ -z "${TOKEN_RESOURCE_GITHUB_TOKEN}" ] || [ -z "${TOKEN_RESOURCE_FORK}" ]; then
+            echo "Missing TOKEN_RESOURCE_GITHUB_TOKEN or TOKEN_RESOURCE_FORK secrets."
+            echo "Add them under repo Settings → Secrets, then re-run."
+            exit 1
+          fi
+          node scripts/sync-token-resource.mjs
