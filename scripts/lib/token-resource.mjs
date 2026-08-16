@@ -365,21 +365,21 @@ export async function syncTokenResourcePr(plan, opts = {}) {
     return { ok: false, error: `fork check: ${e.message || e}` };
   }
 
-  // Get base SHA of fork main
-  const refRes = await fetch(`https://api.github.com/repos/${forkFull}/git/ref/heads/main`, {
+  // Get base SHA of fork default branch
+  let branchName = "main";
+  let refRes = await fetch(`https://api.github.com/repos/${forkFull}/git/ref/heads/main`, {
     headers,
   });
   if (!refRes.ok) {
-    // try master
-    const ref2 = await fetch(`https://api.github.com/repos/${forkFull}/git/ref/heads/master`, {
+    branchName = "master";
+    refRes = await fetch(`https://api.github.com/repos/${forkFull}/git/ref/heads/master`, {
       headers,
     });
-    if (!ref2.ok) {
+    if (!refRes.ok) {
       return { ok: false, error: `cannot read fork default branch: ${refRes.status}` };
     }
   }
-  const branchName = refRes.ok ? "main" : "master";
-  const refData = await (refRes.ok ? refRes : fetch(`https://api.github.com/repos/${forkFull}/git/ref/heads/master`, { headers })).then((r) => r.json());
+  const refData = await refRes.json();
   const baseSha = refData?.object?.sha;
   if (!baseSha) return { ok: false, error: "no base sha" };
 
