@@ -16,10 +16,11 @@
  *   TOKEN_RESOURCE_SYNC_SECRET   if remote API is protected
  */
 
+// Public copy (web/lib is private/gitignored — CI must not import it)
 import {
   buildRegistrationPlan,
   syncTokenResourcePr,
-} from "../web/lib/token-resource.mjs";
+} from "./lib/token-resource.mjs";
 
 const API_BASE = (
   process.env.API_BASE ||
