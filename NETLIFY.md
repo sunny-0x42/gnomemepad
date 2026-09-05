@@ -1,6 +1,28 @@
 # Deploy UI to Netlify
 
-Static frontend (`web/public`) + serverless function for **read** APIs (markets, portfolio, charts) against **Gno Sapphire**.
+React (Vite) frontend (`web/ui`) + serverless functions for **read** APIs against Gno Sapphire.
+Production: **https://gnomi.fun** (site `gnomemepad-sapphire`).
+
+## Continuous deploy (collaborators)
+
+Pushes / merges to **`master`** that touch `web/**` or `netlify.toml` trigger
+[`.github/workflows/netlify-deploy.yml`](.github/workflows/netlify-deploy.yml).
+
+| Event | Result |
+|---|---|
+| Push to `master` | Production deploy → gnomi.fun |
+| Pull request | Draft Netlify preview + PR comment |
+| Actions → “Deploy Netlify” → Run workflow | Manual prod/preview |
+
+**Required GitHub Actions secrets** (already set on `sunny-0x42/gnomemepad`):
+
+| Secret | Value |
+|---|---|
+| `NETLIFY_AUTH_TOKEN` | Netlify personal access token |
+| `NETLIFY_SITE_ID` | `a64de89a-8ba0-49a2-a38e-1cea76b81996` |
+
+Collaborators (`nhatphamcdn`, …) only need **write** on the repo — they do **not** need Netlify login.
+Merge (or push) to `master` → Actions builds → Netlify updates.
 
 ## What works on Netlify
 
@@ -15,38 +37,30 @@ Static frontend (`web/public`) + serverless function for **read** APIs (markets,
 3. Open the site → **Connect wallet** → **Adena Wallet**
 4. Create / trade — approve each tx in Adena
 
-## One-time setup
+## Build settings (`netlify.toml`)
 
-1. Account: https://app.netlify.com  
-2. Repo: https://github.com/sunny-0x42/gnomemepad (or your fork)  
-3. **Add new site → Import from Git** → pick `gnomemepad`  
-4. Build settings (already in `netlify.toml`):
-   - Publish directory: `web/public`
-   - Functions directory: `web/netlify/functions`
-5. Deploy
+- Build: `npm run build --prefix web/ui`
+- Publish: `web/ui/dist`
+- Functions: `web/netlify/functions`
 
-### Env vars (optional; defaults in `netlify.toml`)
+### Env vars (override in Netlify Dashboard if needed)
 
-| Variable | Default (Sapphire deploy) |
+| Variable | Default (Sapphire) |
 |---|---|
 | `RPC_URL` | `https://rpc.sapphire.testnets.gno.land:443` |
 | `CHAIN_ID` | `sapphire-1` |
-| `PKG` | `gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pad` |
-| `SIGNER_ADDR` | `g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr` |
+| `PKG` | `…/padv22` |
+| `HUB` / `PROFILE` / `META` / `POINTS` / `BOND` | matching Sapphire paths |
+| `SIGNER_ADDR` | deploy wallet `g1mv0052…` |
 
-## CLI deploy
+## Manual CLI deploy
 
 ```powershell
 cd C:\Users\Hi\gnomemepad
 npx netlify-cli login
-npx netlify-cli init     # link site once
+npx netlify-cli link   # site: gnomemepad-sapphire
+npm run build --prefix web/ui
 npx netlify-cli deploy --prod
-```
-
-Draft preview:
-
-```powershell
-npx netlify-cli deploy
 ```
 
 ## Local Netlify emulator
@@ -54,10 +68,3 @@ npx netlify-cli deploy
 ```powershell
 npx netlify-cli dev
 ```
-
-Opens UI + `/api/*` like production.
-
-## After deploy
-
-Open `https://<site>.netlify.app` → should show Sapphire height + markets.  
-Create coins: still via local/CLI against the same `PKG`.

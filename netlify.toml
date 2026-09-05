@@ -1,37 +1,41 @@
-# gnomemepad UI → Netlify (static + serverless read API → Gno Sapphire)
+# gnomemepad — React (Vite) UI + serverless API → Gno Sapphire
 #
-# Deploy:
-#   npx netlify-cli login
-#   npx netlify-cli init   # or link existing site
+# Auto-deploy: GitHub Actions (.github/workflows/netlify-deploy.yml) on push to master.
+# Manual:
+#   npm run build --prefix web/ui
 #   npx netlify-cli deploy --prod
 #
-# Env (defaults below; override in Netlify Dashboard → Site settings → Environment):
-#   RPC_URL, CHAIN_ID, PKG, SIGNER_ADDR
+# Env (Netlify Dashboard or below):
+#   RPC_URL, CHAIN_ID, PKG, HUB, PROFILE, META, POINTS, BOND, SIGNER_ADDR
 
 [build]
-  publish = "web/public"
+  command = "npm run build --prefix web/ui"
+  publish = "web/ui/dist"
   functions = "web/netlify/functions"
-  command = "node -e \"console.log('netlify build: static web/public')\""
 
 [build.environment]
   NODE_VERSION = "20"
   RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
   CHAIN_ID = "sapphire-1"
-  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv7"
+  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv22"
   HUB = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/hubv2"
   PROFILE = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
   META = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/meta"
   POINTS = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pointsv2"
+  BOND = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/bond"
   SIGNER_ADDR = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr"
-  # Expose to functions (Netlify prefixes)
-  # Already available as process.env.* in functions when set here
 
-# /api/markets → function with splat path
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
+
+# SPA fallback (React Router)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
 
 [[headers]]
   for = "/*"

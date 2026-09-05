@@ -16,7 +16,10 @@ export default function Admin() {
   const [log, setLog] = useState("");
   const [withdraw, setWithdraw] = useState("");
   const [newTreasury, setNewTreasury] = useState("");
-  const [promoUgnot, setPromoUgnot] = useState("20000000");
+  const [promoUgnot, setPromoUgnot] = useState("100000000");
+  const [gradGnotInput, setGradGnotInput] = useState("");
+  const [bondGnotInput, setBondGnotInput] = useState("100");
+  const [listFeeGnsInput, setListFeeGnsInput] = useState("100");
   const [claimBusy, setClaimBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -560,7 +563,7 @@ export default function Admin() {
               </article>
 
               <article className="admin-card">
-                <h3>Params</h3>
+                <h3>Params (live)</h3>
                 <div className="admin-kv">
                   <span>Bond (live)</span>
                   <strong>
@@ -576,7 +579,13 @@ export default function Admin() {
                 </div>
                 <div className="admin-kv">
                   <span>Graduate</span>
-                  <strong>{p.graduationGnot ?? "—"} GNOT</strong>
+                  <strong>{p.graduationGnot ?? raiseGnot ?? "—"} GNOT</strong>
+                </div>
+                <div className="admin-kv">
+                  <span>List fee GNS</span>
+                  <strong>
+                    {p.listFeeGnsUnits != null ? `${p.listFeeGnsUnits} GNS` : "—"}
+                  </strong>
                 </div>
                 <div className="admin-kv">
                   <span>Fee</span>
@@ -587,10 +596,73 @@ export default function Admin() {
               </article>
 
               <article className="admin-card admin-card-wide">
+                <h3>Set raise target (protocol)</h3>
+                <p className="muted admin-hint">
+                  Calls pad <code className="mono">SetGraduationThreshold</code> (ugnot). Affects open
+                  curve launches&apos; remaining raise / ready-to-graduate. Prefer setting before public
+                  creates.
+                </p>
+                <div className="admin-withdraw-row">
+                  <input
+                    className="admin-input"
+                    value={gradGnotInput}
+                    onChange={(e) => setGradGnotInput(e.target.value)}
+                    placeholder={`raise GNOT (current ${p.graduationGnot ?? raiseGnot ?? "—"})`}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm primary"
+                    onClick={() => {
+                      const g = Number(gradGnotInput);
+                      if (!(g > 0) || !Number.isFinite(g)) {
+                        showToast("Enter raise in GNOT (> 0)", false);
+                        return;
+                      }
+                      const ug = Math.floor(g * 1e6);
+                      if (
+                        !window.confirm(
+                          `Set graduation threshold to ${g} GNOT (${ug} ugnot)?\nOpen curve markets will use the new target.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      run("SetGraduationThreshold", "SetGraduationThreshold", [String(ug)]);
+                    }}
+                  >
+                    SetGraduationThreshold
+                  </button>
+                </div>
+                <div className="admin-withdraw-row" style={{ marginTop: "0.5rem" }}>
+                  <input
+                    className="admin-input"
+                    value={listFeeGnsInput}
+                    onChange={(e) => setListFeeGnsInput(e.target.value)}
+                    placeholder="list fee GNS units (e.g. 100)"
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    onClick={() => {
+                      const u = Number(listFeeGnsInput);
+                      if (!(u >= 0) || !Number.isFinite(u)) {
+                        showToast("Enter GNS amount (>= 0)", false);
+                        return;
+                      }
+                      const base = Math.floor(u * 1e6);
+                      run("SetListFeeGns", "SetListFeeGns", [String(base)]);
+                    }}
+                  >
+                    SetListFeeGns
+                  </button>
+                </div>
+              </article>
+
+              <article className="admin-card admin-card-wide">
                 <h3>Create bond policy</h3>
                 <p className="muted admin-hint">
-                  Separate realm <code className="mono">{bondPkg || "…/bond"}</code> — pad upgrades
-                  do not replace this. Promo ≈ $20 in GNOT (set ugnot); 10 days or EndPromo → 2 GNOT.
+                  Bond realm <code className="mono">{bondPkg || "…/bond"}</code> —{" "}
+                  <code className="mono">SetNormalBond</code> / promo. Default: 100 GNOT.
+                  Single admin address (no on-pad multisig).
                 </p>
                 {bond && !bond.error && (
                   <div className="admin-mini-stats" style={{ marginBottom: "0.75rem" }}>
@@ -604,7 +676,7 @@ export default function Admin() {
                     </div>
                     <div>
                       <span className="muted">Normal</span>
-                      <strong>{bond.normalGnot ?? 2} GNOT</strong>
+                      <strong>{bond.normalGnot ?? "—"} GNOT</strong>
                     </div>
                     <div>
                       <span className="muted">Promo left</span>
@@ -622,19 +694,43 @@ export default function Admin() {
                 <div className="admin-withdraw-row">
                   <input
                     className="admin-input"
-                    value={promoUgnot}
-                    onChange={(e) => setPromoUgnot(e.target.value)}
-                    placeholder="promo ugnot (20e6 ≈ 20 GNOT)"
+                    value={bondGnotInput}
+                    onChange={(e) => setBondGnotInput(e.target.value)}
+                    placeholder="normal bond GNOT (e.g. 100)"
                   />
                   <button
                     type="button"
                     className="btn sm primary"
                     disabled={!bondPkg}
+                    onClick={() => {
+                      const g = Number(bondGnotInput);
+                      if (!(g > 0) || !Number.isFinite(g)) {
+                        showToast("Enter bond in GNOT (> 0)", false);
+                        return;
+                      }
+                      const ug = Math.floor(g * 1e6);
+                      run("SetNormalBond", "SetNormalBond", [String(ug)], "", bondPkg);
+                    }}
+                  >
+                    SetNormalBond
+                  </button>
+                </div>
+                <div className="admin-withdraw-row" style={{ marginTop: "0.5rem" }}>
+                  <input
+                    className="admin-input"
+                    value={promoUgnot}
+                    onChange={(e) => setPromoUgnot(e.target.value)}
+                    placeholder="promo ugnot (100e6 = 100 GNOT)"
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={!bondPkg}
                     onClick={() =>
                       run(
                         "StartPromo",
                         "StartPromo",
-                        [String(Math.floor(Number(promoUgnot) || 20_000_000)), "864000"],
+                        [String(Math.floor(Number(promoUgnot) || 100_000_000)), "864000"],
                         "",
                         bondPkg,
                       )
@@ -648,7 +744,7 @@ export default function Admin() {
                     disabled={!bondPkg}
                     onClick={() => run("EndPromo", "EndPromo", [], "", bondPkg)}
                   >
-                    EndPromo → 2 GNOT
+                    EndPromo
                   </button>
                 </div>
               </article>

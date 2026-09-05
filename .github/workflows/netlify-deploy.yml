@@ -1,0 +1,73 @@
+# Deploy UI + serverless API to Netlify on every push to master
+# (and on PRs as draft previews).
+#
+# Secrets (repo Settings → Secrets and variables → Actions):
+#   NETLIFY_AUTH_TOKEN  — Netlify personal access token
+#   NETLIFY_SITE_ID     — site id (gnomemepad-sapphire / gnomi.fun)
+
+name: Deploy Netlify
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "netlify.toml"
+      - "package.json"
+      - ".github/workflows/netlify-deploy.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "netlify.toml"
+      - "package.json"
+      - ".github/workflows/netlify-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: netlify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/ui/package-lock.json
+
+      - name: Install UI deps
+        run: npm ci --prefix web/ui
+
+      - name: Build UI
+        run: npm run build --prefix web/ui
+
+      - name: Deploy to Netlify
+        uses: nwtgck/actions-netlify@v3.0
+        with:
+          publish-dir: web/ui/dist
+          functions-dir: web/netlify/functions
+          production-branch: master
+          production-deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          deploy-message: |
+            ${{ github.event_name }} ${{ github.sha }}
+            ${{ github.event.head_commit.message || github.event.pull_request.title || '' }}
+          enable-pull-request-comment: true
+          enable-commit-comment: false
+          overwrites-pull-request-comment: true
+          fails-without-credentials: true
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        timeout-minutes: 15
