@@ -238,7 +238,12 @@ async function fetchGnoswapPoolBalances(RPC, poolPath) {
       GNOSWAP_POOL_PKG,
       `${GNOSWAP_POOL_PKG}.ExistsPoolPath(${JSON.stringify(path)})`,
     );
-    if (String(exists) !== "true" && exists !== true) {
+    // qeval may return "true", true, or "true bool"
+    const existsOk =
+      exists === true ||
+      exists === 1 ||
+      /^(true|1)\b/i.test(String(exists || "").trim());
+    if (!existsOk) {
       cacheSet(cacheKey, null, 30_000);
       return null;
     }
