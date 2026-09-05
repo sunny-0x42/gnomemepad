@@ -1165,11 +1165,14 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   }
 
   m.tradeStats = summarizeTradeStats(m.chart || []);
-  const dexPts = (m.chart || []).filter((p) => p.source === "gnoswap");
-  m.dexHistoryEmpty = m.gnoswapListed ? dexPts.length === 0 : null;
+  // Real DEX swaps only (exclude injected list/LP rows that also use source=gnoswap)
+  const dexSwapPts = (m.chart || []).filter(
+    (p) => p.source === "gnoswap" && (Number(p.side) === 0 || Number(p.side) === 1),
+  );
+  m.dexHistoryEmpty = m.gnoswapListed ? dexSwapPts.length === 0 : null;
   m.volumeScope = !m.gnoswapListed
     ? "curve"
-    : dexPts.length > 0
+    : dexSwapPts.length > 0
       ? "curve_and_dex"
       : "curve_only";
   if (m.volumeScope === "curve_only") {
