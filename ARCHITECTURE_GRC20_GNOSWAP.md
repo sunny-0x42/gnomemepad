@@ -2,86 +2,127 @@
 
 ## Goal
 
-- Every Create produces a **real GRC20** token (not only an internal AVL balance map).
-- After **graduation**, the token is **listable on Gnoswap** (permissionless pool).
-- Pad keeps a **locked internal CPMM** for continuous trading without external DEX.
+- Every Create produces a **real GRC20** token.
+- **padv14+**: curve raise is **WUGNOT** (user Deposit+Approve+Buy). Raised WUGNOT sits on pad.
+- At **graduation**, remaining tokens + raised WUGNOT fund Gnoswap LP (**auto-list** when GNS fee available).
+- CreatePool fee: pad GNS inventory or ExactOut surplus WUGNOT→GNS.
+- Fallback: locked internal CPMM if list soft-fails (e.g. no GNS / thin fee swap).
 
 ## Token lifecycle
 
 ```
 Create
-  → grc20.NewToken(name, symbol, decimals=0, seq, cur)
-  → Token.ID = <padPkg>.<SYMBOL>.<seq>
+  → grc20.NewToken + grc20reg.Register
   → no pre-mint
 
-Buy (curve / pool)
-  → mint GRC20 to buyer (pad PrivateLedger)
+Buy / Sell (curve)
+  → mint / burn GRC20
 
-Sell (curve / pool)
-  → burn GRC20 from seller
+Graduate (threshold or sold-out)
+  → remaining = TotalSupply - RealSold  (all unsold, not only PoolSeed)
+  → raised = net curve collateral
+  → try Gnoswap auto-list:
+       need WUGNOT inventory on pad ≥ raised
+       if GNS < poolCreationFee (100e6): ExactOut WUGNOT→GNS
+       mint remaining GRC20 to pad
+       CreatePool(wugnot, tokenKey, 3000, sqrtPriceX96)
+       position.Mint full-range → NFT to pad (locked)
+  → else internal CPMM reserves (PoolUgnot=raised, PoolToken=remaining)
+  → later: RetryListGnoswap(id)  [padv13+: auto TransferFrom caller WUGNOT/GNS;
+           wrap via wugnot.Deposit + Approve(pad); LP ugnot reimbursed]
 
-Transfer / Approve
-  → GRC20 ledger ops (DEX-friendly)
-
-Graduate
-  → locked pad CPMM seeded from curve raised + PoolSeed
-  → GnoswapReady = true
-  → event Graduated{token, gnoswap_ready}
-
-Gnoswap (external)
-  → create GNOT/token pool + add liquidity (community/creator)
-  → optional: register token metadata on gno-token-resource
+Trade after list
+  → Gnoswap router (pad SwapBuy/Sell disabled when GnoswapListed)
 ```
 
-## Sapphire live Gnoswap stack (verified qpaths)
+## Why WUGNOT inventory?
+
+`gno.land/r/gnoland/wugnot.Deposit` uses `AssertOriginCall` — **realms cannot wrap** ugnot in a graduate tx.
+
+### Automatic list pipeline (product)
+
+Because the pad realm cannot call `Deposit`, full auto-list is implemented as:
+
+1. Raised capital remains **ugnot on pad bank** (reimburse source).
+2. UI / multi-msg (after last buy graduate, Graduate button, or List button):
+   - `wugnot.Deposit` (EOA) for LP shortfall + optional fee budget  
+   - `wugnot.Approve(pad)` (+ optional `gns.Approve`)  
+   - `RetryListGnoswap` → TransferFrom → CreatePool + Mint  
+3. On success: **LP WUGNOT reimbursed as ugnot** from pad; fee (GNS or ExactOut) is the real cost.
+
+So ugnot→WUGNOT is automatic from the **user wallet as a temporary bridge**, not an illegal realm self-wrap.
+
+### padv13 economics (Sapphire)
+
+| Param | Value |
+|-------|--------|
+| GraduationThreshold | **10_000 GNOT** |
+| VirtualUgnot0 | **3_500 GNOT** |
+| VirtualToken0 | **1_073_000_191** |
+| R_max (full curve) | ~**10_255 GNOT** (> threshold) |
+| At grad (typical) | ~**795M** sold / ~**205M** LP tokens + **10k GNOT** |
+
+### padv13+ auto-list (two paths)
+
+**A. Protocol inventory (true auto at graduate)**  
+1. EOA: `wugnot.Deposit` ≥ **10_000 GNOT** per expected listing  
+2. Transfer WUGNOT → pad package address  
+3. Transfer ≥ **100 GNS** → pad (CreatePool fee)  
+4. When raise hits 10k → `listOnGnoswapWithFunding` succeeds without caller pull  
+
+**B. Caller-funded (Token UI “List on Gnoswap”)**  
+1. `wugnot.Deposit` + `Approve(pad)` for LP shortfall (+ fee budget if no GNS)  
+2. `RetryListGnoswap` → TransferFrom → CreatePool+Mint  
+3. LP WUGNOT pulled is **reimbursed in ugnot**; fee is not  
+
+CreatePool fee is fixed **GNS**; GNOT cost moves with market. LP size stays = raised
+(token side sized to curve spot for seamless graduate — see `graduate()` / `LeftoverTokens`).
+
+### Multi-venue listing (future)
+
+List path is Gnoswap-only today (`tryListOnGnoswap`). To add another DEX later
+(e.g. ZDEX when live on the target chain):
+
+- Keep seamless LP sizing in `graduate()` (pad-owned).
+- Extract each DEX into a **list adapter** (`List(raised, liqTokens, tokenKey)`).
+- Optional `ListVenue` registry so UI can pick venue without hardcoding imports in the pad monolith.
+
+Pearl (2026-09): Gnoswap router/pool/position/GNS/WUGNOT are live; no alternate DEX packages found.  
+Re-quote: `node scripts/probe-gns-price.mjs`
+
+## Sapphire Gnoswap stack
 
 | Role | Path |
 |------|------|
-| Router (proxy) | `gno.land/r/gnoswap/router` |
-| Router impl | `gno.land/r/gnoswap/router/v1` |
-| Pool factory (proxy) | `gno.land/r/gnoswap/pool` |
-| Pool impl | `gno.land/r/gnoswap/pool/v1` |
-| Position / LP | `gno.land/r/gnoswap/position` (+ `/v1`) |
-| WUGNOT | `gno.land/r/gnoland/wugnot` |
+| Router | `gno.land/r/gnoswap/router` |
+| Pool | `gno.land/r/gnoswap/pool` |
+| Position | `gno.land/r/gnoswap/position` |
+| WUGNOT | `gno.land/r/gnoland/wugnot` (key `….wugnot.wugnot`) |
+| GNS | `gno.land/r/gnoswap/gns` (key `….gns.GNS`) |
 | App | https://beta.gnoswap.io |
 
-### Router usage (swaps)
+Token keys for routes/pools: **registry keys** `pkg.SYMBOL`, not package path alone.
 
-- `ExactInSwapRoute(inputToken, outputToken, amountIn, routeArr, quoteArr, amountOutMin, deadline, referrer)`
-- Native GNOT: `inputToken` / `outputToken` = `"ugnot"`, but **route strings must use** `gno.land/r/gnoland/wugnot`
-- Route single-hop: `gno.land/r/gnoland/wugnot:<tokenPkg>:3000`
-- Quote: `DrySwapRoute(...)` on router (read-only)
-
-### Pool listing (after pad graduate)
-
-1. Token must be GRC20-registered (`grc20reg` on Create — padv3+)
-2. `CreatePool(token0, token1, fee, sqrtPriceX96)` on pool — **~100 GNS fee**
-3. Fee tiers: 100 / 500 / 3000 / 10000 (meme default **3000 = 0.3%**)
-4. `position.Mint` to seed concentrated liquidity
-5. Trade via router
-
-### Why pad does not auto-CreatePool yet
-
-- Needs GNS for creation fee + dual-sided LP mint (GNOT + meme) with tick range / sqrtPriceX96
-- Griefing risk on arbitrary initial price (Gnoswap docs)
-- Pad keeps its own locked CPMM after graduate; Gnoswap is a **second venue**
-- UI deep-links + `/api/gnoswap` probe are the integration layer until a dedicated `ListOnGnoswap` helper realm is designed
-
-### padv8 + Gnoswap
-
-- padv8: last-buy curve clamp/refund (finish curve UX)
-- Gnoswap wiring: GRC20 path = pad package path; Adena key = `pkg.SYMBOL`
-- Hub `pad` → padv8; listing still external via pool/router above
-
-## Redeploy note
-
-Existing Sapphire pad packages with internal-only balances **cannot** be upgraded in place.
-Ship a new package path (e.g. `.../pad/v2`) with this GRC20 model, then point `PKG` / Netlify env to it.
-
-## Key code
+## Packages
 
 | Piece | Path |
-|---|---|
-| Pad realm | `gno.land/r/gnomemepad/pad` |
-| GRC20 lib (local vendor / on-chain demo) | `gno.land/p/demo/tokens/grc20` |
-| LaunchInfo extras | `tokenID\|gnoswapReady` fields |
+|-------|------|
+| Pad source | `gno.land/r/gnomemepad/pad` |
+| Sapphire deploy | `…/padv14` (WUGNOT curve + auto-list); legacy `…/padv13` ugnot curve |
+| Stub (local tests) | `pad/gnoswap_list.gno` |
+| Full list code | `deploy/templates/gnoswap_list_full.gno` |
+
+## Deploy
+
+```powershell
+.\scripts\deploy-sapphire-v9.ps1
+# then fund pad WUGNOT; set Netlify PKG to padv9 (or hub SetModule pad)
+```
+
+Testnet: **legacy pads not required** — hub `pad` → padv9 only.
+
+## Admin UI
+
+Nav **Admin** appears only when connected wallet equals `ProtocolAddress()` (Init caller)
+or `SIGNER_ADDR` env. Console: claim/push protocol fees, free ugnot withdraw, points toggle,
+treasury transfer, Gnoswap inventory checklist.
