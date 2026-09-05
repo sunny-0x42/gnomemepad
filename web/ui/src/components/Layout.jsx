@@ -77,7 +77,6 @@ export default function Layout() {
     isConnecting,
     connect,
     disconnect,
-    health,
     isAdmin,
     networkId,
     setNetworkId,
@@ -95,16 +94,6 @@ export default function Layout() {
   const [netBusy, setNetBusy] = useState(false);
   const moreRef = useRef(null);
   const mobileMenuRef = useRef(null);
-  const ok = health?.ok !== false && health?.height;
-  const padLabel = String(health?.modules?.pad || health?.pkg || health?.chainId || "online")
-    .split("/")
-    .pop();
-  const padHint =
-    /padv23/i.test(padLabel)
-      ? "Pearl"
-      : /padv22/i.test(padLabel)
-        ? "Sapphire"
-        : "";
 
   async function onNetworkChange(e) {
     const next = e.target.value;
@@ -261,24 +250,10 @@ export default function Layout() {
                 <option key={n.id} value={n.id} disabled={!n.enabled && n.comingSoon}>
                   {n.label}
                   {n.comingSoon ? " (soon)" : ""}
-                  {!n.comingSoon && n.id === "sapphire" ? " · padv22" : ""}
-                  {!n.comingSoon && n.id === "pearl" ? " · padv23" : ""}
                 </option>
               ))}
             </select>
           </label>
-          <div
-            className={`status-pill${ok ? "" : " bad"}`}
-            title={health?.rpc || health?.chainId || network?.chainId || ""}
-          >
-            <span className="dot" />
-            <span>
-              {ok ? padLabel : t("offline")}
-              {ok && padHint ? (
-                <span className="status-pill-sub"> · {padHint}</span>
-              ) : null}
-            </span>
-          </div>
           <button
             type="button"
             className={`btn wallet-btn${wallet ? " connected" : ""}`}
