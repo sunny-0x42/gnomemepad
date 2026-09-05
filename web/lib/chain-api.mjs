@@ -966,9 +966,14 @@ async function enrichListedMarketsFromGnoswap(RPC, markets, parts = []) {
         m.volumeScope = "curve_only";
         /* keep pad pool mark */
       }
-      // Live on-chain Gnoswap pool TVL only (does not rewrite spot/chart mark)
+      // Live pool TVL + valuation spot for PnL (sane pool spot / last trade)
       try {
         await enrichLiveGnoswapLiquidity(RPC, m);
+        const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
+        const valued = resolveValuationSpotGnot(m, { totalSupply: supply });
+        if (valued.spot > 0) {
+          applySpotPrice(m, valued.spot, supply, valued.source || "gnoswap_pool_spot");
+        }
       } catch {
         /* keep seed/list-note fallback */
       }
@@ -1192,6 +1197,46 @@ function lastTradePriceGnot(chart, sourceFilter = null) {
 }
 
 /**
+ * Mark used for PnL / portfolio / holders — must track live market, not pad dump seed.
+ * Priority: DEX last trade → sane live pool spot → last curve trade → VWAP → pad mark.
+ */
+function resolveValuationSpotGnot(m, opts = {}) {
+  const lastDex =
+    opts.lastDexPx != null ? Number(opts.lastDexPx) : lastTradePriceGnot(m?.chart, "gnoswap");
+  if (lastDex > 0) return { spot: lastDex, source: "gnoswap_last_trade" };
+
+  const poolSpot = Number(m?.poolSpotGnot) || 0;
+  const poolTok = Number(m?.poolBalTokens) || 0;
+  const supply =
+    Number(opts.totalSupply) ||
+    Number(m?.params?.totalSupply) ||
+    Number(m?.totalSupply) ||
+    1_000_000_000;
+  const poolShare = supply > 0 ? poolTok / supply : 0;
+  const vwap = Number(opts.vwap) || Number(m?.avgEntryGnot) || 0;
+  const lastCurve =
+    opts.lastCurvePx != null
+      ? Number(opts.lastCurvePx)
+      : lastTradePriceGnot(m?.chart, "curve") || lastTradePriceGnot(m?.chart);
+  const ref = vwap > 0 ? vwap : lastCurve > 0 ? lastCurve : 0;
+
+  // Live pool spot only when reserves look usable (not a near-empty token side)
+  let usePool = m?.gnoswapListed && poolSpot > 0 && poolShare >= 0.005;
+  if (usePool && ref > 0) {
+    const ratio = poolSpot / ref;
+    if (!(ratio >= 0.02 && ratio <= 50)) usePool = false;
+  }
+  if (usePool) return { spot: poolSpot, source: "gnoswap_pool_spot" };
+
+  if (lastCurve > 0) return { spot: lastCurve, source: "last_trade" };
+  if (vwap > 0) return { spot: vwap, source: "vwap_buy" };
+
+  const padMark = Number(m?.priceGnot) || Number(m?.spotGnot) || 0;
+  if (padMark > 0) return { spot: padMark, source: "pool_mark" };
+  return { spot: 0, source: null };
+}
+
+/**
  * Parse GnoswapListed note for LP mint amounts:
  * "listed pool=... pos=606 liq=... a0=205 a1=4210 wugnotUsed=... feeWugnot=0"
  */
@@ -1360,30 +1405,7 @@ async function getMarket(RPC, PKG, id, meta = {}) {
       "Volume from bonding-curve trades only — Gnoswap swap history unavailable for this token.";
   }
 
-  // Spot for valuation:
-  //  - Listed + DEX history → last Gnoswap trade
-  //  - Listed + no DEX history → frozen pool_mark (same as Markets cards)
-  //  - On curve → last curve trade when useful
-  const lastDexPx = lastTradePriceGnot(m.chart, "gnoswap");
-  const lastAnyPx = lastTradePriceGnot(m.chart);
-  const poolPx = Number(m.priceGnot) || 0;
-  const supply = Number(params.totalSupply) || 1_000_000_000;
-  let spotGnot = poolPx;
-  let spotSource = m.priceSource || (m.status === 1 ? "pool_mark" : "curve");
-  if (m.gnoswapListed && lastDexPx != null && lastDexPx > 0) {
-    spotGnot = lastDexPx;
-    spotSource = "gnoswap_last_trade";
-  } else if (m.gnoswapListed) {
-    spotGnot = poolPx > 0 ? poolPx : lastAnyPx;
-    spotSource = poolPx > 0 ? "pool_mark" : "last_trade";
-  } else if (lastAnyPx != null && lastAnyPx > 0 && (!poolPx || m.status !== 1)) {
-    spotGnot = lastAnyPx;
-    spotSource = "last_trade";
-  }
-  applySpotPrice(m, spotGnot > 0 ? spotGnot : poolPx, supply, spotSource);
-
-  // Listed: live on-chain Gnoswap pool balances (total TVL), not raise/seed snapshot.
-  // Does not rewrite spotGnot — chart mark stays on last trade / pad mark.
+  // Listed: live pool balances first (needed for pool-implied valuation spot)
   if (m.gnoswapListed) {
     try {
       await enrichLiveGnoswapLiquidity(RPC, m);
@@ -1392,16 +1414,35 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     }
   }
 
-  // Entry: market VWAP of all curve buys (shared cost basis — no per-wallet ledger)
+  // Entry: market VWAP of curve buys (shared basis for holders table / leaderboard)
+  const lastDexPx = lastTradePriceGnot(m.chart, "gnoswap");
+  const lastAnyPx = lastTradePriceGnot(m.chart);
+  const lastCurvePx = lastTradePriceGnot(m.chart, "curve") || lastAnyPx;
+  const supply = Number(params.totalSupply) || 1_000_000_000;
   const vwapBuy = marketVwapBuyGnot(m.chart);
   const openPriceGnot =
     vwapBuy ??
     (m.chart || []).find((pt) => Number(pt.side) === 0 && Number(pt.priceGnot) > 0)?.priceGnot ??
-    lastAnyPx ??
+    lastCurvePx ??
     null;
   m.openPriceGnot = openPriceGnot;
   m.avgEntryGnot = vwapBuy;
   m.pnlBasis = vwapBuy != null ? "vwap_buy" : openPriceGnot != null ? "first_buy" : null;
+
+  // Valuation spot for Price / MCap / PnL (never prefer pad dump mark when live pool exists)
+  const valued = resolveValuationSpotGnot(m, {
+    lastDexPx,
+    lastCurvePx,
+    vwap: vwapBuy,
+    totalSupply: supply,
+  });
+  const poolPx = Number(m.priceGnot) || 0;
+  applySpotPrice(
+    m,
+    valued.spot > 0 ? valued.spot : poolPx,
+    supply,
+    valued.source || (m.status === 1 ? "pool_mark" : "curve"),
+  );
 
   // Holders / buyers (padv7+ ListBuyers; graceful on older pads)
   m.holders = [];
@@ -1675,39 +1716,64 @@ async function getPortfolio(RPC, sources, SIGNER_ADDR, address) {
     const bal = await tokenBalance(RPC, pkg, m.id, address);
     if (bal <= 0) continue;
     memePositions += 1;
+    // Prefer live valuation spot from markets enrichment (DEX / pool), not pad dump reserves
+    const spotGnot =
+      Number(m.spotGnot) ||
+      Number(m.priceGnot) ||
+      Number(m.poolSpotGnot) ||
+      0;
+    let valueGnotApprox = spotGnot > 0 ? bal * spotGnot : 0;
+    if (!(valueGnotApprox > 0)) {
+      // Fallback: pad curve/pool reserves (pre-list or missing spot)
+      valueGnotApprox = m.virtualToken
+        ? (bal * m.virtualUgnot) / m.virtualToken / UGNOT_PER_GNOT
+        : m.poolToken
+          ? (bal * m.poolUgnot) / m.poolToken / UGNOT_PER_GNOT
+          : 0;
+    }
+    const entryGnot = Number(m.avgEntryGnot || m.openPriceGnot) || 0;
+    let pnlGnot = null;
+    let pnlPct = null;
+    if (entryGnot > 0 && spotGnot > 0) {
+      const cost = bal * entryGnot;
+      pnlGnot = valueGnotApprox - cost;
+      pnlPct = ((spotGnot - entryGnot) / entryGnot) * 100;
+    }
     holdings.push({
       id: m.id,
       name: m.name,
       symbol: m.symbol,
       status: m.status,
       statusLabel: m.statusLabel,
+      gnoswapListed: !!m.gnoswapListed,
       tokenId: m.tokenId || "",
       pkg,
       legacy: !!m.legacy,
       padLabel: m.padLabel || String(pkg).split("/").pop(),
       balance: bal,
-      spotScaled: m.virtualToken
-        ? Math.floor((m.virtualUgnot * 1e6) / m.virtualToken)
-        : m.poolToken
-          ? Math.floor((m.poolUgnot * 1e6) / m.poolToken)
-          : 0,
-      valueUgnotApprox: m.virtualToken
-        ? Math.floor((bal * m.virtualUgnot) / m.virtualToken)
-        : m.poolToken
-          ? Math.floor((bal * m.poolUgnot) / m.poolToken)
-          : 0,
-      priceGnot: m.priceGnot || 0,
+      spotGnot,
+      entryGnot: entryGnot > 0 ? entryGnot : null,
+      spotScaled: spotGnot > 0 ? Math.floor(spotGnot * UGNOT_PER_GNOT * 1e6) : 0,
+      valueGnotApprox,
+      valueUgnotApprox: valueGnotApprox * UGNOT_PER_GNOT,
+      pnlGnot,
+      pnlPct,
+      priceGnot: spotGnot || m.priceGnot || 0,
       mcapGnot: m.mcapGnot || 0,
       priceUsd: m.priceUsd || 0,
       mcapUsd: m.mcapUsd || 0,
       gnotUsd: m.gnotUsd || 0,
+      priceSource: m.priceSource || null,
     });
   }
   for (const h of holdings) {
-    h.valueGnotApprox = (h.valueUgnotApprox || 0) / UGNOT_PER_GNOT;
     const gnotUsd = Number(h.gnotUsd) || 0;
     h.valueUsdApprox =
       gnotUsd > 0 && h.valueGnotApprox > 0 ? h.valueGnotApprox * gnotUsd : 0;
+    h.pnlUsd =
+      gnotUsd > 0 && h.pnlGnot != null && Number.isFinite(h.pnlGnot)
+        ? h.pnlGnot * gnotUsd
+        : null;
   }
   const ugnot = await bankUgnot(RPC, address);
   let wugnot = 0;

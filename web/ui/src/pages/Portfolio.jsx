@@ -10,6 +10,7 @@ import {
   fmtGnot,
   fmtMcapUsd,
   fmtNum,
+  fmtPnl,
   fmtPriceUsd,
   shortAddr,
   toUsd,
@@ -476,6 +477,21 @@ export default function Portfolio() {
                             ? fmtMcapUsd(valUsd)
                             : `${fmtGnot(val, { alreadyGnot: true })} GNOT`}
                         </strong>
+                        {h.pnlGnot != null && Number.isFinite(Number(h.pnlGnot)) && (
+                          <span
+                            className={`s mono ${Number(h.pnlGnot) >= 0 ? "up" : "down"}`}
+                            title={
+                              h.entryGnot > 0
+                                ? `Entry ${h.entryGnot} · Spot ${h.spotGnot || h.priceGnot}`
+                                : undefined
+                            }
+                          >
+                            PnL {fmtPnl(h.pnlGnot)}
+                            {h.pnlPct != null && Number.isFinite(Number(h.pnlPct))
+                              ? ` (${Number(h.pnlPct) >= 0 ? "+" : ""}${Number(h.pnlPct).toFixed(1)}%)`
+                              : ""}
+                          </span>
+                        )}
                         <span className="s faint">
                           {fmtGnot(val, { alreadyGnot: true })} GNOT
                           {sharePct >= 1 ? ` · ${sharePct.toFixed(0)}% bag` : ""}

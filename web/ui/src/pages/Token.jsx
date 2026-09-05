@@ -841,39 +841,39 @@ export default function Token() {
     }
 
     const avgBuyPx =
-      recordedBoughtTokens > 0 ? recordedBoughtGnot / recordedBoughtTokens : curPx;
+      recordedBoughtTokens > 0 ? recordedBoughtGnot / recordedBoughtTokens : 0;
+    // Shared market VWAP when we lack personal fill history
+    const marketEntry =
+      Number(m?.avgEntryGnot) > 0
+        ? Number(m.avgEntryGnot)
+        : Number(m?.openPriceGnot) > 0
+          ? Number(m.openPriceGnot)
+          : 0;
 
     let bought = 0;
     let pnlPct = 0;
     let pnlGnot = 0;
 
     if (curTokBal > 0) {
-      if (recordedBoughtTokens > 0 && avgBuyPx > 0) {
-        if (curTokBal <= recordedBoughtTokens) {
-          bought = curTokBal * avgBuyPx;
-        } else {
-          const extraTokens = curTokBal - recordedBoughtTokens;
-          bought = recordedBoughtGnot + extraTokens * curPx;
-        }
-        pnlGnot = curValGnot + recordedSoldGnot - (bought + recordedSoldTokens * avgBuyPx);
-        const costBasis = bought + recordedSoldTokens * avgBuyPx;
-        pnlPct = costBasis > 0 ? (pnlGnot / costBasis) * 100 : 0;
+      if (recordedBoughtGnot > 0 && avgBuyPx > 0) {
+        // Realized + unrealized vs personal fills: remaining value + sells − buys
+        bought = recordedBoughtGnot;
+        pnlGnot = curValGnot + recordedSoldGnot - recordedBoughtGnot;
+        pnlPct = recordedBoughtGnot > 0 ? (pnlGnot / recordedBoughtGnot) * 100 : 0;
+      } else if (marketEntry > 0 && curPx > 0) {
+        // On-chain balance, no local history → estimate vs market VWAP entry
+        bought = curTokBal * marketEntry;
+        pnlGnot = curValGnot - bought;
+        pnlPct = ((curPx - marketEntry) / marketEntry) * 100;
       } else {
-        // Tokens held without local buy history: evaluate cost basis at current market value
         bought = curValGnot;
         pnlPct = 0;
         pnlGnot = 0;
       }
-    } else {
-      // 0 tokens currently held
+    } else if (recordedBoughtGnot > 0) {
       bought = recordedBoughtGnot;
-      if (recordedSoldTokens > 0 && recordedBoughtGnot > 0) {
-        pnlGnot = recordedSoldGnot - recordedBoughtGnot;
-        pnlPct = (pnlGnot / recordedBoughtGnot) * 100;
-      } else {
-        pnlPct = 0;
-        pnlGnot = 0;
-      }
+      pnlGnot = recordedSoldGnot - recordedBoughtGnot;
+      pnlPct = (pnlGnot / recordedBoughtGnot) * 100;
     }
 
     const sold = recordedSoldGnot;
@@ -885,6 +885,7 @@ export default function Token() {
       curValGnot,
       pnlGnot,
       pnlPct,
+      entryGnot: avgBuyPx > 0 ? avgBuyPx : marketEntry || null,
     };
   }, [
     wallet?.address,
@@ -892,6 +893,8 @@ export default function Token() {
     bal?.tokens,
     m?.priceGnot,
     m?.spotGnot,
+    m?.avgEntryGnot,
+    m?.openPriceGnot,
     m?.id,
     m?.symbol,
     m?.tokenId,
@@ -2668,9 +2671,13 @@ export default function Token() {
                 </div>
                 <div className="pos-item">
                   <span className="pos-k">{(t("pnl") || "PNL").toUpperCase()}</span>
-                  <strong className={`mono ${userPos && userPos.pnlPct >= 0 ? "up" : "down"}`}>
+                  <strong className={`mono ${userPos && userPos.pnlGnot >= 0 ? "up" : "down"}`}>
                     {userPos && (userPos.bought > 0 || userPos.sold > 0 || tokenBal > 0)
-                      ? `${userPos.pnlPct >= 0 ? "+" : ""}${userPos.pnlPct.toFixed(1)}%`
+                      ? `${fmtPnl(userPos.pnlGnot)}${
+                          Number.isFinite(userPos.pnlPct)
+                            ? ` (${userPos.pnlPct >= 0 ? "+" : ""}${userPos.pnlPct.toFixed(1)}%)`
+                            : ""
+                        }`
                       : "+0%"}
                   </strong>
                 </div>
