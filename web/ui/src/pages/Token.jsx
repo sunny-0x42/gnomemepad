@@ -1908,8 +1908,7 @@ export default function Token() {
             <span className="ths-metric-label">{(isPool ? t("liquidity") : (t("targetRaise") || "TARGET RAISE")).toUpperCase()}</span>
             <strong className="ths-metric-val mono">
               {(() => {
-                // Listed → API liquidityGnot from live Gnoswap GetBalances (both sides).
-                // Never fall back to pad poolUgnot/raise (seed dump) when listed.
+                // Listed → live pool TVL (GNOT); always prefer USD display.
                 const listed = !!(m.gnoswapListed || m.listVenue);
                 const liqG = Number(m.liquidityGnot) || 0;
                 const fallbackG = (() => {
@@ -1919,12 +1918,13 @@ export default function Token() {
                   const px = Number(m.spotGnot || m.priceGnot) || 0;
                   return w > 0 ? w + (px > 0 && tok > 0 ? tok * px : w) : 0;
                 })();
-                const shown = liqG > 0 ? liqG : fallbackG;
+                const shownG = liqG > 0 ? liqG : fallbackG;
                 if (isPool) {
-                  if (!(shown > 0)) return "—";
-                  return m.gnotUsd > 0
-                    ? fmtMcapUsd(shown * m.gnotUsd)
-                    : `${fmtGnot(shown, { alreadyGnot: true })} GNOT`;
+                  if (!(shownG > 0)) return "—";
+                  const fx = Number(m.gnotUsd) > 0 ? Number(m.gnotUsd) : 235;
+                  const usd =
+                    Number(m.liquidityUsd) > 0 ? Number(m.liquidityUsd) : shownG * fx;
+                  return fmtMcapUsd(usd);
                 }
                 return `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`;
               })()}
@@ -1933,23 +1933,14 @@ export default function Token() {
               {isPool
                 ? (() => {
                     const w = Number(m.liquidityWugnotGnot) || 0;
-                    const tokSide = Number(m.liquidityTokenGnot) || 0;
                     const live = m.liquiditySource === "gnoswap_pool_balances";
                     const listed = !!(m.gnoswapListed || m.listVenue);
                     if (live && w > 0) {
                       return `${w.toLocaleString("en-US", {
                         maximumFractionDigits: 2,
-                      })} WUGNOT + ${tokSide.toLocaleString("en-US", {
-                        maximumFractionDigits: 2,
-                      })} tok · live pool`;
+                      })} GNOT in pool${listed ? " · live" : ""}`;
                     }
                     if (listed) return t("poolReserves") || "Listed pool TVL";
-                    if (w > 0) {
-                      return `${w.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })} WUGNOT + tokens`;
-                    }
                     return t("poolReserves") || "Pool TVL";
                   })()
                 : `${pct}% ${t("filled") || "filled"}`}

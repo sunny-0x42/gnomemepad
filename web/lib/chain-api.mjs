@@ -409,29 +409,9 @@ async function enrichLiveGnoswapLiquidity(RPC, m, opts = {}) {
   m.liquiditySource = "gnoswap_pool_balances";
   m.poolBalUgnot = bal.ugnot;
   m.poolBalTokens = bal.tokens;
+  // Internal helper for TVL only — do NOT write into spotGnot/priceGnot
+  // (that broke PriceChart mark injection / cliff vs curve history).
   if (poolSpotGnot > 0) m.poolSpotGnot = poolSpotGnot;
-
-  // Align Price/MCap with live pool when we only had pad dump mark / no DEX trades
-  const syncSpot = opts.syncSpot !== false;
-  const src = String(m.priceSource || "");
-  const shouldSyncSpot =
-    syncSpot &&
-    poolSpotGnot > 0 &&
-    (m.dexHistoryEmpty === true ||
-      !src ||
-      src === "pool_mark" ||
-      src === "spot" ||
-      src === "curve" ||
-      src === "last_trade");
-  if (shouldSyncSpot) {
-    const supply =
-      Number(opts.totalSupply) ||
-      Number(m.params?.totalSupply) ||
-      Number(m.totalSupply) ||
-      1_000_000_000;
-    // applySpotPrice → attachLiquidityTvl preserves gnoswap_pool_balances
-    applySpotPrice(m, poolSpotGnot, supply, "gnoswap_pool_balances");
-  }
   return m;
 }
 
@@ -465,11 +445,18 @@ const GNOSWAP_PRICES_URL =
 const GNOSWAP_API_BASE =
   process.env.GNOSWAP_API_BASE || "https://beta.api.gnoswap.io/v1";
 const WUGNOT_TOKEN_KEY = "gno.land/r/gnoland/wugnot.wugnot";
+/** Fallback when Gnoswap leaves ugnot.usd empty (common on Sapphire indexer). */
+const DEFAULT_GNOT_USD = Number(process.env.GNOT_USD) > 0 ? Number(process.env.GNOT_USD) : 235;
 
 async function fetchGnoswapFx() {
   const hit = cacheGet("fx:gnoswap");
   if (hit) return hit;
-  const empty = { gnotUsd: 0, byPath: {}, source: null, updatedAt: null };
+  const empty = {
+    gnotUsd: DEFAULT_GNOT_USD,
+    byPath: {},
+    source: "fallback",
+    updatedAt: null,
+  };
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8_000);
@@ -483,6 +470,7 @@ async function fetchGnoswapFx() {
     const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
     const byPath = {};
     let gnotUsd = 0;
+    let gnotSource = null;
     for (const row of rows) {
       const path = String(row?.path || "").trim();
       if (!path) continue;
@@ -492,20 +480,32 @@ async function fetchGnoswapFx() {
         usd: Number.isFinite(usd) && usd > 0 ? usd : 0,
         grade,
         marketCap: Number(row?.marketCap) || 0,
+        liquidity: Number(row?.liquidity) || 0,
       };
       if (
-        (path === "ugnot" || path === "gno.land/r/gnoland/wugnot.wugnot" || path.endsWith("/wugnot.wugnot")) &&
+        (path === "ugnot" ||
+          path === "gno.land/r/gnoland/wugnot.wugnot" ||
+          path.endsWith("/wugnot.wugnot") ||
+          path.endsWith(".wugnot")) &&
         Number.isFinite(usd) &&
         usd > 0
       ) {
         // Prefer ORACLE grade for ugnot
-        if (!gnotUsd || grade === "ORACLE") gnotUsd = usd;
+        if (!gnotUsd || grade === "ORACLE") {
+          gnotUsd = usd;
+          gnotSource = "gnoswap";
+        }
       }
     }
+    // Sapphire indexer often returns empty ugnot.usd — keep UI $ metrics alive
+    if (!(gnotUsd > 0)) {
+      gnotUsd = DEFAULT_GNOT_USD;
+      gnotSource = "fallback";
+    }
     const fx = {
-      gnotUsd: gnotUsd > 0 ? gnotUsd : 0,
+      gnotUsd,
       byPath,
-      source: "gnoswap",
+      source: gnotSource || "gnoswap",
       updatedAt: Date.now(),
     };
     cacheSet("fx:gnoswap", fx, 60_000);
@@ -578,6 +578,8 @@ function applyUsdPricing(m, fx) {
   m.mcapUsd = mcapUsd;
   m.circMcapUsd = gnotUsd > 0 && circMcapGnot > 0 ? circMcapGnot * gnotUsd : 0;
   m.raisedUsd = gnotUsd > 0 && raisedGnot > 0 ? raisedGnot * gnotUsd : 0;
+  const liqG = Number(m.liquidityGnot) || 0;
+  m.liquidityUsd = gnotUsd > 0 && liqG > 0 ? liqG * gnotUsd : 0;
   m.priceUsdSource = priceSource;
   if (m.spotGnot != null && gnotUsd > 0) {
     m.spotUsd = Number(m.spotGnot) * gnotUsd;
@@ -972,10 +974,9 @@ async function enrichListedMarketsFromGnoswap(RPC, markets, parts = []) {
         m.volumeScope = "curve_only";
         /* keep pad pool mark */
       }
-      // Live on-chain Gnoswap pool TVL (GetBalances) + pool-implied spot for TVL
+      // Live on-chain Gnoswap pool TVL only (does not rewrite spot/chart mark)
       try {
-        const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
-        await enrichLiveGnoswapLiquidity(RPC, m, { totalSupply: supply });
+        await enrichLiveGnoswapLiquidity(RPC, m);
       } catch {
         /* keep seed/list-note fallback */
       }
@@ -1389,14 +1390,11 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   }
   applySpotPrice(m, spotGnot > 0 ? spotGnot : poolPx, supply, spotSource);
 
-  // Listed: live on-chain Gnoswap pool balances (total TVL), not raise/seed snapshot
+  // Listed: live on-chain Gnoswap pool balances (total TVL), not raise/seed snapshot.
+  // Does not rewrite spotGnot — chart mark stays on last trade / pad mark.
   if (m.gnoswapListed) {
     try {
-      await enrichLiveGnoswapLiquidity(RPC, m, {
-        totalSupply: supply,
-        // If we already have a real DEX last trade, keep that spot; still fix TVL
-        syncSpot: !(spotSource === "gnoswap_last_trade" && spotGnot > 0),
-      });
+      await enrichLiveGnoswapLiquidity(RPC, m);
     } catch {
       /* keep seed/list-note fallback */
     }
