@@ -53,14 +53,14 @@ export function getConfig() {
     ),
     PKG:
       process.env.PKG ||
-      `gno.land/r/${DEFAULT_ADDR}/gnomemepad/padv22`,
+      `gno.land/r/${DEFAULT_ADDR}/gnomemepad/padv23`,
     HUB: process.env.HUB || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/hubv2`,
     PROFILE:
       process.env.PROFILE || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/profile`,
     META: process.env.META || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/meta`,
     POINTS: process.env.POINTS || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/pointsv2`,
     BOND: process.env.BOND || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/bond`,
-    CHAIN_ID: process.env.CHAIN_ID || "sapphire-1",
+    CHAIN_ID: process.env.CHAIN_ID || "pearl-1",
     SIGNER_ADDR: process.env.SIGNER_ADDR || DEFAULT_ADDR,
   };
 }
@@ -3267,7 +3267,7 @@ export async function handleApi(method, pathname, query, bodyText) {
       const tokenPath = (q.get("token") || q.get("tokenPath") || "").trim();
       const fee = Number(q.get("fee") || 3000); // 0.3% default for volatile meme
       const out = {
-        network: "sapphire-1",
+        network: process.env.CHAIN_ID || "pearl-1",
         app: APP,
         paths: {
           router: ROUTER,

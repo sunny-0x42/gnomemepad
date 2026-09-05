@@ -4,10 +4,18 @@
 const ADENA_APP_NAME = "gnomi";
 
 export const DEFAULT_NETWORK = {
-  chainId: "sapphire-1",
-  chainName: "Gno Sapphire",
-  rpcUrl: "https://rpc.sapphire.testnets.gno.land:443",
+  chainId: "pearl-1",
+  chainName: "Gno Pearl",
+  rpcUrl: "https://rpc.pearl.testnets.gno.land:443",
 };
+
+export function chainDisplayName(chainId) {
+  const id = String(chainId || "");
+  if (id.includes("pearl")) return "Gno Pearl";
+  if (id.includes("sapphire")) return "Gno Sapphire";
+  if (id.includes("staging")) return "Gno Staging";
+  return id ? `Gno (${id})` : "Gno";
+}
 
 export function hasAdena() {
   return typeof window !== "undefined" && !!window.adena;
@@ -78,7 +86,7 @@ export async function ensureCorrectNetwork(network = DEFAULT_NETWORK) {
   const chainId = await getAdenaChainId();
   if (chainId && chainId !== network.chainId) {
     const err = new Error(
-      `Wrong network (${chainId}). Switch Adena to ${network.chainId} (Sapphire).`,
+      `Wrong network (${chainId}). Switch Adena to ${network.chainId} (${chainDisplayName(network.chainId)}).`,
     );
     err.code = "WRONG_NETWORK";
     err.chainId = chainId;

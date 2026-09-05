@@ -15,6 +15,7 @@ import {
   onAccountChange,
   openInstallAdena,
   DEFAULT_NETWORK,
+  chainDisplayName,
 } from "../lib/adena";
 import { loadWatchlist, toggleWatch as toggleWatchList } from "../lib/watchlist";
 
@@ -53,14 +54,14 @@ export function AppProvider({ children }) {
 
   const clearTx = useCallback(() => setTx(null), []);
 
-  const network = useMemo(
-    () => ({
-      chainId: health?.chainId || DEFAULT_NETWORK.chainId,
-      chainName: "Gno Sapphire",
+  const network = useMemo(() => {
+    const chainId = health?.chainId || DEFAULT_NETWORK.chainId;
+    return {
+      chainId,
+      chainName: chainDisplayName(chainId),
       rpcUrl: health?.rpc || DEFAULT_NETWORK.rpcUrl,
-    }),
-    [health],
-  );
+    };
+  }, [health]);
 
   const pkg = health?.pkg || health?.modules?.pad || null;
   const signerAddr = walletsMeta?.signerAddr || null;

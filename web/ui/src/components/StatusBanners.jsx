@@ -92,7 +92,7 @@ export default function StatusBanners() {
             <strong>Wrong network</strong>
             <div className="muted" style={{ fontSize: "0.82rem", marginTop: "0.2rem" }}>
               {netWarn ||
-                `Adena is on ${wallet.chainId}. This app uses ${network.chainId} (Sapphire).`}
+                `Adena is on ${wallet.chainId}. This app uses ${network.chainId} (${network.chainName || "Gno"}).`}
             </div>
           </div>
           <div className="admin-actions">

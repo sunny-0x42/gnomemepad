@@ -1,6 +1,6 @@
 # Deploy UI to Netlify
 
-React (Vite) frontend (`web/ui`) + serverless functions for **read** APIs against Gno Sapphire.
+React (Vite) frontend (`web/ui`) + serverless functions for **read** APIs against **Gno Pearl** (`pearl-1` / `padv23`).
 Production: **https://gnomi.fun** (site `gnomemepad-sapphire`).
 
 ## Continuous deploy (collaborators)
@@ -33,7 +33,7 @@ Merge (or push) to `master` → Actions builds → Netlify updates.
 | **Create / Buy / Sell / Claim** | **Yes — via Adena browser wallet** |
 
 1. Install [Adena](https://adena.app/)
-2. Switch Adena network to **Sapphire** (`sapphire-1`) when prompted
+2. Switch Adena network to **Pearl** (`pearl-1`) when prompted
 3. Open the site → **Connect wallet** → **Adena Wallet**
 4. Create / trade — approve each tx in Adena
 
@@ -45,13 +45,15 @@ Merge (or push) to `master` → Actions builds → Netlify updates.
 
 ### Env vars (override in Netlify Dashboard if needed)
 
-| Variable | Default (Sapphire) |
+| Variable | Default (Pearl) |
 |---|---|
-| `RPC_URL` | `https://rpc.sapphire.testnets.gno.land:443` |
-| `CHAIN_ID` | `sapphire-1` |
-| `PKG` | `…/padv22` |
-| `HUB` / `PROFILE` / `META` / `POINTS` / `BOND` | matching Sapphire paths |
+| `RPC_URL` | `https://rpc.pearl.testnets.gno.land:443` |
+| `CHAIN_ID` | `pearl-1` |
+| `PKG` | `…/padv23` |
+| `HUB` / `PROFILE` / `META` / `POINTS` / `BOND` | matching Pearl paths |
 | `SIGNER_ADDR` | deploy wallet `g1mv0052…` |
+
+Sapphire archives: `web/.env.sapphire.example` (local only).
 
 ## Manual CLI deploy
 

@@ -1,4 +1,4 @@
-# gnomemepad — React (Vite) UI + serverless API → Gno Sapphire
+# Gnomi.fun — React (Vite) UI + serverless API → Gno Pearl (pearl-1)
 #
 # Auto-deploy: GitHub Actions (.github/workflows/netlify-deploy.yml) on push to master.
 # Manual:
@@ -7,6 +7,7 @@
 #
 # Env (Netlify Dashboard or below):
 #   RPC_URL, CHAIN_ID, PKG, HUB, PROFILE, META, POINTS, BOND, SIGNER_ADDR
+# Sapphire fallback: web/.env.sapphire.example
 
 [build]
   command = "npm run build --prefix web/ui"
@@ -15,9 +16,9 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
-  CHAIN_ID = "sapphire-1"
-  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv22"
+  RPC_URL = "https://rpc.pearl.testnets.gno.land:443"
+  CHAIN_ID = "pearl-1"
+  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv23"
   HUB = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/hubv2"
   PROFILE = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
   META = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/meta"
