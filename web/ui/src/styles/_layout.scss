@@ -123,6 +123,7 @@
   align-items: center;
   gap: 0.65rem;
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .cmd-trigger {
@@ -139,6 +140,10 @@
   justify-content: space-between !important;
   width: 220px;
   gap: 0.5rem;
+
+  @media (max-width: 900px) {
+    display: none !important;
+  }
 
   &:hover {
     border-color: var(--accent-mid-soft) !important;
