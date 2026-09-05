@@ -168,12 +168,12 @@ export default function Layout() {
           onKeyDown={(e) => e.key === "Enter" && nav("/")}
           role="button"
           tabIndex={0}
-          aria-label="gnomi home"
+          aria-label="Gnomi.fun home"
         >
           <div className="brand-logo-wrap">
-            <img src="/gnomi-logo-light.svg" alt="gnomi" className="brand-logo logo-light" />
-            <img src="/gnomi-logo-dark.svg" alt="gnomi" className="brand-logo logo-dark" />
-            <span className="brand-tag">Sapphire</span>
+            <img src="/gnomi-logo-light.svg" alt="Gnomi.fun" className="brand-logo logo-light" />
+            <img src="/gnomi-logo-dark.svg" alt="Gnomi.fun" className="brand-logo logo-dark" />
+            <span className="brand-tag">Gnomi.fun</span>
           </div>
         </div>
 

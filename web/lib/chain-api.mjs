@@ -255,6 +255,56 @@ function enrichPricing(m, totalSupply = 1_000_000_000) {
   m.poolGnot = (m.poolUgnot || 0) / UGNOT_PER_GNOT;
   m.spotScaled = Math.floor(priceUgnot * 1_000_000);
   m.priceSource = m.status === 1 ? "pool_mark" : "curve";
+  attachLiquidityTvl(m);
+  return m;
+}
+
+/**
+ * LP TVL in GNOT: WUGNOT side + token side at current spot.
+ * Pad poolUgnot alone equals raise-at-grad and looked like "target raise" in the UI.
+ */
+function attachLiquidityTvl(m) {
+  if (!m || m.status !== 1) {
+    m.liquidityGnot = 0;
+    m.liquidityWugnotGnot = 0;
+    m.liquidityTokenGnot = 0;
+    m.liquiditySource = null;
+    return m;
+  }
+  const px = Number(m.spotGnot || m.priceGnot) || 0;
+  const poolUg = Number(m.poolUgnot) || 0;
+  const poolTok = Number(m.poolToken) || 0;
+  let ug = poolUg;
+  let tok = poolTok;
+  let source = "pad_pool";
+
+  const note = String(m.gnoswapNote || "");
+  const a0 = Number(note.match(/a0=(\d+)/)?.[1] || 0);
+  const a1 = Number(note.match(/a1=(\d+)/)?.[1] || 0);
+  const wUsed = Number(note.match(/wugnotUsed=(\d+)/)?.[1] || 0);
+  if (m.gnoswapListed && (a0 > 0 || a1 > 0 || wUsed > 0)) {
+    const t0 = String(m.gnoswapPoolPath || note.match(/pool=([^\s]+)/)?.[1] || "").split(":")[0] || "";
+    const t0IsWugnot = /wugnot/i.test(t0);
+    if (wUsed > 0) {
+      ug = wUsed;
+      tok = t0IsWugnot ? a1 : a0;
+      if (!(tok > 0)) tok = t0IsWugnot ? a0 : a1;
+    } else if (t0IsWugnot) {
+      ug = a0;
+      tok = a1;
+    } else {
+      ug = a1;
+      tok = a0;
+    }
+    source = "gnoswap_list_note";
+  }
+
+  const wugnotGnot = ug / UGNOT_PER_GNOT;
+  const tokenGnot = px > 0 && tok > 0 ? tok * px : wugnotGnot;
+  m.liquidityWugnotGnot = wugnotGnot;
+  m.liquidityTokenGnot = tokenGnot;
+  m.liquidityGnot = wugnotGnot + tokenGnot;
+  m.liquiditySource = source;
   return m;
 }
 
@@ -274,6 +324,7 @@ function applySpotPrice(m, priceGnot, totalSupply = 1_000_000_000, source = "spo
   const circ = Number(m.sold) > 0 ? Number(m.sold) : 0;
   m.circMcapGnot = px * circ;
   m.priceSource = source;
+  attachLiquidityTvl(m);
   return m;
 }
 

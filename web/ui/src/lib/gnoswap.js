@@ -135,7 +135,7 @@ export function gnoTokenResourceEntry(m, { imageUrl = "", chainId = "sapphire-1"
     symbol: sym,
     decimals: 0,
     chain_id: chainId,
-    description: String(m?.description || `${name} ($${sym}) launched on gnomemepad (Sapphire).`).slice(0, 1500),
+    description: String(m?.description || `${name} ($${sym}) launched on Gnomi.fun.`).slice(0, 1500),
     website_url: "",
     twitter_url: "",
     discord_url: "",

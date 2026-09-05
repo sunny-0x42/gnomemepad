@@ -20,8 +20,8 @@ export default function Docs() {
           kicker={t("Docs", "Tài liệu")}
           title={t("Guide", "Hướng dẫn")}
           lede={t(
-            "How gnomemepad works on Gno Sapphire: fair launch, WUGNOT bonding curve, graduate, then trade on Gnoswap.",
-            "Cách gnomemepad hoạt động trên Gno Sapphire: fair launch, bonding curve WUGNOT, graduate, rồi giao dịch trên Gnoswap.",
+            "How Gnomi.fun works on Gno.land: fair launch, WUGNOT bonding curve, graduate, then trade on Gnoswap.",
+            "Cách Gnomi.fun hoạt động trên Gno.land: fair launch, bonding curve WUGNOT, graduate, rồi giao dịch trên Gnoswap.",
           )}
         />
 
@@ -45,8 +45,8 @@ export default function Docs() {
           <h2>{t("Overview", "Tổng quan")}</h2>
           <p>
             {t(
-              "gnomemepad is a meme launchpad on Gno.land Sapphire testnet. Anyone can create a coin with no pre-mint. Buyers trade on a bonding curve until the raise target is hit; then the launch graduates and can list a Gnoswap pool for open market trading.",
-              "gnomemepad là launchpad meme trên Gno.land Sapphire testnet. Ai cũng tạo được coin, không pre-mint. Mua bán trên bonding curve đến khi đạt mục tiêu raise; launch graduate và có thể list pool Gnoswap để giao dịch tự do.",
+              "Gnomi.fun is a meme launchpad on Gno.land. Anyone can create a coin with no pre-mint. Buyers trade on a bonding curve until the raise target is hit; then the launch graduates and can list a Gnoswap pool for open market trading.",
+              "Gnomi.fun là launchpad meme trên Gno.land. Ai cũng tạo được coin, không pre-mint. Mua bán trên bonding curve đến khi đạt mục tiêu raise; launch graduate và có thể list pool Gnoswap để giao dịch tự do.",
             )}
           </p>
           <ul>
@@ -230,8 +230,8 @@ export default function Docs() {
             </li>
             <li>
               {t("Open", "Mở")}{" "}
-              <a href="https://gnomemepad-sapphire.netlify.app" target="_blank" rel="noreferrer">
-                gnomemepad
+              <a href="https://gnomi.fun" target="_blank" rel="noreferrer">
+                Gnomi.fun
               </a>
               , {t("tap", "bấm")} <strong>{t("Connect", "Kết nối")}</strong>.
             </li>

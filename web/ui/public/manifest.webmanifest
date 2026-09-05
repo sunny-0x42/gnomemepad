@@ -1,7 +1,7 @@
 {
-  "name": "gnomi",
-  "short_name": "gnomi",
-  "description": "Fair meme launches on Gno Sapphire",
+  "name": "Gnomi.fun",
+  "short_name": "Gnomi.fun",
+  "description": "Fair meme launches on Gno.land",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#07080c",

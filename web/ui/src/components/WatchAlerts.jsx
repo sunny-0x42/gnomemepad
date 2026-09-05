@@ -41,7 +41,7 @@ export default function WatchAlerts() {
             if (typeof Notification !== "undefined" && Notification.permission === "granted") {
               try {
                 // eslint-disable-next-line no-new
-                new Notification("gnomemepad", { body: msg });
+                new Notification("Gnomi.fun", { body: msg });
               } catch {
                 /* ignore */
               }

@@ -1843,17 +1843,36 @@ export default function Token() {
             <span className="ths-metric-label">{(isPool ? t("liquidity") : (t("targetRaise") || "TARGET RAISE")).toUpperCase()}</span>
             <strong className="ths-metric-val mono">
               {(() => {
-                const liqG = Number(m.poolGnot) || (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT || 0;
-                if (isPool || liqG > 0) {
-                  if (liqG <= 0) return "—";
-                  return m.gnotUsd > 0 ? fmtMcapUsd(liqG * m.gnotUsd) : `${fmtGnot(liqG, { alreadyGnot: true })} GNOT`;
+                // Graduated: TVL = WUGNOT side + token side (not raise target / poolUgnot alone)
+                const liqG =
+                  Number(m.liquidityGnot) ||
+                  (() => {
+                    const w = Number(m.poolGnot) || (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT || 0;
+                    const tok = Number(m.poolToken) || 0;
+                    const px = Number(m.spotGnot || m.priceGnot) || 0;
+                    return w > 0 ? w + (px > 0 && tok > 0 ? tok * px : w) : 0;
+                  })();
+                if (isPool) {
+                  if (!(liqG > 0)) return "—";
+                  return m.gnotUsd > 0
+                    ? fmtMcapUsd(liqG * m.gnotUsd)
+                    : `${fmtGnot(liqG, { alreadyGnot: true })} GNOT`;
                 }
                 return `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`;
               })()}
             </strong>
             <span className="ths-metric-sub faint mono">
               {isPool
-                ? (Number(m.poolGnot) > 0 ? `${Number(m.poolGnot).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GNOT` : (t("poolReserves") || "Pool reserves"))
+                ? (() => {
+                    const w =
+                      Number(m.liquidityWugnotGnot) ||
+                      Number(m.poolGnot) ||
+                      (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT ||
+                      0;
+                    return w > 0
+                      ? `${w.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} WUGNOT + tokens`
+                      : t("poolReserves") || "Pool TVL";
+                  })()
                 : `${pct}% ${t("filled") || "filled"}`}
             </span>
           </div>

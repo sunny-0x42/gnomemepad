@@ -18,8 +18,8 @@ export async function handler(event) {
   const site =
     process.env.URL || process.env.DEPLOY_PRIME_URL || "https://gnomemepad-sapphire.netlify.app";
 
-  let title = "gnomemepad · Sapphire";
-  let desc = "Fair meme launches on Gno Sapphire — bonding curve, graduate to Gnoswap.";
+  let title = "Gnomi.fun";
+  let desc = "Fair meme launches on Gno.land — bonding curve, graduate to Gnoswap.";
   let tokenUrl = site;
   let image = "";
 
@@ -32,8 +32,8 @@ export async function handler(event) {
       const body = typeof res.body === "string" ? JSON.parse(res.body) : res.body;
       if (body && !body.error && body.symbol) {
         const pct = body.progressPct || 0;
-        title = `$${body.symbol} · ${pct}% · gnomemepad`;
-        desc = `${body.name || body.symbol} — ${pct}% to graduate on Gno Sapphire. Raised ${body.raisedGnot ?? "—"} GNOT.`;
+        title = `$${body.symbol} · ${pct}% · Gnomi.fun`;
+        desc = `${body.name || body.symbol} — ${pct}% to graduate on Gnomi.fun. Raised ${body.raisedGnot ?? "—"} GNOT.`;
         tokenUrl = `${site}/token/${encodeURIComponent(id)}${pkg ? `?pkg=${encodeURIComponent(pkg)}` : ""}`;
         // Prefer meta image, then launch uri
         try {

@@ -206,7 +206,7 @@ export function AppProvider({ children }) {
           gasWanted: opts.gasWanted || 300_000_000,
           gasFee: opts.gasFee || 2_000_000,
           network,
-          memo: opts.memo || "gnomemepad",
+          memo: opts.memo || "Gnomi.fun",
         });
         if (!opts.silent) {
           setTx({
