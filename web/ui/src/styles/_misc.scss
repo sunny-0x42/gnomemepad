@@ -6389,7 +6389,19 @@ span.trade-bal:hover {
   }
 
   .token-layout {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    .token-sidebar {
+      order: 1;
+      width: 100%;
+    }
+
+    .token-main {
+      order: 2;
+      width: 100%;
+    }
   }
 
   .trade-panel {
@@ -6404,8 +6416,8 @@ span.trade-bal:hover {
     display: none;
   }
 
-  .cmd-trigger-label {
-    display: none;
+  .cmd-trigger {
+    display: none !important;
   }
 }
 
@@ -6417,7 +6429,7 @@ span.trade-bal:hover {
 
 @media (max-width: 640px) {
   main.app-main {
-    padding: 1.1rem 0.9rem 3.5rem;
+    padding: 1.1rem 0rem 3.5rem !important;
   }
 
   .hero-band {

@@ -2598,6 +2598,18 @@ a {
 
 @media (max-width: 1024px) {
   .token-layout {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    .token-sidebar {
+      order: 1;
+      width: 100%;
+    }
+
+    .token-main {
+      order: 2;
+      width: 100%;
+    }
   }
 }

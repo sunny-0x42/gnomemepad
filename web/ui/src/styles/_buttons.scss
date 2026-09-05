@@ -79,6 +79,12 @@
   justify-content: center;
   gap: 0.45rem;
   border-radius: 999px;
+
+  @media (max-width: 640px) {
+    min-width: auto;
+    padding: 0 0.85rem;
+    font-size: 0.8rem;
+  }
 }
 
 .btn.wallet-btn .wallet-icon {
