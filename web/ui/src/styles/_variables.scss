@@ -1,0 +1,223 @@
+/* gnomemepad — design system (restored pre color-unification palette) */
+:root,
+[data-theme="dark"] {
+  --bg: #0b0b0b;
+  --bg-elevated: #0c0e14;
+  --surface: #11141c;
+  --surface2: #171b26;
+  --surface3: #1e2433;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --text: #f2f4f8;
+  --text-secondary: #d0d5e2;
+  --muted: #a0a8bb;
+  --faint: #7a8296;
+  --accent: #0550C9;
+  --accent-2: #0084ff;
+  --accent-soft: rgba(17, 100, 238, 0.15);
+  --accent-glow: rgba(17, 100, 238, 0.35);
+  --cyan: #2dd4bf;
+  --cyan-soft: rgba(45, 212, 191, 0.12);
+  --good: #34d399;
+  --good-soft: rgba(52, 211, 153, 0.12);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  /* Gnoswap-aligned type: Inter UI + Roboto for dense UI/numbers */
+  --font: "Montserrat", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-alt: var(--font);
+  --mono: "Roboto", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Type scale (px, matches Gnoswap body/p tokens) */
+  --fs-h1: 28px;
+  --fs-h2: 24px;
+  --fs-h3: 18px;
+  --fs-body: 16px;
+  --fs-body-sm: 14px;
+  --fs-caption: 13px;
+  --fs-label: 12px;
+  --fs-micro: 11px;
+  --lh-tight: 1.25;
+  --lh-body: 1.45;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --header-h: 76px;
+  /* Full-bleed content: only side padding limits width */
+  --max: 100%;
+  --max-wide: 100%;
+  --page-pad-x: 1.5rem;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --hero-glow: rgba(124, 108, 240, 0.18);
+
+  /* compat aliases used by later CSS */
+  --glass: rgba(7, 8, 12, 0.72);
+  --overlay: rgba(0, 0, 0, 0.28);
+  --overlay-soft: rgba(0, 0, 0, 0.18);
+  --white-04: rgba(255, 255, 255, 0.04);
+  --white-06: rgba(255, 255, 255, 0.06);
+  --white-08: rgba(255, 255, 255, 0.08);
+  --white-10: rgba(255, 255, 255, 0.1);
+  --white-12: rgba(255, 255, 255, 0.12);
+  --white-18: rgba(255, 255, 255, 0.18);
+  --on-accent: #ffffff;
+  --on-good: #04120a;
+  --on-bad: #1a0505;
+  --accent-hi: #2a85ff;
+  --accent-mid: #0b55d6;
+  --accent-mid-soft: rgba(17, 100, 238, 0.25);
+  --accent-border: rgba(17, 100, 238, 0.4);
+  --accent-grad: linear-gradient(135deg, #2a85ff 0%, #1164ee 55%, #0084ff 120%);
+  --accent-grad-sm: linear-gradient(135deg, #2a85ff 0%, #0084ff 100%);
+  --cyan-border: rgba(45, 212, 191, 0.28);
+  --cyan-glow: rgba(45, 212, 191, 0.2);
+  --good-hi: #4ade80;
+  --good-strong: #16a34a;
+  --good-mid: rgba(34, 197, 94, 0.28);
+  --good-glow: rgba(34, 197, 94, 0.35);
+  --good-border: rgba(52, 211, 153, 0.35);
+  --good-grad: linear-gradient(180deg, #22c55e, #16a34a);
+  --good-bar: linear-gradient(90deg, #10b981, #34d399);
+  --bad-hi: #fca5a5;
+  --bad-strong: #ef4444;
+  --bad-mid: rgba(239, 68, 68, 0.28);
+  --bad-glow: rgba(239, 68, 68, 0.35);
+  --bad-border: rgba(248, 113, 113, 0.3);
+  --bad-grad: linear-gradient(180deg, #f87171, #ef4444);
+  --bad-bar: linear-gradient(90deg, #f87171, #ef4444);
+  --warn-hi: #fcd34d;
+  --warn-border: rgba(251, 191, 36, 0.32);
+  --warn-glow: rgba(251, 191, 36, 0.28);
+  --heat: #fb923c;
+  --heat-soft: rgba(251, 146, 60, 0.14);
+  --heat-border: rgba(251, 146, 60, 0.45);
+  --heat-glow: rgba(251, 146, 60, 0.28);
+  --fire: #fb7185;
+  --fire-soft: rgba(251, 113, 133, 0.12);
+  --fire-border: rgba(251, 113, 133, 0.4);
+  --fire-glow: rgba(251, 113, 133, 0.22);
+  --heat-bar: linear-gradient(90deg, #fbbf24, #f97316, #ef4444);
+  --fire-badge: linear-gradient(135deg, #fb923c, #ef4444);
+  --chart-up: #22c55e;
+  --chart-down: #ef4444;
+  --chart-grid: rgba(148, 163, 184, 0.08);
+  --chart-cross: rgba(148, 163, 184, 0.45);
+  --chart-label: #1e293b;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface2: #f0f2f7;
+  --surface3: #e6e9f2;
+  --border: rgba(15, 20, 40, 0.08);
+  --border-strong: rgba(15, 20, 40, 0.14);
+  --text: #001522;
+  --text-secondary: #2e3448;
+  --muted: #5a6178;
+  --faint: #7a8299;
+  --accent: #0550C9;
+  --accent-2: #0050c7;
+  --accent-soft: rgba(0, 101, 238, 0.1);
+  --accent-glow: rgba(0, 101, 238, 0.2);
+  --cyan: #0d9488;
+  --cyan-soft: rgba(13, 148, 136, 0.1);
+  --good: #059669;
+  --good-soft: rgba(5, 150, 105, 0.1);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.1);
+  --bad: #dc2626;
+  --bad-soft: rgba(220, 38, 38, 0.1);
+  --shadow: 0 12px 40px rgba(20, 30, 60, 0.08);
+  --shadow-sm: 0 4px 16px rgba(20, 30, 60, 0.06);
+  --hero-glow: transparent;
+  --heat-bar: var(--accent);
+  --fire: var(--accent);
+  --fire-badge: var(--accent-soft);
+  --fire-border: transparent;
+  --fire-glow: transparent;
+  --heat-glow: transparent;
+  --accent-grad: var(--accent);
+  --accent-grad-sm: var(--accent);
+
+  --glass: rgba(244, 245, 249, 0.85);
+  --overlay: rgba(15, 20, 40, 0.06);
+  --overlay-soft: rgba(15, 20, 40, 0.04);
+  --white-04: rgba(15, 20, 40, 0.03);
+  --white-06: rgba(15, 20, 40, 0.05);
+  --white-08: rgba(15, 20, 40, 0.07);
+  --white-10: rgba(15, 20, 40, 0.09);
+  --white-12: rgba(15, 20, 40, 0.12);
+  --white-18: rgba(15, 20, 40, 0.16);
+  --on-accent: #ffffff;
+  --on-good: #ffffff;
+  --on-bad: #ffffff;
+  --accent-hi: #1a7bff;
+  --accent-mid: #0056cc;
+  --accent-mid-soft: rgba(0, 101, 238, 0.16);
+  --accent-border: rgba(0, 101, 238, 0.3);
+  --accent-grad: linear-gradient(135deg, #1a7bff 0%, #0056cc 55%, #0050c7 120%);
+  --accent-grad-sm: linear-gradient(135deg, #1a7bff 0%, #0050c7 100%);
+  --cyan-border: rgba(13, 148, 136, 0.28);
+  --cyan-glow: rgba(13, 148, 136, 0.18);
+  --good-hi: #22c55e;
+  --good-strong: #047857;
+  --good-mid: rgba(5, 150, 105, 0.22);
+  --good-glow: rgba(5, 150, 105, 0.28);
+  --good-border: rgba(5, 150, 105, 0.32);
+  --good-grad: linear-gradient(180deg, #22c55e, #059669);
+  --good-bar: linear-gradient(90deg, #047857, #34d399);
+  --bad-hi: #f87171;
+  --bad-strong: #b91c1c;
+  --bad-mid: rgba(220, 38, 38, 0.22);
+  --bad-glow: rgba(220, 38, 38, 0.28);
+  --bad-border: rgba(220, 38, 38, 0.32);
+  --bad-grad: linear-gradient(180deg, #f87171, #dc2626);
+  --bad-bar: linear-gradient(90deg, #f87171, #dc2626);
+  --warn-hi: #f59e0b;
+  --warn-border: rgba(217, 119, 6, 0.3);
+  --warn-glow: rgba(217, 119, 6, 0.22);
+  --heat: #ea580c;
+  --heat-soft: rgba(234, 88, 12, 0.1);
+  --heat-border: rgba(234, 88, 12, 0.35);
+  --heat-glow: rgba(234, 88, 12, 0.22);
+  --fire: #e11d48;
+  --fire-soft: rgba(225, 29, 72, 0.1);
+  --fire-border: rgba(225, 29, 72, 0.35);
+  --fire-glow: rgba(225, 29, 72, 0.2);
+  --heat-bar: linear-gradient(90deg, #d97706, #ea580c, #dc2626);
+  --fire-badge: linear-gradient(135deg, #ea580c, #dc2626);
+  --chart-up: #16a34a;
+  --chart-down: #dc2626;
+  --chart-grid: rgba(100, 116, 139, 0.12);
+  --chart-cross: rgba(100, 116, 139, 0.4);
+  --chart-label: #e2e8f0;
+}
+
+[data-theme="light"] body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, var(--hero-glow), transparent 55%);
+}
+
+[data-theme="light"] .top {
+  background: var(--glass);
+}
+
+[data-theme="light"] .logo {
+  color: #fff;
+}
+
+[data-theme="light"] .card-watch {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .nav-more-menu {
+  background: rgba(255, 255, 255, 0.98);
+}

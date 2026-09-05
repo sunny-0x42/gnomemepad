@@ -1,0 +1,23 @@
+
+::selection {
+  background: var(--accent-glow);
+  color: var(--on-accent);
+}
+.sort-select {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  outline: none;
+}
+
+/* Forms */
+label,
+.field {
+  display: block;
+  margin-bottom: 0.9rem;
+  font-size: 0.82rem;
+  font-weight: 550;
+  color: var(--muted);
+}

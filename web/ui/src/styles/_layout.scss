@@ -1,0 +1,282 @@
+/* â”€â”€â”€ Shell â”€â”€â”€ */
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  transition: opacity 0.15s var(--ease);
+}
+
+.brand:hover {
+  opacity: 0.92;
+}
+
+.brand-logo-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.brand-logo {
+  height: 48px;
+  width: auto;
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .brand-logo {
+    height: 38px;
+  }
+}
+
+[data-theme="light"] .logo-dark {
+  display: none !important;
+}
+
+[data-theme="dark"] .logo-light {
+  display: none !important;
+}
+
+[data-theme="light"] .top {
+  background: #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.brand-tag {
+  position: absolute;
+  top: -7px;
+  right: 0;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 0.12rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent-mid-soft);
+  background: var(--accent-soft);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+  justify-content: center;
+  /* overflow must stay visible so desktop "More" dropdown is not clipped */
+  overflow: visible;
+  scrollbar-width: none;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: var(--fs-body-sm);
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.nav-btn:hover {
+  color: var(--text-highlight);
+  background: var(--surface-hover);
+}
+
+.nav-btn.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-mid-soft);
+}
+
+.nav-admin:not(.hidden) {
+  color: var(--warn) !important;
+  font-weight: 600;
+}
+
+.nav-admin.active {
+  background: var(--warn-soft) !important;
+  box-shadow: inset 0 0 0 1px var(--warn-soft) !important;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.cmd-trigger {
+  border-radius: 999px !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  height: 38px !important;
+  padding: 0 0.85rem !important;
+  font-size: var(--fs-body-sm) !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 220px;
+  gap: 0.5rem;
+
+  &:hover {
+    border-color: var(--accent-mid-soft) !important;
+    background: var(--surface-hover) !important;
+    color: var(--text) !important;
+  }
+
+  .kbd {
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+}
+
+.nav-toggle {
+  display: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+
+.settings-fab {
+  position: fixed;
+  bottom: 3.75rem;
+  right: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 4px 0 0 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  box-shadow: 0 4px 16px var(--accent-mid-soft);
+  cursor: pointer;
+  z-index: 99;
+  transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+
+  &:hover {
+    background: var(--accent-hi);
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px var(--accent-border);
+  }
+
+  .icon-spin {
+    display: inline-block;
+    animation: spin 8s linear infinite;
+  }
+
+  &:hover .icon-spin {
+    animation-duration: 3s;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.nav-toggle span {
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  background: currentColor;
+  position: relative;
+}
+
+.nav-toggle span::before,
+.nav-toggle span::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 16px;
+  height: 1.5px;
+  background: currentColor;
+}
+
+.nav-toggle span::before {
+  top: -5px;
+}
+
+.nav-toggle span::after {
+  top: 5px;
+}
+
+/* Nav icons */
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.nav-btn-icon {
+  display: inline-flex;
+  opacity: 0.85;
+}
+
+/* Desktop More menu */
+.nav-more-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.nav-more-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 180px;
+  padding: 0.4rem;
+  background: rgba(12, 14, 20, 0.98);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  z-index: 60;
+  backdrop-filter: blur(12px);
+}
+
+.nav-more-menu .nav-btn {
+  text-align: left;
+  width: 100%;
+  display: block;
+}

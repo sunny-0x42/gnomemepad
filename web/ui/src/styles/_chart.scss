@@ -1,0 +1,325 @@
+/* Price chart — DEX Terminal style (lightweight-charts) */
+.price-chart.pump-chart,
+.terminal-chart-wrap {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--text);
+  box-shadow: none !important;
+}
+
+.price-chart-head.pump-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.price-chart-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.price-chart-value {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+  font-size: clamp(1.45rem, 2.4vw, 1.85rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.price-chart-value.up strong {
+  color: var(--accent);
+}
+
+.price-chart-value.down strong {
+  color: #f6465d;
+}
+
+.chart-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.chart-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chart-toolbar-label {
+  font-size: 0.68rem;
+  font-weight: 750;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 0.25rem 0 0.2rem;
+  opacity: 0.8;
+}
+
+.price-chart-svg {
+  width: 100%;
+  height: 320px;
+  display: block;
+  border-radius: 12px;
+  background: var(--overlay);
+  border: 1px solid var(--border);
+}
+
+.price-chart-empty {
+  min-height: 360px;
+  height: min(48vh, 440px);
+  display: grid;
+  place-content: center;
+  place-items: center;
+  gap: 0.35rem;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  font-size: 0.9rem;
+  background: var(--overlay-soft);
+  text-align: center;
+}
+
+.price-chart-empty-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  min-height: 0;
+  height: auto;
+  border: 0;
+  background: color-mix(in srgb, var(--surface, #0f1419) 55%, transparent);
+  pointer-events: none;
+}
+
+.price-chart-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.price-chart-foot em {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.chart-range .filter-btn {
+  padding: 0.32rem 0.58rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.chart-range .filter-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-border, rgba(17, 100, 238, 0.35));
+}
+
+@media (max-width: 640px) {
+  .chart-toolbar {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .chart-toolbar-row {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ULTRA-COMPACT DEX CHART TOOLBAR (Photon / BullX style)
+   ═══════════════════════════════════════════════════════════════ */
+
+.terminal-chart-wrap {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  overflow: hidden;
+}
+
+.pump-chart-wrap {
+  position: relative;
+  width: 100%;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.pump-chart-canvas {
+  width: 100%;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.terminal-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.45rem 0.85rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  min-height: 38px;
+}
+
+.tch-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.tch-pair {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.tch-dex-pill {
+  padding: 0.15rem 0.45rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 400;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tch-tf-group {
+  display: flex;
+  align-items: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.tch-tf-btn {
+  padding: 0.2rem 0.55rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 400;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tch-tf-btn:hover {
+  color: var(--text);
+  background: var(--surface3, rgba(255, 255, 255, 0.05));
+}
+
+.tch-tf-btn.active {
+  background: var(--accent-soft, rgba(17, 100, 238, 0.18));
+  color: var(--accent, #1164ee);
+  border: 1px solid var(--accent-border, rgba(17, 100, 238, 0.35));
+  font-weight: 500;
+}
+
+/* OHLC inline matching Image 3 with normal font weight */
+.tch-ohlc {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  font-size: 0.82rem;
+  margin-left: 0.35rem;
+}
+
+.tch-ohlc-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.tch-lbl {
+  font-style: normal;
+  color: #71717a;
+  font-weight: 400;
+  font-size: 0.78rem;
+}
+
+.tch-ohlc-item .val {
+  font-weight: 400;
+  font-size: 0.82rem;
+}
+
+.tch-ohlc-item .val.up {
+  color: var(--good, #14f195);
+}
+
+.tch-ohlc-item .val.down {
+  color: var(--bad, #f6465d);
+}
+
+.tch-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tch-tool-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.tch-tool-btn svg {
+  display: block;
+}
+
+.tch-tool-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface3, var(--surface2));
+}
+
+.tch-tool-btn.active {
+  color: var(--accent, #1164ee);
+  border-color: var(--accent-border, rgba(17, 100, 238, 0.45));
+  background: var(--accent-soft, rgba(17, 100, 238, 0.12));
+}
