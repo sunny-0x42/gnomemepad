@@ -766,17 +766,30 @@ async function enrichListedMarketsFromGnoswap(markets, parts = []) {
     listed.map(async (m) => {
       try {
         const tokenKey = marketTokenKey(m);
-        if (!tokenKey) return;
+        if (!tokenKey) {
+          m.dexHistoryEmpty = true;
+          m.volumeScope = "curve_only";
+          return;
+        }
         const pts = await fetchGnoswapSwapHistory(tokenKey, 30);
-        const lastPx = lastTradePriceGnot(pts);
-        if (!(lastPx > 0)) return;
+        const lastPx = lastTradePriceGnot(pts, "gnoswap");
+        if (!(lastPx > 0)) {
+          // Keep frozen pool_mark from enrichPricing — matches Token page when DEX empty
+          m.dexHistoryEmpty = true;
+          m.volumeScope = "curve_only";
+          return;
+        }
         const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
         applySpotPrice(m, lastPx, supply, "gnoswap_last_trade");
+        m.dexHistoryEmpty = false;
+        m.volumeScope = "curve_and_dex";
         const stats = summarizeTradeStats(pts);
         if (stats && stats.trades > 0) {
           m.dexTradeStats = stats;
         }
       } catch {
+        m.dexHistoryEmpty = true;
+        m.volumeScope = "curve_only";
         /* keep pad pool mark */
       }
     }),
@@ -981,12 +994,17 @@ function marketVwapBuyGnot(chart) {
   return ug / tok / UGNOT_PER_GNOT;
 }
 
-/** Last non-open trade price in GNOT/token (fallback for broken pool marks). */
-function lastTradePriceGnot(chart) {
+/**
+ * Last non-open/non-LP trade price in GNOT/token.
+ * @param {object[]} chart
+ * @param {string|null} sourceFilter  e.g. "gnoswap" — only that source; null = any
+ */
+function lastTradePriceGnot(chart, sourceFilter = null) {
   const pts = [...(chart || [])].reverse();
   for (const pt of pts) {
     const s = Number(pt.side);
     if (s === 2 || s === 3 || s === 4) continue;
+    if (sourceFilter && pt.source !== sourceFilter) continue;
     const px = Number(pt.priceGnot);
     if (px > 0) return px;
   }
@@ -1147,20 +1165,36 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   }
 
   m.tradeStats = summarizeTradeStats(m.chart || []);
+  const dexPts = (m.chart || []).filter((p) => p.source === "gnoswap");
+  m.dexHistoryEmpty = m.gnoswapListed ? dexPts.length === 0 : null;
+  m.volumeScope = !m.gnoswapListed
+    ? "curve"
+    : dexPts.length > 0
+      ? "curve_and_dex"
+      : "curve_only";
+  if (m.volumeScope === "curve_only") {
+    m.volumeNote =
+      "Volume from bonding-curve trades only — Gnoswap swap history unavailable for this token.";
+  }
 
-  // Spot for valuation: last buy/sell mark, else pool/curve enrichPricing
-  const lastPx = lastTradePriceGnot(m.chart);
+  // Spot for valuation:
+  //  - Listed + DEX history → last Gnoswap trade
+  //  - Listed + no DEX history → frozen pool_mark (same as Markets cards)
+  //  - On curve → last curve trade when useful
+  const lastDexPx = lastTradePriceGnot(m.chart, "gnoswap");
+  const lastAnyPx = lastTradePriceGnot(m.chart);
   const poolPx = Number(m.priceGnot) || 0;
   const supply = Number(params.totalSupply) || 1_000_000_000;
-  // Listed: always prefer last Gnoswap/curve trade when present (pad pool
-  // mark freezes at list). On curve, prefer last trade when pool unset.
   let spotGnot = poolPx;
   let spotSource = m.priceSource || (m.status === 1 ? "pool_mark" : "curve");
-  if (m.gnoswapListed && lastPx != null && lastPx > 0) {
-    spotGnot = lastPx;
+  if (m.gnoswapListed && lastDexPx != null && lastDexPx > 0) {
+    spotGnot = lastDexPx;
     spotSource = "gnoswap_last_trade";
-  } else if (lastPx != null && lastPx > 0 && (!poolPx || m.status !== 1)) {
-    spotGnot = lastPx;
+  } else if (m.gnoswapListed) {
+    spotGnot = poolPx > 0 ? poolPx : lastAnyPx;
+    spotSource = poolPx > 0 ? "pool_mark" : "last_trade";
+  } else if (lastAnyPx != null && lastAnyPx > 0 && (!poolPx || m.status !== 1)) {
+    spotGnot = lastAnyPx;
     spotSource = "last_trade";
   }
   applySpotPrice(m, spotGnot > 0 ? spotGnot : poolPx, supply, spotSource);
@@ -1170,7 +1204,7 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   const openPriceGnot =
     vwapBuy ??
     (m.chart || []).find((pt) => Number(pt.side) === 0 && Number(pt.priceGnot) > 0)?.priceGnot ??
-    lastPx ??
+    lastAnyPx ??
     null;
   m.openPriceGnot = openPriceGnot;
   m.avgEntryGnot = vwapBuy;
@@ -1229,9 +1263,10 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     // Cap = ListBuyers query truncated (pad max 100), not "buyers > holders with bal"
     m.holdersCapped = addrs.length >= 40 || addrs.length >= 100;
     m.holdersSource = "ListBuyers";
+    m.holdersLabel = m.gnoswapListed ? "Curve buyers" : "Holders";
     // UniqueBuyers = ever bought on pad curve — not full GRC20/DEX holders
     m.holdersNote = m.gnoswapListed
-      ? "Curve buyers with balance > 0 (pad UniqueBuyers). Wallets that only traded on Gnoswap are not indexed."
+      ? "Showing curve buyers with balance > 0 (pad ListBuyers). Wallets that only bought on Gnoswap are not listed."
       : holders.length < (m.buyers || 0)
         ? "Some curve buyers sold to zero balance."
         : null;
@@ -3317,6 +3352,33 @@ export async function handleApi(method, pathname, query, bodyText) {
         gnotUsd: m.gnotUsd || 0,
         priceUsd: m.priceUsd || 0,
         points: m.chart || [],
+        volumeScope: m.volumeScope || null,
+        volumeNote: m.volumeNote || null,
+        priceSource: m.priceSource || null,
+      });
+    }
+
+    // Alias: /api/trades?id=… → chart trade points (was 404)
+    if (method === "GET" && (p === "/api/trades" || p === "/api/trades/")) {
+      const id = (q.get("id") || "").trim();
+      if (!id) return json(400, { error: "id required" });
+      const pkgQ = (q.get("pkg") || "").trim();
+      const limit = Math.min(200, Math.max(1, Number(q.get("limit") || 80)));
+      const m = await withUsdPricing(await resolveMarketPkg(RPC, id, pkgQ || null, padSources));
+      const trades = (m.chart || [])
+        .filter((pt) => Number(pt.side) !== 2)
+        .slice()
+        .reverse()
+        .slice(0, limit);
+      return json(200, {
+        id: m.id,
+        symbol: m.symbol,
+        pkg: m.pkg,
+        priceSource: m.priceSource || null,
+        volumeScope: m.volumeScope || null,
+        volumeNote: m.volumeNote || null,
+        trades,
+        count: trades.length,
       });
     }
 

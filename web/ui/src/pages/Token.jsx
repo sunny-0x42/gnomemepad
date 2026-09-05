@@ -1835,6 +1835,7 @@ export default function Token() {
             </strong>
             <span className="ths-metric-sub faint mono">
               {`${fmtNum(txCount)} tx · ${volGnotNum > 0 ? volGnotNum.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "0.0000"} GNOT`}
+              {m.volumeScope === "curve_only" ? " · curve only" : ""}
             </span>
           </div>
 
@@ -1994,7 +1995,8 @@ export default function Token() {
                   className={`tt-tab-btn${infoTab === "holders" ? " active" : ""}`}
                   onClick={() => setInfoTab("holders")}
                 >
-                  {t("holders")} <span className="tt-count">{holders.length}</span>
+                  {m.holdersLabel || t("holders")}{" "}
+                  <span className="tt-count">{holders.length}</span>
                 </button>
                 <button
                   type="button"
@@ -2754,6 +2756,11 @@ function HoldersList({
 
   return (
     <div className="holders-panel">
+      {note ? (
+        <p className="holders-note muted" style={{ fontSize: "0.78rem", marginBottom: "0.55rem" }}>
+          {note}
+        </p>
+      ) : null}
       {entryPx != null && px > 0 && (
         <div className="holders-basis muted" style={{ fontSize: "0.78rem", marginBottom: "0.55rem" }}>
           Spot <strong className="mono">{fmtPrice(px)}</strong> GNOT/token · Entry (VWAP buys){" "}
