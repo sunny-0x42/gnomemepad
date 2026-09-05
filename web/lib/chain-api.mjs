@@ -377,22 +377,61 @@ function attachLiquidityTvl(m) {
 
 /**
  * After list: overwrite liquidity with live Gnoswap pool.GetBalances (on-chain TVL).
+ * Token side MUST be valued at pool-implied spot (ugnot/tokens), never pad dump
+ * pool_mark (raised/remaining) — that understates TVL by orders of magnitude.
  */
-async function enrichLiveGnoswapLiquidity(RPC, m) {
+async function enrichLiveGnoswapLiquidity(RPC, m, opts = {}) {
   if (!m || !m.gnoswapListed) return m;
   const poolPath = String(m.gnoswapPoolPath || "").trim();
   if (!poolPath) return m;
   const bal = await fetchGnoswapPoolBalances(RPC, poolPath);
   if (!bal || !(bal.ugnot >= 0) || !(bal.tokens >= 0)) return m;
-  const px = Number(m.spotGnot || m.priceGnot) || 0;
+
   const wugnotGnot = bal.ugnot / UGNOT_PER_GNOT;
-  const tokenGnot = px > 0 ? bal.tokens * px : 0;
+  // Spot from live reserves (GNOT per 1 token base unit)
+  let poolSpotGnot = 0;
+  if (bal.tokens > 0 && bal.ugnot > 0) {
+    poolSpotGnot = wugnotGnot / bal.tokens;
+  }
+  // Prefer pool-implied spot for TVL; fall back to last trade / pad only if needed
+  const px =
+    poolSpotGnot > 0
+      ? poolSpotGnot
+      : Number(m.spotGnot || m.priceGnot) > 0
+        ? Number(m.spotGnot || m.priceGnot)
+        : 0;
+  const tokenGnot = px > 0 && bal.tokens > 0 ? bal.tokens * px : 0;
+
   m.liquidityWugnotGnot = wugnotGnot;
   m.liquidityTokenGnot = tokenGnot;
+  // Both sides at pool mark → ≈ 2 × WUGNOT when reserves are priced consistently
   m.liquidityGnot = wugnotGnot + tokenGnot;
   m.liquiditySource = "gnoswap_pool_balances";
   m.poolBalUgnot = bal.ugnot;
   m.poolBalTokens = bal.tokens;
+  if (poolSpotGnot > 0) m.poolSpotGnot = poolSpotGnot;
+
+  // Align Price/MCap with live pool when we only had pad dump mark / no DEX trades
+  const syncSpot = opts.syncSpot !== false;
+  const src = String(m.priceSource || "");
+  const shouldSyncSpot =
+    syncSpot &&
+    poolSpotGnot > 0 &&
+    (m.dexHistoryEmpty === true ||
+      !src ||
+      src === "pool_mark" ||
+      src === "spot" ||
+      src === "curve" ||
+      src === "last_trade");
+  if (shouldSyncSpot) {
+    const supply =
+      Number(opts.totalSupply) ||
+      Number(m.params?.totalSupply) ||
+      Number(m.totalSupply) ||
+      1_000_000_000;
+    // applySpotPrice → attachLiquidityTvl preserves gnoswap_pool_balances
+    applySpotPrice(m, poolSpotGnot, supply, "gnoswap_pool_balances");
+  }
   return m;
 }
 
@@ -933,9 +972,10 @@ async function enrichListedMarketsFromGnoswap(RPC, markets, parts = []) {
         m.volumeScope = "curve_only";
         /* keep pad pool mark */
       }
-      // Live on-chain Gnoswap pool TVL (GetBalances)
+      // Live on-chain Gnoswap pool TVL (GetBalances) + pool-implied spot for TVL
       try {
-        await enrichLiveGnoswapLiquidity(RPC, m);
+        const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
+        await enrichLiveGnoswapLiquidity(RPC, m, { totalSupply: supply });
       } catch {
         /* keep seed/list-note fallback */
       }
@@ -1352,7 +1392,11 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   // Listed: live on-chain Gnoswap pool balances (total TVL), not raise/seed snapshot
   if (m.gnoswapListed) {
     try {
-      await enrichLiveGnoswapLiquidity(RPC, m);
+      await enrichLiveGnoswapLiquidity(RPC, m, {
+        totalSupply: supply,
+        // If we already have a real DEX last trade, keep that spot; still fix TVL
+        syncSpot: !(spotSource === "gnoswap_last_trade" && spotGnot > 0),
+      });
     } catch {
       /* keep seed/list-note fallback */
     }

@@ -1908,20 +1908,23 @@ export default function Token() {
             <span className="ths-metric-label">{(isPool ? t("liquidity") : (t("targetRaise") || "TARGET RAISE")).toUpperCase()}</span>
             <strong className="ths-metric-val mono">
               {(() => {
-                // Graduated: TVL = WUGNOT side + token side (not raise target / poolUgnot alone)
-                const liqG =
-                  Number(m.liquidityGnot) ||
-                  (() => {
-                    const w = Number(m.poolGnot) || (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT || 0;
-                    const tok = Number(m.poolToken) || 0;
-                    const px = Number(m.spotGnot || m.priceGnot) || 0;
-                    return w > 0 ? w + (px > 0 && tok > 0 ? tok * px : w) : 0;
-                  })();
+                // Listed → API liquidityGnot from live Gnoswap GetBalances (both sides).
+                // Never fall back to pad poolUgnot/raise (seed dump) when listed.
+                const listed = !!(m.gnoswapListed || m.listVenue);
+                const liqG = Number(m.liquidityGnot) || 0;
+                const fallbackG = (() => {
+                  if (listed) return 0;
+                  const w = Number(m.poolGnot) || (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT || 0;
+                  const tok = Number(m.poolToken) || 0;
+                  const px = Number(m.spotGnot || m.priceGnot) || 0;
+                  return w > 0 ? w + (px > 0 && tok > 0 ? tok * px : w) : 0;
+                })();
+                const shown = liqG > 0 ? liqG : fallbackG;
                 if (isPool) {
-                  if (!(liqG > 0)) return "—";
+                  if (!(shown > 0)) return "—";
                   return m.gnotUsd > 0
-                    ? fmtMcapUsd(liqG * m.gnotUsd)
-                    : `${fmtGnot(liqG, { alreadyGnot: true })} GNOT`;
+                    ? fmtMcapUsd(shown * m.gnotUsd)
+                    : `${fmtGnot(shown, { alreadyGnot: true })} GNOT`;
                 }
                 return `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`;
               })()}
@@ -1930,12 +1933,22 @@ export default function Token() {
               {isPool
                 ? (() => {
                     const w = Number(m.liquidityWugnotGnot) || 0;
+                    const tokSide = Number(m.liquidityTokenGnot) || 0;
                     const live = m.liquiditySource === "gnoswap_pool_balances";
+                    const listed = !!(m.gnoswapListed || m.listVenue);
+                    if (live && w > 0) {
+                      return `${w.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })} WUGNOT + ${tokSide.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })} tok · live pool`;
+                    }
+                    if (listed) return t("poolReserves") || "Listed pool TVL";
                     if (w > 0) {
                       return `${w.toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
-                      })} WUGNOT + tokens${live ? " · live pool" : ""}`;
+                      })} WUGNOT + tokens`;
                     }
                     return t("poolReserves") || "Pool TVL";
                   })()
