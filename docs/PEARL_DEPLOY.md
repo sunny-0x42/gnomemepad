@@ -98,7 +98,16 @@ hubv2.GetModule("pad")        # → …/padv23
 | meta | `…/gnomemepad/meta` |
 | pointsv2 | `…/gnomemepad/pointsv2` |
 | ammmathv2 | `…/gnomemepad/ammmathv2` |
-| **padv23** | **ready to deploy** (Gnoswap gate cleared) |
+| **padv23** | **LIVE** (height ~213875, Init + hub SetModule `pad`) |
+
+Verified 2026-09-05:
+
+- `ParamsInfo` → raise **10_000 GNOT**, bond **100 GNOT**, list fee **100 GNS**
+- `DefaultListVenue` → `gnoswap`; `ListVenues` → `gnoswap|Gnoswap|1|GNS`
+- Hub modules include `pad|…/padv23`
+
+**Production Netlify** still points at Sapphire `padv22` by default (`netlify.toml`).  
+Local Pearl UI: `copy web\.env.pearl.example web\.env.pearl` then `node --env-file=web/.env.pearl web/api-dev.mjs`.
 
 ## Multi-DEX listing (ListVenue — Approach A)
 
