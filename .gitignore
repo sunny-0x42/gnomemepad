@@ -11,12 +11,10 @@ server.err.log
 web/server.log
 web/server.err.log
 
-# ── Private backend (hosted at sunny-0x42/gnomemepad-backend) ──
-# Keep local copies for Netlify/dev; do not publish to the public monorepo.
-web/lib/
+# ── Local-only API helpers (not needed for Netlify CI) ──
+# Read API for Netlify is published: web/lib/* + web/netlify/functions/*
 web/server.mjs
 web/api-dev.mjs
-web/netlify/functions/
 # Built frontend artifacts
 web/ui/dist/
 web/ui/node_modules/
