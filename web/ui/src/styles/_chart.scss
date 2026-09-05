@@ -187,9 +187,11 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   gap: 0.6rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-height: 38px;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 5;
 }
 
 .tch-left {
@@ -242,15 +244,19 @@
 }
 
 .tch-tf-btn {
-  padding: 0.2rem 0.55rem;
+  padding: 0.25rem 0.6rem;
   border: none;
   background: transparent;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 400;
+  font-weight: 500;
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
+  pointer-events: auto;
+  user-select: none;
+  min-width: 2rem;
+  line-height: 1.2;
 }
 
 .tch-tf-btn:hover {

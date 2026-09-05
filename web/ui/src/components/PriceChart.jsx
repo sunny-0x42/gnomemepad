@@ -107,32 +107,61 @@ export default function PriceChart({
     // Prefer real trades; keep open/LP marks only as baseline when empty
     pts = tradePts.length ? tradePts : pts.filter((p) => p.side === 2 || p.side === 3).slice(0, 2);
 
-    // Align series end with canonical API spot (pool_mark / gnoswap) so chart ≠ metrics
-    if (markPrice > 0) {
+    // Align series end with canonical API spot (pool_mark / gnoswap) so chart C ≈ metrics.
+    // Soft patch last point when drift is small; append mark tick when material.
+    if (markPrice > 0 && pts.length) {
       const last = pts[pts.length - 1];
-      const lastH = last ? Number(last.height) || 0 : 0;
-      const lastT = last ? Number(last.timeMs) || Date.now() : Date.now();
-      const drift =
-        !last ||
-        !Number.isFinite(last.price) ||
-        Math.abs(last.price - markPrice) / markPrice > 0.005;
-      if (drift) {
-        pts = [
-          ...pts,
-          {
-            height: lastH + 1,
-            price: markPrice,
-            priceGnot: markPg > 0 ? markPg : markPrice,
-            priceUsd: markPu > 0 ? markPu : 0,
-            side: 0,
-            vol: 0,
-            buyVol: 0,
-            sellVol: 0,
-            timeMs: Math.max(lastT + 1000, Date.now()),
-            mark: true,
-          },
-        ];
+      const lastH = Number(last.height) || 0;
+      const lastT = Number(last.timeMs) || Date.now();
+      const rel =
+        Number.isFinite(last.price) && last.price > 0
+          ? Math.abs(last.price - markPrice) / markPrice
+          : 1;
+      if (rel > 0.005) {
+        if (rel <= 0.03 && !last.mark) {
+          // Tiny drift — patch last trade close (avoids extra cliff candle)
+          pts = [
+            ...pts.slice(0, -1),
+            {
+              ...last,
+              price: markPrice,
+              priceGnot: markPg > 0 ? markPg : markPrice,
+              priceUsd: markPu > 0 ? markPu : last.priceUsd,
+            },
+          ];
+        } else {
+          pts = [
+            ...pts,
+            {
+              height: lastH + 1,
+              price: markPrice,
+              priceGnot: markPg > 0 ? markPg : markPrice,
+              priceUsd: markPu > 0 ? markPu : 0,
+              side: 0,
+              vol: 0,
+              buyVol: 0,
+              sellVol: 0,
+              timeMs: Math.max(lastT + 1000, Date.now()),
+              mark: true,
+            },
+          ];
+        }
       }
+    } else if (markPrice > 0 && !pts.length) {
+      pts = [
+        {
+          height: 1,
+          price: markPrice,
+          priceGnot: markPg > 0 ? markPg : markPrice,
+          priceUsd: markPu > 0 ? markPu : 0,
+          side: 2,
+          vol: 0,
+          buyVol: 0,
+          sellVol: 0,
+          timeMs: Date.now(),
+          mark: true,
+        },
+      ];
     }
 
     const now = Date.now();
@@ -158,14 +187,15 @@ export default function PriceChart({
     return fmtPrice(v);
   }
 
-  /** Build OHLC candles — supports tick-by-tick (realtime by trade), sub-minute (5s, 15s, 1m) and auto. */
+  /** Build OHLC candles — tick (s) or time buckets with gap-fill so TF switches are visible. */
   const candles = useMemo(() => {
     if (!series.length) return [];
     const n = series.length;
-    const hasTime = series.filter((p) => p.timeMs > 0).length >= Math.min(3, n);
+    const timed = series.filter((p) => p.timeMs > 0);
+    const hasTime = timed.length >= Math.min(2, n);
     const out = [];
 
-    // TICK / SECONDS MODE: 1 Trade = 1 Candle (ultra-responsive realtime by buy/sell)
+    // TICK / SECONDS: 1 trade = 1 candle
     if (timeframe === "s" || timeframe === "tick") {
       let prevClose = series[0]?.price;
       let lastTime = 0;
@@ -177,17 +207,8 @@ export default function PriceChart({
         const low = Math.min(open, close);
         const isBuy = tr.side === 0;
         const isSell = tr.side === 1;
-        // Direction follows price delta or trade side when price is identical
         const up =
-          close > open
-            ? true
-            : close < open
-              ? false
-              : isBuy
-                ? true
-                : isSell
-                  ? false
-                  : true;
+          close > open ? true : close < open ? false : isBuy ? true : isSell ? false : true;
 
         let t = tr.timeMs ? Math.max(1, Math.floor(tr.timeMs / 1000)) : (i + 1) * 60;
         if (t <= lastTime) t = lastTime + 1;
@@ -213,49 +234,92 @@ export default function PriceChart({
       return out;
     }
 
-    // TIME-BASED BUCKETS: 1m, 5m, 1h, 1d
-    let bucketMs;
-    if (timeframe === "1m") bucketMs = 60_000;
-    else if (timeframe === "5m") bucketMs = 300_000;
-    else if (timeframe === "1h") bucketMs = 3600_000;
-    else if (timeframe === "1d") bucketMs = 86400_000;
-    else bucketMs = 300_000;
+    const bucketMs =
+      timeframe === "1m"
+        ? 60_000
+        : timeframe === "5m"
+          ? 300_000
+          : timeframe === "1h"
+            ? 3600_000
+            : timeframe === "1d"
+              ? 86400_000
+              : 300_000;
 
-    if (hasTime) {
-      const t0 = series[0].timeMs || Date.now();
-      let i = 0;
+    if (!hasTime) {
+      // No reliable timestamps — group by trade count scaled to TF
+      const perBucket =
+        timeframe === "1m" ? 1 : timeframe === "5m" ? 3 : timeframe === "1h" ? 8 : 20;
       let prevClose = series[0].price;
       let lastTime = 0;
-      while (i < n) {
-        const trTime = series[i].timeMs || t0;
-        const bucketStart = Math.floor(trTime / bucketMs) * bucketMs;
-        const bucketEnd = bucketStart + bucketMs;
-        const chunk = [];
-        while (i < n && (series[i].timeMs || trTime) < bucketEnd) {
-          chunk.push(series[i]);
-          i += 1;
-        }
-        if (!chunk.length) {
-          i += 1;
-          continue;
-        }
-        const candleTime = Math.max(1, Math.floor(bucketStart / 1000));
-        const candle = makeCandle(chunk, out.length, true, prevClose, candleTime);
+      for (let i = 0; i < n; i += perBucket) {
+        const chunk = series.slice(i, i + perBucket);
+        if (!chunk.length) continue;
+        const candle = makeCandle(chunk, out.length, false, prevClose);
         if (candle.time <= lastTime) candle.time = lastTime + 1;
         lastTime = candle.time;
         out.push(candle);
         prevClose = candle.close;
       }
-    } else {
-      let bucket = Math.max(1, Math.round(bucketMs / 10_000));
-      let prevClose = series[0].price;
-      for (let i = 0; i < n; i += bucket) {
-        const chunk = series.slice(i, i + bucket);
-        if (!chunk.length) continue;
-        const candle = makeCandle(chunk, out.length, false, prevClose);
-        out.push(candle);
-        prevClose = candle.close;
+      return out;
+    }
+
+    // TIME BUCKETS with gap-fill (flat candles) so 1m ≠ 1H ≠ 1D visually
+    const firstMs = timed[0].timeMs;
+    const lastMs = timed[timed.length - 1].timeMs;
+    let bucketStart = Math.floor(firstMs / bucketMs) * bucketMs;
+    const endBucket = Math.floor(lastMs / bucketMs) * bucketMs;
+    const maxBars = 720; // cap (e.g. 12h of 1m, 60d of 1h)
+    const spanBuckets = Math.floor((endBucket - bucketStart) / bucketMs) + 1;
+    const stepBuckets = spanBuckets > maxBars ? Math.ceil(spanBuckets / maxBars) : 1;
+    const stepMs = bucketMs * stepBuckets;
+
+    let i = 0;
+    let prevClose = series[0].price;
+    let lastTime = 0;
+    // Align series index to first timed point
+    while (i < n && !(series[i].timeMs > 0)) i += 1;
+
+    for (let b = bucketStart; b <= endBucket; b += stepMs) {
+      const bucketEnd = b + stepMs;
+      const chunk = [];
+      while (i < n) {
+        const tm = series[i].timeMs || 0;
+        if (tm > 0 && tm < b) {
+          i += 1;
+          continue;
+        }
+        if (tm <= 0 || tm >= bucketEnd) break;
+        chunk.push(series[i]);
+        i += 1;
       }
+
+      let candle;
+      if (chunk.length) {
+        const candleTime = Math.max(1, Math.floor(b / 1000));
+        candle = makeCandle(chunk, out.length, true, prevClose, candleTime);
+        prevClose = candle.close;
+      } else {
+        // Gap-fill: carry forward last close (no volume)
+        const t = Math.max(1, Math.floor(b / 1000));
+        candle = {
+          time: t,
+          open: prevClose,
+          high: prevClose,
+          low: prevClose,
+          close: prevClose,
+          volume: 0,
+          buyVol: 0,
+          sellVol: 0,
+          height: 0,
+          up: true,
+          trades: 0,
+          side: null,
+          fill: true,
+        };
+      }
+      if (candle.time <= lastTime) candle.time = lastTime + 1;
+      lastTime = candle.time;
+      out.push(candle);
     }
 
     return out;
@@ -593,14 +657,24 @@ export default function PriceChart({
         area.setData(areaData);
       }
       vol.setData(volData);
-      if (candleData.length > 0 && candleData.length <= 5) {
-        chartRef.current.timeScale().applyOptions({
-          barSpacing: 32,
-          rightOffset: 12,
-        });
-      } else {
-        chartRef.current.timeScale().fitContent();
-      }
+
+      // Bar spacing by timeframe so S / 1m / 5m / 1H / 1D feel distinct
+      const nBars = candleData.length;
+      let barSpacing = 10;
+      if (timeframe === "s" || timeframe === "tick") barSpacing = nBars <= 40 ? 16 : 8;
+      else if (timeframe === "1m") barSpacing = nBars <= 60 ? 12 : 6;
+      else if (timeframe === "5m") barSpacing = nBars <= 48 ? 14 : 8;
+      else if (timeframe === "1h") barSpacing = nBars <= 48 ? 16 : 10;
+      else if (timeframe === "1d") barSpacing = nBars <= 30 ? 22 : 12;
+      if (nBars > 0 && nBars <= 5) barSpacing = Math.max(barSpacing, 28);
+
+      chartRef.current.timeScale().applyOptions({
+        barSpacing,
+        rightOffset: nBars <= 8 ? 12 : 6,
+        secondsVisible: timeframe === "s" || timeframe === "tick",
+        timeVisible: timeframe !== "1d",
+      });
+      chartRef.current.timeScale().fitContent();
     } catch (e) {
       console.warn("PriceChart setData failed", e);
     }

@@ -1,32 +1,41 @@
 package pad
 
-// Protocol parameters (MVP). Tunable before deploy; post-deploy treated as constants
-// unless a future governance path is added with timelock.
+// Protocol parameters.
+// Defaults are compile-time constants; GraduationThreshold and ListFeeGns also have
+// live copies set in Init and adjustable by protocol via SetGraduationThreshold /
+// SetListFeeGns (see memepad.gno). Bond create fee is owned by the bond realm.
 
 const (
 	// Token economics
 	TotalSupply int64 = 1_000_000_000
 	CurveSupply int64 = 800_000_000 // sold on bonding curve
-	PoolSeed    int64 = 200_000_000 // locked into CPMM at graduation
+	// PoolSeed is legacy. Graduation sizes LP tokens to curve spot
+	// (raised * VirtualToken / VirtualUgnot); unsold remainder = LeftoverTokens.
+	PoolSeed int64 = 200_000_000
 
-	// Virtual constant-product seed (Pump-style)
-	VirtualUgnot0 int64 = 30_000_000      // 30 GNOT virtual
-	VirtualToken0 int64 = 1_073_000_191   // virtual token side
+	// Virtual constant-product seed (Pump-style).
+	// Max net raise when selling full CurveSupply:
+	//   R = VirtualUgnot0 * CurveSupply / (VirtualToken0 - CurveSupply)
+	// Pearl default: VU0=3.5e9 + VT0≈1.073e9 => max raise ≈10.2k GNOT so
+	// DefaultGraduationThreshold 10_000 GNOT is reachable before sold-out.
+	VirtualUgnot0 int64 = 3_500_000_000 // 3500 GNOT virtual
+	VirtualToken0 int64 = 1_073_000_191 // virtual token side
 
-	// Graduation when net ugnot raised into the curve reaches this.
-	// padv4 testnet default: 50 GNOT. padv5 deploy script patches to 100 GNOT.
-	// Keep below the ugnot needed to exhaust CurveSupply on the virtual CPMM.
-	GraduationThreshold int64 = 50_000_000
+	// Default graduation raise (ugnot). Live value starts here in Init;
+	// protocol may call SetGraduationThreshold afterward.
+	GraduationThreshold int64 = 10_000_000_000 // 10_000 GNOT
 
 	// Fees: 1.20% total. Of the fee: 40% creator, 40% protocol, 20% LP/k remainder.
-	FeeBPS             int64 = 120
-	CreatorFeeShareBPS int64 = 4000
+	FeeBPS              int64 = 120
+	CreatorFeeShareBPS  int64 = 4000
 	ProtocolFeeShareBPS int64 = 4000
 
-	// Anti-spam create bond (1 GNOT padv4). padv5 deploy patches to 2 GNOT.
-	CreateBondUgnot      int64 = 1_000_000
+	// Fallback create bond for unit tests / if bond realm unavailable.
+	// Production pad uses createbond.CurrentBondUgnot() (see bond package).
+	// Sapphire normal bond = 2 GNOT; promo ~ $20 in ugnot set on bond.StartPromo.
+	CreateBondUgnot int64 = 2_000_000
 	BondRefundBuyers     int   = 5
-	BondRefundMinRaised  int64 = 5_000_000 // ≥5 GNOT raised
+	BondRefundMinRaised  int64 = 5_000_000 // >=5 GNOT raised
 	BondRefundMaxHeights int64 = 100_000
 
 	// Anti-snipe: first N heights, max cumulative tokens per address (BPS of TotalSupply).
@@ -37,7 +46,7 @@ const (
 	StatusCurve     = 0
 	StatusGraduated = 1
 
-	// Trade history ring buffer (padv4: 128; padv5 deploy patches to 256).
+	// Trade history ring buffer.
 	MaxTradeHistory = 128
 	// Trade sides stored in history
 	TradeSideBuy  = 0
@@ -45,4 +54,23 @@ const (
 	TradeSideOpen = 2 // initial listing mark
 
 	DenomUgnot = "ugnot"
+
+	// --- Gnoswap auto-list (Sapphire) ---
+	// Curve collateral is WUGNOT (Buy TransferFrom). At graduate, pad already holds
+	// raised WUGNOT for LP - no realm self-wrap needed.
+	// CreatePool fee is fixed in GNS (typically 100e6 = 100 GNS):
+	//   Fee = pre-funded GNS on pad OR surplus WUGNOT (fees retained) ExactOut -> GNS
+	GnoswapFeeTier     uint32 = 3000 // 0.3% meme tier
+	GnoswapTickSpacing int32  = 60
+	GnoswapMinTick     int32  = -887272
+	GnoswapMaxTick     int32  = 887272
+	// Max WUGNOT used as ExactOut maxIn for fee buy (ceiling / slippage).
+	// Prefer pre-funding >=100 GNS on pad so LP depth stays = raised.
+	GnoswapMaxFeeWugnot int64 = 1_500_000_000 // 1500 GNOT
+
+	// Create-time GNS list fee escrow (padv20+).
+	// Creator must Transfer >= ListFeeGns free GNS to pad before Create.
+	// Locked per-launch until Gnoswap list consumes it, or ClaimListFee refunds creator.
+	// Matches typical gnspool.GetPoolCreationFee() (100 GNS, 6 decimals).
+	ListFeeGns int64 = 100_000_000
 )
