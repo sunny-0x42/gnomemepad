@@ -185,7 +185,7 @@ function b64utf8(b64) {
   return Buffer.from(b64, "base64").toString("utf8");
 }
 
-async function qeval(RPC, PKG, expr) {
+async function qevalRaw(RPC, expr) {
   const data = Buffer.from(expr, "utf8").toString("base64");
   const result = await rpc(RPC, "abci_query", {
     path: "vm/qeval",
@@ -198,7 +198,11 @@ async function qeval(RPC, PKG, expr) {
     const err = typeof rb.Error === "string" ? rb.Error : JSON.stringify(rb.Error);
     throw new Error(err);
   }
-  let text = b64utf8(rb?.Data);
+  return b64utf8(rb?.Data);
+}
+
+async function qeval(RPC, PKG, expr) {
+  let text = await qevalRaw(RPC, expr);
   const m = text.match(/^\((.*)\)\s*$/s);
   if (m) {
     let inner = m[1].trim();
@@ -209,6 +213,60 @@ async function qeval(RPC, PKG, expr) {
     return inner;
   }
   return text;
+}
+
+/** Parse all `(N int64)` values from a multi-result qeval payload. */
+function parseQevalInt64s(text) {
+  return [...String(text || "").matchAll(/\((-?\d+)\s+int64\)/g)].map((x) => Number(x[1]));
+}
+
+const GNOSWAP_POOL_PKG = "gno.land/r/gnoswap/pool";
+
+/**
+ * Live Gnoswap pool balances via pool.GetBalances(poolPath).
+ * Returns { ugnot, tokens, t0IsWugnot } or null.
+ */
+async function fetchGnoswapPoolBalances(RPC, poolPath) {
+  const path = String(poolPath || "").trim();
+  if (!path || !path.includes(":")) return null;
+  const cacheKey = `gnoswap:poolBal:${path}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  try {
+    const exists = await qeval(
+      RPC,
+      GNOSWAP_POOL_PKG,
+      `${GNOSWAP_POOL_PKG}.ExistsPoolPath(${JSON.stringify(path)})`,
+    );
+    if (String(exists) !== "true" && exists !== true) {
+      cacheSet(cacheKey, null, 30_000);
+      return null;
+    }
+    const raw = await qevalRaw(
+      RPC,
+      `${GNOSWAP_POOL_PKG}.GetBalances(${JSON.stringify(path)})`,
+    );
+    const bals = parseQevalInt64s(raw);
+    if (bals.length < 2) {
+      cacheSet(cacheKey, null, 15_000);
+      return null;
+    }
+    const t0 = path.split(":")[0] || "";
+    const t0IsWugnot = /wugnot/i.test(t0);
+    const out = {
+      bal0: bals[0],
+      bal1: bals[1],
+      ugnot: t0IsWugnot ? bals[0] : bals[1],
+      tokens: t0IsWugnot ? bals[1] : bals[0],
+      t0IsWugnot,
+      poolPath: path,
+    };
+    cacheSet(cacheKey, out, 20_000);
+    return out;
+  } catch {
+    cacheSet(cacheKey, null, 10_000);
+    return null;
+  }
 }
 
 async function qrender(RPC, PKG, subpath = "") {
@@ -260,8 +318,8 @@ function enrichPricing(m, totalSupply = 1_000_000_000) {
 }
 
 /**
- * LP TVL in GNOT: WUGNOT side + token side at current spot.
- * Pad poolUgnot alone equals raise-at-grad and looked like "target raise" in the UI.
+ * Fallback TVL from pad seed / list note (used until live pool balances load).
+ * Pad poolUgnot alone equals raise-at-grad — never show that alone as Liquidity.
  */
 function attachLiquidityTvl(m) {
   if (!m || m.status !== 1) {
@@ -269,6 +327,10 @@ function attachLiquidityTvl(m) {
     m.liquidityWugnotGnot = 0;
     m.liquidityTokenGnot = 0;
     m.liquiditySource = null;
+    return m;
+  }
+  // Keep live gnoswap_pool_balances if already set
+  if (m.liquiditySource === "gnoswap_pool_balances" && Number(m.liquidityGnot) > 0) {
     return m;
   }
   const px = Number(m.spotGnot || m.priceGnot) || 0;
@@ -305,6 +367,27 @@ function attachLiquidityTvl(m) {
   m.liquidityTokenGnot = tokenGnot;
   m.liquidityGnot = wugnotGnot + tokenGnot;
   m.liquiditySource = source;
+  return m;
+}
+
+/**
+ * After list: overwrite liquidity with live Gnoswap pool.GetBalances (on-chain TVL).
+ */
+async function enrichLiveGnoswapLiquidity(RPC, m) {
+  if (!m || !m.gnoswapListed) return m;
+  const poolPath = String(m.gnoswapPoolPath || "").trim();
+  if (!poolPath) return m;
+  const bal = await fetchGnoswapPoolBalances(RPC, poolPath);
+  if (!bal || !(bal.ugnot >= 0) || !(bal.tokens >= 0)) return m;
+  const px = Number(m.spotGnot || m.priceGnot) || 0;
+  const wugnotGnot = bal.ugnot / UGNOT_PER_GNOT;
+  const tokenGnot = px > 0 ? bal.tokens * px : 0;
+  m.liquidityWugnotGnot = wugnotGnot;
+  m.liquidityTokenGnot = tokenGnot;
+  m.liquidityGnot = wugnotGnot + tokenGnot;
+  m.liquiditySource = "gnoswap_pool_balances";
+  m.poolBalUgnot = bal.ugnot;
+  m.poolBalTokens = bal.tokens;
   return m;
 }
 
@@ -778,7 +861,7 @@ async function getMarkets(RPC, sources) {
 
   // Listed tokens: pad poolUgnot/poolToken freezes at list time — refresh
   // spot from recent Gnoswap swaps so Markets cards match Token page.
-  await enrichListedMarketsFromGnoswap(markets, parts);
+  await enrichListedMarketsFromGnoswap(RPC, markets, parts);
 
   const params = (parts.find((p) => p.active) || parts[0])?.params || null;
   return {
@@ -801,7 +884,7 @@ async function getMarkets(RPC, sources) {
  * For gnoswapListed markets, pull last swap mark (cached) and recompute mcap.
  * Volume on cards still comes from /api/activity (already merges DEX).
  */
-async function enrichListedMarketsFromGnoswap(markets, parts = []) {
+async function enrichListedMarketsFromGnoswap(RPC, markets, parts = []) {
   const supplyByPkg = new Map();
   for (const part of parts || []) {
     const supply = Number(part?.params?.totalSupply) || 1_000_000_000;
@@ -820,28 +903,34 @@ async function enrichListedMarketsFromGnoswap(markets, parts = []) {
         if (!tokenKey) {
           m.dexHistoryEmpty = true;
           m.volumeScope = "curve_only";
-          return;
-        }
-        const pts = await fetchGnoswapSwapHistory(tokenKey, 30);
-        const lastPx = lastTradePriceGnot(pts, "gnoswap");
-        if (!(lastPx > 0)) {
-          // Keep frozen pool_mark from enrichPricing — matches Token page when DEX empty
-          m.dexHistoryEmpty = true;
-          m.volumeScope = "curve_only";
-          return;
-        }
-        const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
-        applySpotPrice(m, lastPx, supply, "gnoswap_last_trade");
-        m.dexHistoryEmpty = false;
-        m.volumeScope = "curve_and_dex";
-        const stats = summarizeTradeStats(pts);
-        if (stats && stats.trades > 0) {
-          m.dexTradeStats = stats;
+        } else {
+          const pts = await fetchGnoswapSwapHistory(tokenKey, 30);
+          const lastPx = lastTradePriceGnot(pts, "gnoswap");
+          if (!(lastPx > 0)) {
+            // Keep frozen pool_mark from enrichPricing — matches Token page when DEX empty
+            m.dexHistoryEmpty = true;
+            m.volumeScope = "curve_only";
+          } else {
+            const supply = supplyByPkg.get(m.pkg) || 1_000_000_000;
+            applySpotPrice(m, lastPx, supply, "gnoswap_last_trade");
+            m.dexHistoryEmpty = false;
+            m.volumeScope = "curve_and_dex";
+            const stats = summarizeTradeStats(pts);
+            if (stats && stats.trades > 0) {
+              m.dexTradeStats = stats;
+            }
+          }
         }
       } catch {
         m.dexHistoryEmpty = true;
         m.volumeScope = "curve_only";
         /* keep pad pool mark */
+      }
+      // Live on-chain Gnoswap pool TVL (GetBalances)
+      try {
+        await enrichLiveGnoswapLiquidity(RPC, m);
+      } catch {
+        /* keep seed/list-note fallback */
       }
     }),
   );
@@ -1252,6 +1341,15 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     spotSource = "last_trade";
   }
   applySpotPrice(m, spotGnot > 0 ? spotGnot : poolPx, supply, spotSource);
+
+  // Listed: live on-chain Gnoswap pool balances (total TVL), not raise/seed snapshot
+  if (m.gnoswapListed) {
+    try {
+      await enrichLiveGnoswapLiquidity(RPC, m);
+    } catch {
+      /* keep seed/list-note fallback */
+    }
+  }
 
   // Entry: market VWAP of all curve buys (shared cost basis — no per-wallet ledger)
   const vwapBuy = marketVwapBuyGnot(m.chart);

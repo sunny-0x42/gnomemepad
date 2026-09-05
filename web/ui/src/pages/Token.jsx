@@ -1864,14 +1864,15 @@ export default function Token() {
             <span className="ths-metric-sub faint mono">
               {isPool
                 ? (() => {
-                    const w =
-                      Number(m.liquidityWugnotGnot) ||
-                      Number(m.poolGnot) ||
-                      (Number(m.poolUgnot) || 0) / UGNOT_PER_GNOT ||
-                      0;
-                    return w > 0
-                      ? `${w.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} WUGNOT + tokens`
-                      : t("poolReserves") || "Pool TVL";
+                    const w = Number(m.liquidityWugnotGnot) || 0;
+                    const live = m.liquiditySource === "gnoswap_pool_balances";
+                    if (w > 0) {
+                      return `${w.toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })} WUGNOT + tokens${live ? " · live pool" : ""}`;
+                    }
+                    return t("poolReserves") || "Pool TVL";
                   })()
                 : `${pct}% ${t("filled") || "filled"}`}
             </span>
