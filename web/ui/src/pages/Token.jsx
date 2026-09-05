@@ -1805,21 +1805,34 @@ export default function Token() {
           <div className="ths-metric-item">
             <span className="ths-metric-label">{(t("price") || "PRICE").toUpperCase()}</span>
             <strong className="ths-metric-val mono">
-              {fmtPriceUsd(toUsd(m.priceGnot, m.gnotUsd, m.priceUsd))}
+              {(() => {
+                const usd = toUsd(m.spotGnot ?? m.priceGnot, m.gnotUsd, m.priceUsd);
+                const pg = Number(m.spotGnot ?? m.priceGnot) || 0;
+                if (usd > 0) return fmtPriceUsd(usd);
+                if (pg > 0) return `${fmtPrice(pg)} GNOT`;
+                return "—";
+              })()}
             </strong>
             <span className={`ths-metric-sub ${priceDelta != null && priceDelta >= 0 ? "up" : priceDelta != null ? "down" : "faint mono"}`}>
               {priceDelta != null
                 ? `${priceDelta >= 0 ? "▲ +" : "▼ "}${Math.abs(priceDelta).toFixed(1)}%`
-                : Number(m.priceGnot) > 0
-                  ? `${fmtPrice(m.priceGnot)} GNOT`
-                  : "—"}
+                : Number(m.spotGnot ?? m.priceGnot) > 0 && toUsd(m.spotGnot ?? m.priceGnot, m.gnotUsd, m.priceUsd) > 0
+                  ? `${fmtPrice(m.spotGnot ?? m.priceGnot)} GNOT`
+                  : m.priceSource
+                    ? String(m.priceSource).replace(/_/g, " ")
+                    : "—"}
             </span>
           </div>
 
           <div className="ths-metric-item">
             <span className="ths-metric-label">{(t("mcap") || "MCAP").toUpperCase()}</span>
             <strong className="ths-metric-val mono">
-              {fmtMcapUsd(toUsd(m.mcapGnot, m.gnotUsd, m.mcapUsd))}
+              {(() => {
+                const usd = toUsd(m.mcapGnot, m.gnotUsd, m.mcapUsd);
+                if (usd > 0) return fmtMcapUsd(usd);
+                if (mcapGnotNum > 0) return `${fmtGnot(mcapGnotNum, { alreadyGnot: true })} GNOT`;
+                return "—";
+              })()}
             </strong>
             <span className="ths-metric-sub faint mono">
               {mcapGnotNum > 0
@@ -1996,6 +2009,8 @@ export default function Token() {
               height={500}
               gnotUsd={m.gnotUsd}
               priceUsd={m.priceUsd}
+              markPriceGnot={m.spotGnot ?? m.priceGnot}
+              markPriceUsd={m.priceUsd}
             />
           </div>
 

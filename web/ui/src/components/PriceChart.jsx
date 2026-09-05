@@ -48,6 +48,9 @@ export default function PriceChart({
   height = 480,
   gnotUsd = 0,
   priceUsd = 0,
+  /** Canonical spot from API (pool_mark / gnoswap) — keeps header C in sync with Price/MCap metrics */
+  markPriceGnot = null,
+  markPriceUsd = null,
 }) {
   const wrapRef = useRef(null);
   const tipRef = useRef(null);
@@ -64,6 +67,14 @@ export default function PriceChart({
 
   const fx = Number(gnotUsd) || 0;
   const showUsd = fx > 0;
+  const markPg = Number(markPriceGnot);
+  const markPu =
+    Number(markPriceUsd) > 0
+      ? Number(markPriceUsd)
+      : fx > 0 && markPg > 0
+        ? markPg * fx
+        : 0;
+  const markPrice = showUsd && markPu > 0 ? markPu : markPg > 0 ? markPg : 0;
 
   const series = useMemo(() => {
     let pts = (points || [])
@@ -96,6 +107,34 @@ export default function PriceChart({
     // Prefer real trades; keep open/LP marks only as baseline when empty
     pts = tradePts.length ? tradePts : pts.filter((p) => p.side === 2 || p.side === 3).slice(0, 2);
 
+    // Align series end with canonical API spot (pool_mark / gnoswap) so chart ≠ metrics
+    if (markPrice > 0) {
+      const last = pts[pts.length - 1];
+      const lastH = last ? Number(last.height) || 0 : 0;
+      const lastT = last ? Number(last.timeMs) || Date.now() : Date.now();
+      const drift =
+        !last ||
+        !Number.isFinite(last.price) ||
+        Math.abs(last.price - markPrice) / markPrice > 0.005;
+      if (drift) {
+        pts = [
+          ...pts,
+          {
+            height: lastH + 1,
+            price: markPrice,
+            priceGnot: markPg > 0 ? markPg : markPrice,
+            priceUsd: markPu > 0 ? markPu : 0,
+            side: 0,
+            vol: 0,
+            buyVol: 0,
+            sellVol: 0,
+            timeMs: Math.max(lastT + 1000, Date.now()),
+            mark: true,
+          },
+        ];
+      }
+    }
+
     const now = Date.now();
     if (range === "5m" && pts.some((p) => p.timeMs > 0)) {
       pts = pts.filter((p) => !p.timeMs || p.timeMs >= now - 5 * 60_000);
@@ -112,7 +151,7 @@ export default function PriceChart({
     else if (range === "20") pts = pts.slice(-20);
 
     return pts;
-  }, [points, range, fx, showUsd]);
+  }, [points, range, fx, showUsd, markPrice, markPg, markPu]);
 
   function fmtChartPrice(v) {
     if (showUsd) return fmtPriceUsd(v);
@@ -571,21 +610,25 @@ export default function PriceChart({
   const display = hover ||
     (latestCandle
       ? {
-        close: latestCandle.close,
+        close: markPrice > 0 ? markPrice : latestCandle.close,
         open: latestCandle.open,
-        high: latestCandle.high,
-        low: latestCandle.low,
-        up: latestCandle.up,
+        high: Math.max(latestCandle.high, markPrice > 0 ? markPrice : latestCandle.high),
+        low: Math.min(latestCandle.low, markPrice > 0 ? markPrice : latestCandle.low),
+        up: markPrice > 0
+          ? markPrice >= (latestCandle.open || markPrice)
+          : latestCandle.up,
       }
       : stats
         ? {
-          close: stats.last,
+          close: markPrice > 0 ? markPrice : stats.last,
           open: stats.first,
-          high: stats.max,
-          low: stats.min,
-          up: stats.chg >= 0,
+          high: Math.max(stats.max, markPrice > 0 ? markPrice : stats.max),
+          low: Math.min(stats.min, markPrice > 0 ? markPrice : stats.min),
+          up: markPrice > 0 ? markPrice >= (stats.first || markPrice) : stats.chg >= 0,
         }
-        : null);
+        : markPrice > 0
+          ? { close: markPrice, open: markPrice, high: markPrice, low: markPrice, up: true }
+          : null);
 
   const timeframeOpts = [
     ["s", "s"],

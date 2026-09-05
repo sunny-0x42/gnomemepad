@@ -66,9 +66,14 @@ function SpotlightRealtimeChart({ points = [], spotlight, gnotUsd = 0 }) {
     if (raw.length >= 2) return raw;
 
     // Graceful baseline curve if token is newly launched or lacks trade history
-    const base = Number(spotlight?.mcapUsd)
-      ? Number(spotlight?.mcapUsd) / 1e9
-      : Number(spotlight?.priceGnot) * (gnotUsd || 1) || 0.00025;
+    const spotPg = Number(spotlight?.spotGnot ?? spotlight?.priceGnot) || 0;
+    const spotPu =
+      Number(spotlight?.priceUsd) > 0
+        ? Number(spotlight.priceUsd)
+        : gnotUsd > 0 && spotPg > 0
+          ? spotPg * gnotUsd
+          : 0;
+    const base = spotPu > 0 ? spotPu : spotPg > 0 ? spotPg : 0.00025;
     const now = Date.now();
     return [
       { price: base * 0.92, time: now - 3600000 * 5 },
@@ -425,7 +430,14 @@ export default function MarketsHero({
       const isBuy = side === 0;
       const volGnot = Number(e.volumeGnot) || 0;
       const volUsd = volGnot > 0 && gnotUsd > 0 ? volGnot * gnotUsd : 0;
-      const mcapUsd = Number(m?.mcapUsd) || (m?.mcapGnot && gnotUsd ? m.mcapGnot * gnotUsd : 0);
+      const spotPg = Number(m?.spotGnot ?? m?.priceGnot) || 0;
+      const mcapGnot = Number(m?.mcapGnot) || 0;
+      const mcapUsd =
+        Number(m?.mcapUsd) > 0
+          ? Number(m.mcapUsd)
+          : mcapGnot > 0 && gnotUsd
+            ? mcapGnot * gnotUsd
+            : 0;
       const ts = e.timeMs ?? e.time ?? null;
 
       // Percentage change (% instead of +BUY / -SELL)
@@ -434,9 +446,15 @@ export default function MarketsHero({
         deltaNum = Number(m.priceDelta);
       } else if (m?.p24h != null) {
         deltaNum = Number(m.p24h);
-      } else if (m?.openPriceGnot && m?.priceGnot) {
-        deltaNum = ((m.priceGnot - m.openPriceGnot) / m.openPriceGnot) * 100;
-      } else {
+      } else if (m?.openPriceGnot && spotPg > 0) {
+        const open = Number(m.openPriceGnot);
+        const ratio = open > 0 ? spotPg / open : 0;
+        // Avoid bogus % when open is curve VWAP but spot is post-list pool_mark
+        if (ratio > 0.05 && ratio < 20) {
+          deltaNum = ((spotPg - open) / open) * 100;
+        }
+      }
+      if (deltaNum == null) {
         const sign = isBuy ? 1 : -1;
         const seedPct = Math.min(38, Math.max(1.5, (volGnot / 25) * 8 + 2.4));
         deltaNum = sign * seedPct;
@@ -452,7 +470,11 @@ export default function MarketsHero({
         img,
         isPositive,
         volText: volUsd > 0 ? `$${formatCompact(volUsd)} vol` : `${volGnot.toFixed(2)} GNOT`,
-        mcapText: mcapUsd > 0 ? `$${formatCompact(mcapUsd)} MC` : m?.mcapGnot ? `${formatCompact(m.mcapGnot)} GNOT` : "",
+        mcapText: mcapUsd > 0
+          ? `$${formatCompact(mcapUsd)} MC`
+          : mcapGnot > 0
+            ? `${formatCompact(mcapGnot)} GNOT`
+            : "",
         timeAgo: ts != null ? relativeTime(ts) : "recently",
         deltaText,
       };

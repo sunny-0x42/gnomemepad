@@ -13,6 +13,7 @@ import {
   fmtGnot,
   fmtMcapUsd,
   fmtNum,
+  fmtPrice,
   fmtPriceUsd,
   relativeTime,
   shortAddr,
@@ -735,10 +736,28 @@ function MarketCard({
 
           <div className="mc-stats-grid">
             <div className="mc-stat-pill">
-              <span className="muted">{t("price") || "Price"}:</span> <span>{fmtPriceUsd(toUsd(m.priceGnot, fx, m.priceUsd))}</span>
+              <span className="muted">{t("price") || "Price"}:</span>{" "}
+              <span>
+                {(() => {
+                  const usd = toUsd(m.spotGnot ?? m.priceGnot, fx, m.priceUsd);
+                  const pg = Number(m.spotGnot ?? m.priceGnot) || 0;
+                  if (usd > 0) return fmtPriceUsd(usd);
+                  if (pg > 0) return `${fmtPrice(pg)} GNOT`;
+                  return "—";
+                })()}
+              </span>
             </div>
             <div className="mc-stat-pill">
-              <span className="muted">{t("mcap") || "MCap"}:</span> <span>{fmtMcapUsd(toUsd(m.mcapGnot, fx, m.mcapUsd))}</span>
+              <span className="muted">{t("mcap") || "MCap"}:</span>{" "}
+              <span>
+                {(() => {
+                  const usd = toUsd(m.mcapGnot, fx, m.mcapUsd);
+                  const mg = Number(m.mcapGnot) || 0;
+                  if (usd > 0) return fmtMcapUsd(usd);
+                  if (mg > 0) return `${fmtGnot(mg, { alreadyGnot: true })} GNOT`;
+                  return "—";
+                })()}
+              </span>
             </div>
             <div className="mc-stat-pill">
               <span className="muted">{t("volume") || "Vol"}:</span> <span>{hasRv && vol > 0 ? (toUsd(vol, fx) > 0 ? fmtMcapUsd(toUsd(vol, fx)) : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`) : "—"}{hasRv && trades > 0 ? ` · ${trades} tx` : ""}</span>
