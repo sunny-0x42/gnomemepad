@@ -18,6 +18,12 @@ import {
   svgForMarket,
   syncTokenResourcePr,
 } from "./token-resource.mjs";
+import {
+  configForNetwork,
+  listNetworks,
+  normalizeNetworkId,
+  DEFAULT_NETWORK_ID,
+} from "./networks.mjs";
 
 const UGNOT_PER_GNOT = 1_000_000;
 
@@ -45,24 +51,10 @@ function cacheSet(key, value, ttlMs) {
   }
 }
 
-export function getConfig() {
-  return {
-    RPC: (process.env.RPC_URL || "https://rpc.sapphire.testnets.gno.land:443").replace(
-      /\/$/,
-      "",
-    ),
-    PKG:
-      process.env.PKG ||
-      `gno.land/r/${DEFAULT_ADDR}/gnomemepad/padv22`,
-    HUB: process.env.HUB || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/hubv2`,
-    PROFILE:
-      process.env.PROFILE || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/profile`,
-    META: process.env.META || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/meta`,
-    POINTS: process.env.POINTS || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/pointsv2`,
-    BOND: process.env.BOND || `gno.land/r/${DEFAULT_ADDR}/gnomemepad/bond`,
-    CHAIN_ID: process.env.CHAIN_ID || "sapphire-1",
-    SIGNER_ADDR: process.env.SIGNER_ADDR || DEFAULT_ADDR,
-  };
+/** Default config = DEFAULT_NETWORK_ID (Sapphire unless env says Pearl). */
+export function getConfig(networkId) {
+  const id = normalizeNetworkId(networkId || DEFAULT_NETWORK_ID);
+  return configForNetwork(id);
 }
 
 /** Parse hub ListModules() → { name: path } */
@@ -2600,14 +2592,24 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
  * @param {string} pathname e.g. /api/markets
  * @param {URLSearchParams|Record} query
  * @param {string|null} bodyText
+ * @param {Record<string,string>|null} headers
  */
-export async function handleApi(method, pathname, query, bodyText) {
-  const cfg = getConfig();
-  const { RPC, CHAIN_ID, SIGNER_ADDR } = cfg;
+export async function handleApi(method, pathname, query, bodyText, headers = null) {
   const q =
     query instanceof URLSearchParams
       ? query
       : new URLSearchParams(query || {});
+  const hdrs = headers || {};
+  const headerNet =
+    hdrs["x-gnomi-network"] ||
+    hdrs["X-Gnomi-Network"] ||
+    hdrs["x-network"] ||
+    "";
+  const networkId = normalizeNetworkId(
+    q.get("network") || q.get("chain") || headerNet || DEFAULT_NETWORK_ID,
+  );
+  const cfg = getConfig(networkId);
+  const { RPC, CHAIN_ID, SIGNER_ADDR } = cfg;
   const noCache =
     q.get("refresh") === "1" ||
     q.get("nocache") === "1" ||
@@ -2627,8 +2629,31 @@ export async function handleApi(method, pathname, query, bodyText) {
     else p = "/api" + (p.startsWith("/") ? p : "/" + p);
   }
 
-  // Resolve active pad from hub (modular upgrades) — cached briefly
-  const hubCacheKey = `hub:${cfg.HUB || "none"}`;
+  // Network catalog (no RPC required)
+  if (method === "GET" && (p === "/api/networks" || p === "/api/networks/")) {
+    return json(
+      200,
+      {
+        ok: true,
+        defaultNetwork: DEFAULT_NETWORK_ID,
+        selected: networkId,
+        networks: listNetworks(),
+      },
+      { maxAge: 60 },
+    );
+  }
+
+  if (cfg.comingSoon || !cfg.enabled || !cfg.PKG || !cfg.RPC) {
+    return json(503, {
+      ok: false,
+      error: `${cfg.label || networkId} is not available yet`,
+      network: networkId,
+      comingSoon: true,
+    });
+  }
+
+  // Resolve active pad from hub (modular upgrades) — cached per network
+  const hubCacheKey = `hub:${networkId}:${cfg.HUB || "none"}`;
   let hubInfo = !noCache ? cacheGet(hubCacheKey) : null;
   if (!hubInfo) {
     hubInfo = await getHubInfo(RPC, cfg);
@@ -2646,12 +2671,15 @@ export async function handleApi(method, pathname, query, bodyText) {
         const st = await rpc(RPC, "status", {});
         return json(200, {
           ok: true,
+          network: networkId,
+          networkLabel: cfg.label,
           rpc: RPC,
           pkg: PKG,
           hub: hubInfo.hub,
           profile: PROFILE,
           meta: META,
           points: POINTS,
+          bond: cfg.BOND || null,
           modules: hubInfo.modules || {},
           pads: padSources.map((s) => ({
             key: s.key,
@@ -2660,8 +2688,11 @@ export async function handleApi(method, pathname, query, bodyText) {
             legacy: s.legacy,
             label: String(s.pkg).split("/").pop(),
           })),
+          networks: listNetworks(),
           height: String(st?.sync_info?.latest_block_height || ""),
           chainId: st?.node_info?.network || CHAIN_ID,
+          gnoweb: cfg.GNOWEB || null,
+          faucet: cfg.FAUCET || null,
           hosting: "netlify",
           signing: false,
         });
@@ -2669,9 +2700,11 @@ export async function handleApi(method, pathname, query, bodyText) {
         return json(200, {
           ok: false,
           error: String(e.message || e),
+          network: networkId,
           rpc: RPC,
           pkg: PKG,
           hub: hubInfo.hub,
+          chainId: CHAIN_ID,
           hosting: "netlify",
           signing: false,
         });

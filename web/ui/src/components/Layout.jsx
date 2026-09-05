@@ -72,7 +72,18 @@ function NavItems({ items, onNavigate, isAdmin, showAdmin, t }) {
 }
 
 export default function Layout() {
-  const { wallet, isConnecting, connect, disconnect, health, isAdmin } = useApp();
+  const {
+    wallet,
+    isConnecting,
+    connect,
+    disconnect,
+    health,
+    isAdmin,
+    networkId,
+    setNetworkId,
+    networks,
+    network,
+  } = useApp();
   const { t } = usePrefs();
   const nav = useNavigate();
   const location = useLocation();
@@ -81,6 +92,7 @@ export default function Layout() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [netBusy, setNetBusy] = useState(false);
   const moreRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const ok = health?.ok !== false && health?.height;
@@ -88,9 +100,29 @@ export default function Layout() {
     .split("/")
     .pop();
   const padHint =
-    /padv13/i.test(padLabel) || /padv13/i.test(String(health?.pkg || ""))
-      ? "10k raise"
-      : "";
+    /padv23/i.test(padLabel)
+      ? "Pearl"
+      : /padv22/i.test(padLabel)
+        ? "Sapphire"
+        : "";
+
+  async function onNetworkChange(e) {
+    const next = e.target.value;
+    if (!next || next === networkId) return;
+    setNetBusy(true);
+    try {
+      const okSwitch = await setNetworkId(next);
+      if (okSwitch) {
+        // Reload markets/home for the new chain
+        if (location.pathname.startsWith("/token/")) nav("/");
+        else nav(0);
+      } else {
+        e.target.value = networkId;
+      }
+    } finally {
+      setNetBusy(false);
+    }
+  }
 
   useEffect(() => {
     setMenuOpen(false);
@@ -216,9 +248,28 @@ export default function Layout() {
             <span className="cmd-trigger-label">{t("search")}</span>
             <kbd className="kbd">⌘K</kbd>
           </button>
+          <label className="net-select-wrap" title={`RPC ${network?.rpcUrl || ""}`}>
+            <span className="sr-only">Network</span>
+            <select
+              className="net-select"
+              value={networkId}
+              disabled={netBusy}
+              onChange={onNetworkChange}
+              aria-label="Select Gno network"
+            >
+              {(networks || []).map((n) => (
+                <option key={n.id} value={n.id} disabled={!n.enabled && n.comingSoon}>
+                  {n.label}
+                  {n.comingSoon ? " (soon)" : ""}
+                  {!n.comingSoon && n.id === "sapphire" ? " · padv22" : ""}
+                  {!n.comingSoon && n.id === "pearl" ? " · padv23" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
           <div
             className={`status-pill${ok ? "" : " bad"}`}
-            title={health?.rpc || health?.chainId || ""}
+            title={health?.rpc || health?.chainId || network?.chainId || ""}
           >
             <span className="dot" />
             <span>

@@ -41,5 +41,7 @@ export async function handler(event) {
       : event.body
     : null;
 
-  return handleApi(method, pathname, query, bodyText);
+  // Multi-network: ?network=pearl|sapphire|mainnet or X-Gnomi-Network header
+  const headers = event.headers || {};
+  return handleApi(method, pathname, query, bodyText, headers);
 }

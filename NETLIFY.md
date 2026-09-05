@@ -1,7 +1,10 @@
 # Deploy UI to Netlify
 
-React (Vite) frontend (`web/ui`) + serverless functions for **read** APIs against **Gno Sapphire** (`sapphire-1` / `padv22`).
-Production: **https://gnomi.fun** (site `gnomemepad-sapphire`). Pearl `padv23` remains on-chain — switch via env when ready.
+React (Vite) frontend (`web/ui`) + serverless functions for **read** APIs.
+Production: **https://gnomi.fun** (site `gnomemepad-sapphire`).
+
+**In-app network switcher** (header): Sapphire → `padv22`, Pearl → `padv23`, Mainnet → coming soon
+(set `MAINNET_PKG` + `MAINNET_RPC_URL` to enable). API accepts `?network=` / `X-Gnomi-Network`.
 
 ## Continuous deploy (collaborators)
 

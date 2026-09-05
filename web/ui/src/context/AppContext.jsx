@@ -6,7 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { api } from "../lib/api";
+import { api, setApiNetworkId } from "../lib/api";
 import {
   connectAdena,
   doContractCall,
@@ -14,9 +14,15 @@ import {
   hasAdena,
   onAccountChange,
   openInstallAdena,
-  DEFAULT_NETWORK,
-  chainDisplayName,
+  ensureNetwork,
 } from "../lib/adena";
+import {
+  getNetwork,
+  listClientNetworks,
+  loadStoredNetworkId,
+  networkToAdena,
+  storeNetworkId,
+} from "../lib/networks";
 import { loadWatchlist, toggleWatch as toggleWatchList } from "../lib/watchlist";
 
 const LS_WALLET = "gnomemepad.wallet.v1";
@@ -34,6 +40,11 @@ function loadWallet() {
 export function AppProvider({ children }) {
   const [wallet, setWalletState] = useState(() => loadWallet());
   const [isConnecting, setIsConnecting] = useState(false);
+  const [networkId, setNetworkIdState] = useState(() => {
+    const id = loadStoredNetworkId();
+    setApiNetworkId(id);
+    return id;
+  });
   const [health, setHealth] = useState(null);
   const [walletsMeta, setWalletsMeta] = useState(null);
   const [toast, setToast] = useState(null);
@@ -54,16 +65,28 @@ export function AppProvider({ children }) {
 
   const clearTx = useCallback(() => setTx(null), []);
 
-  const network = useMemo(() => {
-    const chainId = health?.chainId || DEFAULT_NETWORK.chainId;
-    return {
-      chainId,
-      chainName: chainDisplayName(chainId),
-      rpcUrl: health?.rpc || DEFAULT_NETWORK.rpcUrl,
-    };
-  }, [health]);
+  const selectedNet = useMemo(() => getNetwork(networkId), [networkId]);
 
-  const pkg = health?.pkg || health?.modules?.pad || null;
+  const network = useMemo(() => {
+    const adena = networkToAdena(selectedNet);
+    // Prefer live health chainId/rpc when they match selected network
+    const liveId = String(health?.chainId || "");
+    const matches =
+      !liveId ||
+      liveId === selectedNet.chainId ||
+      liveId.includes(selectedNet.id);
+    return {
+      chainId: matches && liveId ? liveId : selectedNet.chainId,
+      chainName: selectedNet.label.startsWith("Gno")
+        ? selectedNet.label
+        : `Gno ${selectedNet.label}`,
+      rpcUrl: (matches && health?.rpc) || selectedNet.rpcUrl,
+      networkId: selectedNet.id,
+      pkg: health?.pkg || selectedNet.pkg,
+    };
+  }, [health, selectedNet]);
+
+  const pkg = health?.pkg || health?.modules?.pad || selectedNet.pkg || null;
   const signerAddr = walletsMeta?.signerAddr || null;
 
   const isAdmin = useMemo(() => {
@@ -74,20 +97,54 @@ export function AppProvider({ children }) {
 
   const refreshHealth = useCallback(async () => {
     try {
-      const h = await api("/api/health");
+      const h = await api("/api/health", { network: networkId });
       setHealth(h);
-    } catch {
-      setHealth((prev) => (prev ? { ...prev, ok: false } : { ok: false }));
+    } catch (e) {
+      setHealth((prev) => ({
+        ...(prev || {}),
+        ok: false,
+        error: String(e?.message || e),
+        network: networkId,
+        chainId: selectedNet.chainId,
+      }));
     }
-  }, []);
+  }, [networkId, selectedNet.chainId]);
 
   const refreshWalletsMeta = useCallback(async () => {
     try {
-      setWalletsMeta(await api("/api/wallets"));
+      setWalletsMeta(await api("/api/wallets", { network: networkId }));
     } catch {
       setWalletsMeta({ demos: [], signerAddr: null });
     }
-  }, []);
+  }, [networkId]);
+
+  const setNetworkId = useCallback(
+    async (nextId, { switchAdena = true } = {}) => {
+      const net = getNetwork(nextId);
+      if (!net.enabled && net.comingSoon) {
+        showToast(`${net.label} coming soon`, false);
+        return false;
+      }
+      if (!net.enabled) {
+        showToast(`${net.label} is not available`, false);
+        return false;
+      }
+      const id = storeNetworkId(net.id);
+      setApiNetworkId(id);
+      setNetworkIdState(id);
+      setHealth(null);
+      showToast(`Switched to ${net.label}`);
+      if (switchAdena && hasAdena() && wallet?.type === "adena") {
+        try {
+          await ensureNetwork(networkToAdena(net));
+        } catch {
+          showToast(`Open Adena → switch to ${net.chainId}`, false);
+        }
+      }
+      return true;
+    },
+    [showToast, wallet?.type],
+  );
 
   useEffect(() => {
     refreshHealth();
@@ -250,6 +307,9 @@ export function AppProvider({ children }) {
     isAdmin,
     pkg,
     network,
+    networkId,
+    setNetworkId,
+    networks: listClientNetworks(),
     toast,
     showToast,
     tx,
