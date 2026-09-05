@@ -4,9 +4,9 @@
 const ADENA_APP_NAME = "gnomi";
 
 export const DEFAULT_NETWORK = {
-  chainId: "pearl-1",
-  chainName: "Gno Pearl",
-  rpcUrl: "https://rpc.pearl.testnets.gno.land:443",
+  chainId: "sapphire-1",
+  chainName: "Gno Sapphire",
+  rpcUrl: "https://rpc.sapphire.testnets.gno.land:443",
 };
 
 export function chainDisplayName(chainId) {

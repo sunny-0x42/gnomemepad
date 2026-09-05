@@ -106,9 +106,9 @@ Verified 2026-09-05:
 - `DefaultListVenue` → `gnoswap`; `ListVenues` → `gnoswap|Gnoswap|1|GNS`
 - Hub modules include `pad|…/padv23`
 
-**Production Netlify** → Pearl `padv23` (`netlify.toml` + site env).  
-Local: `copy web\.env.pearl.example web\.env.pearl` then `node --env-file=web/.env.pearl web/api-dev.mjs`.  
-Sapphire local: `web/.env.sapphire.example`.
+**Production Netlify** currently → Sapphire `padv22` (frontend/backend check).  
+Pearl `padv23` is live on-chain; point site back with Pearl env when ready.  
+Local Pearl: `copy web\.env.pearl.example web\.env.pearl` then `node --env-file=web/.env.pearl web/api-dev.mjs`.
 
 ## Multi-DEX listing (ListVenue — Approach A)
 
