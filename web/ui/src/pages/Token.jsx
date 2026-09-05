@@ -87,6 +87,10 @@ export default function Token() {
   const [infoTab, setInfoTab] = useState("trades"); // trades | holders | about
   const [poolQuote, setPoolQuote] = useState(null);
   const [listNeed, setListNeed] = useState(null);
+  const [listVenues, setListVenues] = useState([
+    { id: "gnoswap", label: "Gnoswap", enabled: true, feeAssetHint: "GNS" },
+  ]);
+  const [listVenue, setListVenue] = useState("gnoswap");
   /** Local Gnoswap swaps (on-page) merged into Trades tab */
   const [dexTrades, setDexTrades] = useState([]);
   /** Mobile terminal pane: raise | chart | trade */
@@ -196,6 +200,33 @@ export default function Token() {
     });
   }, [editingMeta, meta, m?.uri, m?.imageURI]);
 
+  // List venues (padv23+); fall back to Gnoswap-only on older pads
+  useEffect(() => {
+    if (!m?.pkg && !pkgQ) return undefined;
+    let cancelled = false;
+    api(`/api/list-venues?pkg=${encodeURIComponent(m?.pkg || pkgQ || "")}`)
+      .then((res) => {
+        if (cancelled || !res?.venues?.length) return;
+        setListVenues(res.venues);
+        const def = String(res.defaultVenue || "gnoswap").toLowerCase();
+        const enabled = res.venues.filter((v) => v.enabled);
+        const pick =
+          enabled.find((v) => v.id === def)?.id ||
+          enabled[0]?.id ||
+          "gnoswap";
+        setListVenue((prev) => {
+          if (enabled.some((v) => v.id === prev)) return prev;
+          return pick;
+        });
+      })
+      .catch(() => {
+        /* keep default gnoswap */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [m?.pkg, pkgQ]);
+
   // ListNeed checklist for graduated internal-CPMM markets (padv13+)
   useEffect(() => {
     if (!m?.id || m.status !== 1 || m.gnoswapListed) {
@@ -203,8 +234,9 @@ export default function Token() {
       return;
     }
     let cancelled = false;
+    const venueQ = listVenue ? `&venue=${encodeURIComponent(listVenue)}` : "";
     api(
-      `/api/list-need?id=${encodeURIComponent(m.id)}&pkg=${encodeURIComponent(m.pkg || "")}&refresh=1`,
+      `/api/list-need?id=${encodeURIComponent(m.id)}&pkg=${encodeURIComponent(m.pkg || "")}&refresh=1${venueQ}`,
     )
       .then((n) => {
         if (!cancelled) setListNeed(n);
@@ -215,7 +247,7 @@ export default function Token() {
     return () => {
       cancelled = true;
     };
-  }, [m?.id, m?.pkg, m?.status, m?.gnoswapListed]);
+  }, [m?.id, m?.pkg, m?.status, m?.gnoswapListed, listVenue]);
 
   // Document title + basic share meta for SPA
   useEffect(() => {
@@ -276,28 +308,52 @@ export default function Token() {
    *   Deposit? → Transfer WUGNOT to pad → Transfer GNS to pad? → RetryList alone
    * Prefer holding ~100 GNS on pad so fee path does not need large WUGNOT budget.
    */
+  async function broadcastRetryList(market, venue, opts = {}) {
+    const v = String(venue || listVenue || "gnoswap").toLowerCase() || "gnoswap";
+    const label = opts.label || `List $${market.symbol} on ${v}`;
+    const gas = {
+      celebrate: true,
+      gasWanted: opts.gasWanted || 280_000_000,
+      gasFee: opts.gasFee || 2_000_000,
+      label,
+    };
+    // Prefer venue-aware RetryList (padv23+); fall back for older pads.
+    try {
+      await broadcast("RetryList", [market.id, v], "", market.pkg, gas);
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      if (/not found|unknown|no such|undefined|RetryList/i.test(msg)) {
+        await broadcast("RetryListGnoswap", [market.id], "", market.pkg, {
+          ...gas,
+          label: `List $${market.symbol} on Gnoswap`,
+        });
+      } else {
+        throw err;
+      }
+    }
+  }
+
   async function ensureGnoswapListed(market, { silent = false } = {}) {
     if (!market?.id || market.status !== 1 || market.gnoswapListed) return false;
     if (!wallet?.canSign) {
-      if (!silent) showToast("Connect wallet to finish Gnoswap list", false);
+      if (!silent) showToast("Connect wallet to finish list", false);
       return false;
     }
     if (listAutoBusyRef.current) return false;
     listAutoBusyRef.current = true;
     setBusy(true);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const venue = String(listVenue || "gnoswap").toLowerCase() || "gnoswap";
     try {
       const addrQ = wallet.address
         ? `&address=${encodeURIComponent(wallet.address)}`
         : "";
       const need = await api(
-        `/api/list-need?id=${encodeURIComponent(market.id)}&pkg=${encodeURIComponent(market.pkg || "")}&refresh=1${addrQ}`,
+        `/api/list-need?id=${encodeURIComponent(market.id)}&pkg=${encodeURIComponent(market.pkg || "")}&venue=${encodeURIComponent(venue)}&refresh=1${addrQ}`,
       ).catch(() => null);
 
       if (!need?.ok) {
-        await broadcast("RetryListGnoswap", [market.id], "", market.pkg, {
-          label: `List $${market.symbol} on Gnoswap`,
-          celebrate: true,
+        await broadcastRetryList(market, venue, {
           gasWanted: 280_000_000,
           gasFee: 2_000_000,
         });
@@ -306,9 +362,7 @@ export default function Token() {
         return true;
       }
       if (need.ready) {
-        await broadcast("RetryListGnoswap", [market.id], "", market.pkg, {
-          label: `List $${market.symbol} on Gnoswap`,
-          celebrate: true,
+        await broadcastRetryList(market, venue, {
           gasWanted: 280_000_000,
           gasFee: 2_000_000,
         });
@@ -420,14 +474,12 @@ export default function Token() {
       }
 
       // Step D: RetryList alone — pad should already hold LP WUGNOT (+ GNS if pushed)
-      if (!silent) showToast("List step final: RetryListGnoswap…");
-      await broadcast("RetryListGnoswap", [market.id], "", market.pkg, {
-        label: `List $${market.symbol} on Gnoswap`,
-        celebrate: true,
+      if (!silent) showToast(`List step final: RetryList (${venue})…`);
+      await broadcastRetryList(market, venue, {
         gasWanted: 320_000_000,
         gasFee: 2_000_000,
       });
-      showToast("Gnoswap list submitted 🎉");
+      showToast(`Listed on ${venue} 🎉`);
       queueTokenResourceSync(market);
       await load();
       return true;
@@ -2640,6 +2692,28 @@ export default function Token() {
                 </span>
               </div>
               <p className="list-checklist-title">{t("listChecklist")}</p>
+              {listVenues.filter((v) => v.enabled).length > 0 && (
+                <label className="list-venue-pick" style={{ display: "block", marginTop: "0.55rem" }}>
+                  <span className="muted" style={{ fontSize: "0.78rem", display: "block", marginBottom: "0.25rem" }}>
+                    List venue
+                  </span>
+                  <select
+                    className="input"
+                    value={listVenue}
+                    disabled={busy || listVenues.filter((v) => v.enabled).length <= 1}
+                    onChange={(e) => setListVenue(e.target.value)}
+                  >
+                    {listVenues
+                      .filter((v) => v.enabled)
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label || v.id}
+                          {v.feeAssetHint ? ` (${v.feeAssetHint} fee)` : ""}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
               <button
                 type="button"
                 className="btn primary block"
@@ -2647,7 +2721,9 @@ export default function Token() {
                 disabled={busy}
                 onClick={onRetryListGnoswap}
               >
-                {t("listGnoswap")}
+                {listVenue && listVenue !== "gnoswap"
+                  ? `List on ${listVenue}`
+                  : t("listGnoswap")}
               </button>
             </div>
           )}

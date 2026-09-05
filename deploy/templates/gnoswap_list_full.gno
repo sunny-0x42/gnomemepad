@@ -181,6 +181,7 @@ func tryListOnGnoswap(cur realm, l *Launch, raisedUgnot, remainingTokens int64) 
 	l.GnoswapListed = true
 	l.GnoswapPoolPath = poolPath
 	l.GnoswapPositionID = posID
+	l.ListVenue = VenueGnoswap
 	l.FeeWugnotSpent = feeWugnot
 	if wugnotUsed > 0 {
 		l.LiqWugnotUsed = wugnotUsed
@@ -451,9 +452,39 @@ func listNeedOf(l *Launch) string {
 		padA.String()
 }
 
-// ListNeed is the public query for the Token "list on Gnoswap" wizard.
+// ListNeed is the public query for the Token list wizard (default venue).
 func ListNeed(id string) string {
 	return listNeedOf(mustLaunch(id))
+}
+
+// ListNeedFor is venue-aware; only gnoswap has a Need adapter today.
+func ListNeedFor(id, venueId string) string {
+	l := mustLaunch(id)
+	vid := normalizeVenueID(venueId)
+	if vid != VenueGnoswap {
+		poolU := int64(0)
+		if l != nil && l.Status == StatusGraduated && !l.GnoswapListed {
+			poolU = l.PoolUgnot
+		}
+		return strconv.FormatInt(poolU, 10) + "|0|0|0|0|0|0|" + padAddr.String()
+	}
+	return listNeedOf(l)
+}
+
+// ListedOf reports whether the launch is listed on any venue.
+func ListedOf(id string) bool {
+	l := mustLaunch(id)
+	return l.GnoswapListed || l.ListVenue != ""
+}
+
+// ListPoolPathOf returns the pool path after listing.
+func ListPoolPathOf(id string) string {
+	return mustLaunch(id).GnoswapPoolPath
+}
+
+// ListNoteOf returns the listing status note.
+func ListNoteOf(id string) string {
+	return mustLaunch(id).GnoswapNote
 }
 
 func swapWugnotForGNS(cur realm, amountOutGNS, maxInWugnot int64) (spent int64, ok bool) {

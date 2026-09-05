@@ -2,6 +2,7 @@ package pad
 
 import (
 	"chain"
+	"strings"
 	"testing"
 )
 
@@ -373,6 +374,51 @@ func TestRetryListGnoswap(cur realm, t *testing.T) {
 	// Already listed - further retries must not clear listing.
 	if !GnoswapListedOf(id) || GnoswapPoolPathOf(id) == "" {
 		t.Fatal("listing should stick after successful RetryList")
+	}
+	if ListVenueOf(id) != VenueGnoswap {
+		t.Fatalf("ListVenue=%q want gnoswap", ListVenueOf(id))
+	}
+}
+
+// TestRetryListUnknownVenue: soft-fail with note, no panic / no list.
+func TestRetryListUnknownVenue(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := Create(cross(cur), "NoVen", "NVN", "")
+	testing.SkipHeights(21)
+	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 200_000_000}})
+
+	for i := 0; i < 12; i++ {
+		if GetStatus(id) == StatusGraduated {
+			break
+		}
+		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10_000_000}})
+		Buy(cross(cur), id, 0, 0)
+	}
+	if GetStatus(id) != StatusGraduated {
+		t.Fatalf("status=%d", GetStatus(id))
+	}
+	buyer := address("g1u7y667z64x2h7vc6fmpcprgey4ck233jaww9zq")
+	testing.SetRealm(testing.NewUserRealm(buyer))
+	if RetryList(cross(cur), id, "zdex") {
+		t.Fatal("unknown venue must not list")
+	}
+	if GnoswapListedOf(id) || ListedOf(id) {
+		t.Fatal("must stay unlisted")
+	}
+	note := GnoswapNoteOf(id)
+	if note == "" {
+		t.Fatal("expected skip note")
+	}
+	venues := ListVenues()
+	if !strings.Contains(venues, "gnoswap|") {
+		t.Fatalf("ListVenues missing gnoswap: %s", venues)
 	}
 }
 

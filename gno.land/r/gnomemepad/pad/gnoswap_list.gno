@@ -25,6 +25,7 @@ func tryListOnGnoswap(cur realm, l *Launch, raisedUgnot, remainingTokens int64) 
 		l.LiqWugnotUsed = raisedUgnot
 		l.FeeWugnotSpent = 0
 		l.GnoswapNote = "listed (test force)"
+		l.ListVenue = VenueGnoswap
 		_ = remainingTokens
 		return true
 	}
@@ -92,12 +93,44 @@ func listNeedOf(l *Launch) string {
 		padAddr.String()
 }
 
-// ListNeed is the public query for the Token "list on Gnoswap" wizard.
+// ListNeed is the public query for the Token list wizard (default venue).
 func ListNeed(id string) string {
 	return listNeedOf(mustLaunch(id))
 }
 
-// GnoswapListedOf reports whether a launch was auto-listed on Gnoswap.
+// ListNeedFor is venue-aware ListNeed. Unknown/non-gnoswap venues return a
+// short pipe with note in field0-style empty capital + fee hint for UI.
+func ListNeedFor(id, venueId string) string {
+	l := mustLaunch(id)
+	vid := normalizeVenueID(venueId)
+	if vid != VenueGnoswap {
+		// No alternate Need() adapters yet — surface soft guidance.
+		poolU := int64(0)
+		if l != nil && l.Status == StatusGraduated && !l.GnoswapListed {
+			poolU = l.PoolUgnot
+		}
+		return strconv.FormatInt(poolU, 10) + "|0|0|0|0|0|0|" + padAddr.String()
+	}
+	return listNeedOf(l)
+}
+
+// ListedOf reports whether the launch is listed on any venue.
+func ListedOf(id string) bool {
+	l := mustLaunch(id)
+	return l.GnoswapListed || l.ListVenue != ""
+}
+
+// ListPoolPathOf returns the pool path after listing (venue-agnostic alias).
+func ListPoolPathOf(id string) string {
+	return mustLaunch(id).GnoswapPoolPath
+}
+
+// ListNoteOf returns the listing status note (venue-agnostic alias).
+func ListNoteOf(id string) string {
+	return mustLaunch(id).GnoswapNote
+}
+
+// GnoswapListedOf reports whether a launch was listed on Gnoswap.
 func GnoswapListedOf(id string) bool {
 	return mustLaunch(id).GnoswapListed
 }

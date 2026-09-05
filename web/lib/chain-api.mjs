@@ -612,6 +612,8 @@ function parseLaunchInfo(line, totalSupply = 1_000_000_000, gradUgnot = 50_000_0
     gnoswapListed: p[17] === "1",
     gnoswapPoolPath: p[18] || "",
     gnoswapNote: p[19] || "",
+    // padv23+: listVenue (e.g. "gnoswap"); empty if unlisted / older pads
+    listVenue: p[20] || (p[17] === "1" ? "gnoswap" : ""),
     progressPct: status === 1 ? 100 : Math.min(100, Math.floor((raised * 100) / gradUgnot)),
   };
   return enrichPricing(m, totalSupply);
@@ -2839,13 +2841,74 @@ export async function handleApi(method, pathname, query, bodyText) {
       });
     }
 
+    if (method === "GET" && (p === "/api/list-venues" || p === "/api/list-venues/")) {
+      let padPkg = String(q.get("pkg") || PKG || "").trim();
+      if (!padPkg.startsWith("gno.land/")) padPkg = PKG;
+      try {
+        const raw = String(await qeval(RPC, padPkg, `${padPkg}.ListVenues()`) || "");
+        const defaultVenue = String(
+          await qeval(RPC, padPkg, `${padPkg}.DefaultListVenue()`).catch(() => "gnoswap"),
+        )
+          .replace(/^"|"$/g, "")
+          .trim() || "gnoswap";
+        const venues = String(raw)
+          .replace(/^"|"$/g, "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [id, label, en, feeHint] = line.split("|");
+            return {
+              id: id || "",
+              label: label || id || "",
+              enabled: en === "1",
+              feeAssetHint: feeHint || "",
+            };
+          })
+          .filter((v) => v.id);
+        return json(
+          200,
+          {
+            ok: true,
+            pkg: padPkg,
+            defaultVenue,
+            venues,
+            raw: String(raw).replace(/^"|"$/g, ""),
+          },
+          { maxAge: 30 },
+        );
+      } catch (e) {
+        // Older pads: only Gnoswap exists
+        return json(200, {
+          ok: true,
+          pkg: padPkg,
+          defaultVenue: "gnoswap",
+          venues: [{ id: "gnoswap", label: "Gnoswap", enabled: true, feeAssetHint: "GNS" }],
+          legacy: true,
+          error: String(e.message || e),
+        });
+      }
+    }
+
     if (method === "GET" && p === "/api/list-need") {
       const id = String(q.get("id") || "").trim();
       if (!id) return json(400, { error: "id required" });
       let padPkg = String(q.get("pkg") || PKG || "").trim();
       if (!padPkg.startsWith("gno.land/")) padPkg = PKG;
+      const venue = String(q.get("venue") || "gnoswap").trim().toLowerCase() || "gnoswap";
       try {
-        const raw = String(await qeval(RPC, padPkg, `${padPkg}.ListNeed(${JSON.stringify(id)})`) || "");
+        let raw = "";
+        try {
+          raw = String(
+            await qeval(
+              RPC,
+              padPkg,
+              `${padPkg}.ListNeedFor(${JSON.stringify(id)},${JSON.stringify(venue)})`,
+            ) || "",
+          );
+        } catch {
+          raw = String(await qeval(RPC, padPkg, `${padPkg}.ListNeed(${JSON.stringify(id)})`) || "");
+        }
         const parts = raw.replace(/^"|"$/g, "").split("|");
         const poolU = Number(parts[0]) || 0;
         const wHave = Number(parts[1]) || 0;
@@ -2957,6 +3020,7 @@ export async function handleApi(method, pathname, query, bodyText) {
               "Wrap is temporary (LP reimbursed from pad ugnot). Prefer ~100 GNS in wallet to avoid large fee WUGNOT budget. Deposit is EOA-only.",
             wugnotPkg: "gno.land/r/gnoland/wugnot",
             gnsPkg: "gno.land/r/gnoswap/gns",
+            venue,
             ready: wNeedLp <= 0 && gnsNeed <= 0,
             raw,
           },
@@ -2967,6 +3031,7 @@ export async function handleApi(method, pathname, query, bodyText) {
           ok: false,
           id,
           pkg: padPkg,
+          venue,
           error: String(e.message || e),
           // Pre-padv13: no ListNeed — UI falls back to manual RetryList
           legacy: true,

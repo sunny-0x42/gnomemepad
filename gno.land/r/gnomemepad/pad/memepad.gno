@@ -138,8 +138,11 @@ type Launch struct {
 
 	// ListFeeGns: Create-time GNS escrow for Gnoswap CreatePool fee (padv20+).
 	// Consumed on successful list; ClaimListFee refunds creator if still unlisted.
-	ListFeeGns       int64
-	ListFeeConsumed  bool // true after list paid CreatePool fee from escrow
+	ListFeeGns      int64
+	ListFeeConsumed bool // true after list paid CreatePool fee from escrow
+
+	// ListVenue: which DEX adapter succeeded (e.g. "gnoswap"). Empty if unlisted.
+	ListVenue string
 
 	// Chart history (ordered AVL keys)
 	Trades    avl.Tree // tradeKey -> *Trade
@@ -167,11 +170,13 @@ func Init(cur realm) {
 	if graduationUgnot <= 0 {
 		panic("pad: default graduation misconfigured")
 	}
+	ensureListVenuesSeeded()
 	inited = true
 	chain.Emit("Init",
 		"protocol", protocolAddr.String(),
 		"graduationUgnot", strconv.FormatInt(graduationUgnot, 10),
 		"listFeeGns", strconv.FormatInt(listFeeGnsLive, 10),
+		"defaultListVenue", DefaultListVenue(),
 	)
 }
 
@@ -1238,17 +1243,10 @@ func graduate(cur realm, l *Launch) {
 	)
 }
 
-// RetryListGnoswap re-attempts Gnoswap CreatePool + full-range Mint for a
-// graduated launch that fell back to the internal CPMM.
-// Permissionless EOA MsgCall.
-//
-// Auto-funding (padv13+): if pad WUGNOT/GNS inventory is short, pulls shortfall from
-// the caller via TransferFrom (caller must wugnot.Deposit + Approve(pad) first, and
-// preferably hold/Approve GNS for CreatePool fee). On success, LP WUGNOT pulled from
-// the caller is reimbursed in ugnot from pad bank (raised capital). Fee is not reimbursed.
-//
-// Uses current PoolUgnot / PoolToken as LP sizes. Returns true if listed this call.
-func RetryListGnoswap(cur realm, id string) bool {
+// RetryList lists a graduated launch on the chosen venue (default: gnoswap).
+// Permissionless EOA MsgCall. Uses PoolUgnot / PoolToken (curve-spot sized).
+// venueId: empty → DefaultListVenue(); unknown/disabled → soft-fail note.
+func RetryList(cur realm, id, venueId string) bool {
 	requireInit()
 	if !cur.Previous().IsUserCall() {
 		panic("pad: must be EOA MsgCall")
@@ -1257,27 +1255,44 @@ func RetryListGnoswap(cur realm, id string) bool {
 	if l.Status != StatusGraduated {
 		panic("pad: not graduated")
 	}
-	if l.GnoswapListed {
-		panic("pad: already listed on Gnoswap")
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: already listed")
 	}
 	poolU := l.PoolUgnot
 	poolT := l.PoolToken
 	if poolU <= 0 || poolT <= 0 {
 		panic("pad: empty internal pool")
 	}
-	ok := listOnGnoswapWithFunding(cur, l, poolU, poolT)
+	vid := normalizeVenueID(venueId)
+	ok := tryListVenue(cur, l, vid, poolU, poolT)
 	if ok {
-		chain.Emit("GnoswapListedRetry",
+		chain.Emit("ListedRetry",
 			"id", l.ID,
+			"venue", l.ListVenue,
 			"poolPath", l.GnoswapPoolPath,
 			"positionId", strconv.FormatUint(l.GnoswapPositionID, 10),
 			"poolUgnot", strconv.FormatInt(poolU, 10),
 			"poolToken", strconv.FormatInt(poolT, 10),
 		)
+		// Compat event name for indexers that listen for GnoswapListedRetry.
+		if l.ListVenue == VenueGnoswap {
+			chain.Emit("GnoswapListedRetry",
+				"id", l.ID,
+				"poolPath", l.GnoswapPoolPath,
+				"positionId", strconv.FormatUint(l.GnoswapPositionID, 10),
+				"poolUgnot", strconv.FormatInt(poolU, 10),
+				"poolToken", strconv.FormatInt(poolT, 10),
+			)
+		}
 	} else if l.GnoswapNote == "" {
-		l.GnoswapNote = "retry list failed - check ListNeed(id): wrap WUGNOT, Approve pad, prefer GNS fee"
+		l.GnoswapNote = "retry list failed - check ListNeed / ListNeedFor; venue=" + vid
 	}
 	return ok
+}
+
+// RetryListGnoswap is the Gnoswap-specific wrapper (compat for existing UI).
+func RetryListGnoswap(cur realm, id string) bool {
+	return RetryList(cur, id, VenueGnoswap)
 }
 
 // TokenIDOf returns the GRC20 Token.ID() for a launch.
@@ -1747,10 +1762,11 @@ func ListIDs() string {
 
 // LaunchInfo returns a single-line pipe-delimited summary for UIs/indexers:
 //
-//	id|name|symbol|status|raised|sold|buyers|creatorFees|poolUgnot|poolToken|uri|creator|virtualUgnot|virtualToken|created|tokenID|gnoswapReady|gnoswapListed|gnoswapPoolPath|gnoswapNote
+//	id|name|symbol|status|raised|sold|buyers|creatorFees|poolUgnot|poolToken|uri|creator|virtualUgnot|virtualToken|created|tokenID|gnoswapReady|gnoswapListed|gnoswapPoolPath|gnoswapNote|listVenue
 //
 // status: 0=curve 1=graduated; gnoswapReady/listed: 0|1
 // gnoswapNote: optional (padv12+); pipes stripped for delimiter safety.
+// listVenue: optional (padv23+); empty if unlisted.
 func LaunchInfo(id string) string {
 	l := mustLaunch(id)
 	gs := "0"
@@ -1762,6 +1778,7 @@ func LaunchInfo(id string) string {
 		gl = "1"
 	}
 	note := strings.ReplaceAll(l.GnoswapNote, "|", "/")
+	venue := strings.ReplaceAll(l.ListVenue, "|", "/")
 	return l.ID + "|" +
 		l.Name + "|" +
 		l.Symbol + "|" +
@@ -1781,7 +1798,8 @@ func LaunchInfo(id string) string {
 		gs + "|" +
 		gl + "|" +
 		l.GnoswapPoolPath + "|" +
-		note
+		note + "|" +
+		venue
 }
 
 // ParamsInfo returns parameters for UI display.
@@ -1844,4 +1862,5 @@ func resetForTest() {
 	listFeeGnsLive = 0
 	testSkipBanker = true // unit tests skip banker; integration/chain tests leave false
 	testForceGnoswapList = false
+	resetListVenuesForTest()
 }

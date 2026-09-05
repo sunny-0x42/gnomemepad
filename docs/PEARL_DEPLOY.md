@@ -100,20 +100,25 @@ hubv2.GetModule("pad")        # → …/padv23
 | ammmathv2 | `…/gnomemepad/ammmathv2` |
 | **padv23** | **ready to deploy** (Gnoswap gate cleared) |
 
-## Multi-DEX listing (beyond Gnoswap)
+## Multi-DEX listing (ListVenue — Approach A)
 
-Today list is **hardwired** to Gnoswap (`tryListOnGnoswap` → CreatePool + position.Mint).
-There is **no** second DEX on Pearl yet (`zdex` etc. absent).
+Pad ships a **venue registry** + compile-time dispatch (Gno cannot `import(path)` dynamically):
 
-To support “add another router/venue later” without redeploying the whole pad each time:
+| API | Role |
+|-----|------|
+| `ListVenues()` | `id\|label\|enabled\|feeHint` lines |
+| `DefaultListVenue()` / `SetDefaultListVenue` | protocol default |
+| `SetListVenue(id, label, enabled, feeHint)` | protocol metadata |
+| `RetryList(id, venueId)` | list; empty venue → default |
+| `RetryListGnoswap(id)` | compat → `RetryList(..., "gnoswap")` |
+| `ListNeed` / `ListNeedFor(id, venue)` | funding wizard |
 
-1. **ListVenue registry** on pad (or thin `listrouter` realm): `id → adapter path`.
-2. **Adapter contract** per DEX: `List(raisedUgnot, liqTokens, tokenKey) (poolPath, ok)` —
-   Gnoswap adapter = current template; ZDEX/other = separate package.
-3. **UI**: wizard picks venue (`Gnoswap` default); `RetryList(venueId)`.
-4. **Seamless price** stays pad-owned (`PoolToken` sizing in `graduate()`); adapters only deposit.
+Only **`gnoswap`** has an adapter today (`tryListOnGnoswap`). Unknown/disabled venues soft-fail with a note.
 
-Until a second DEX ships on Pearl, ship **Gnoswap-only** padv23; add the registry in a follow-up pad version when needed.
+**Add a 2nd DEX later:** new `case` in `tryListVenue` + adapter file → new pad version.  
+**True hot-plug without pad redeploy:** follow-up Approach B (`listrouter` realm).  
+
+Pearl still has **no** alternate DEX packages — ship Gnoswap-only.
 
 ## Changing params after deploy
 

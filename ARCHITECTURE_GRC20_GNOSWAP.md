@@ -78,16 +78,19 @@ So ugnot→WUGNOT is automatic from the **user wallet as a temporary bridge**, n
 CreatePool fee is fixed **GNS**; GNOT cost moves with market. LP size stays = raised
 (token side sized to curve spot for seamless graduate — see `graduate()` / `LeftoverTokens`).
 
-### Multi-venue listing (future)
+### Multi-venue listing (ListVenue — Approach A)
 
-List path is Gnoswap-only today (`tryListOnGnoswap`). To add another DEX later
-(e.g. ZDEX when live on the target chain):
+Pad owns a venue registry (`list_venue.gno`) and dispatches via compile-time
+`tryListVenue` switch. Public entry: `RetryList(id, venueId)`;
+`RetryListGnoswap` remains a compat wrapper.
 
-- Keep seamless LP sizing in `graduate()` (pad-owned).
-- Extract each DEX into a **list adapter** (`List(raised, liqTokens, tokenKey)`).
-- Optional `ListVenue` registry so UI can pick venue without hardcoding imports in the pad monolith.
+- Seamless LP sizing stays in `graduate()` (pad-owned).
+- Gnoswap body stays in `gnoswap_list*.gno` (stub / deploy template).
+- UI: `/api/list-venues` + venue picker; `/api/list-need?venue=`.
+- Adding ZDEX/etc. = new `case` + adapter in a **new pad version** (Gno static imports).
+- Approach B (`listrouter` realm for hot-plug without pad redeploy) is deferred until a 2nd DEX exists.
 
-Pearl (2026-09): Gnoswap router/pool/position/GNS/WUGNOT are live; no alternate DEX packages found.  
+Pearl (2026-09): Gnoswap live; no alternate DEX packages found.  
 Re-quote: `node scripts/probe-gns-price.mjs`
 
 ## Sapphire Gnoswap stack
