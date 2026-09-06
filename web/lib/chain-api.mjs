@@ -1494,20 +1494,30 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     holders.sort((a, b) => (b.balance || 0) - (a.balance || 0));
     m.holders = holders;
     m.holdersActive = holders.length;
-    // Cap = ListBuyers query truncated (pad max 100), not "buyers > holders with bal"
+    // Cap = ListBuyers query truncated (pad max ~100), not full GRC20 transfer set
     m.holdersCapped = addrs.length >= 40 || addrs.length >= 100;
     m.holdersSource = "ListBuyers";
-    m.holdersLabel = m.gnoswapListed ? "Curve buyers" : "Holders";
-    // UniqueBuyers = ever bought on pad curve — not full GRC20/DEX holders
-    m.holdersNote = m.gnoswapListed
-      ? "Showing curve buyers with balance > 0 (pad ListBuyers). Wallets that only bought on Gnoswap are not listed."
-      : holders.length < (m.buyers || 0)
-        ? "Some curve buyers sold to zero balance."
-        : null;
+    m.holdersLabel = "Holders";
+    // UI no longer shows long disclaimer notes
+    m.holdersNote = null;
+    const heldBal = holders.reduce((s, h) => s + (Number(h.balance) || 0), 0);
+    const top1 = holders[0] ? Number(holders[0].pctSupply) || 0 : 0;
+    const top10 = holders
+      .slice(0, 10)
+      .reduce((s, h) => s + (Number(h.pctSupply) || 0), 0);
+    m.holdersStats = {
+      active: holders.length,
+      buyersEver: Number(m.buyers) || addrs.length || holders.length,
+      heldPct: supply > 0 ? (heldBal / supply) * 100 : 0,
+      top1Pct: top1,
+      top10Pct: top10,
+      capped: m.holdersCapped,
+      source: "ListBuyers",
+    };
   } catch {
-    m.holdersNote =
-      "Holder list needs pad ListBuyers (deploy padv7+). Showing trade-size leaders from history instead.";
+    m.holdersNote = null;
     m.holdersSource = null;
+    m.holdersStats = null;
   }
 
   // Top trades by size (always available from trade ring)

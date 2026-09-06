@@ -2114,13 +2114,13 @@ export default function Token() {
                 <HoldersList
                   holders={holders}
                   symbol={m.symbol}
-                  note={m.holdersNote}
                   totalSupply={totalSupply}
                   priceGnot={m.spotGnot ?? m.priceGnot}
                   openPriceGnot={m.openPriceGnot}
                   avgEntryGnot={m.avgEntryGnot}
-                  pnlBasis={m.pnlBasis}
+                  stats={m.holdersStats}
                   capped={m.holdersCapped}
+                  buyersEver={m.buyers}
                 />
               ) : (
                 <AboutPanel
@@ -2837,35 +2837,67 @@ function SlippageSelect({ value, onChange, label = "Max slippage" }) {
   );
 }
 
+function fmtHolderPct(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x <= 0) return "0%";
+  if (x < 0.01) return "<0.01%";
+  if (x >= 10) return `${x.toFixed(1)}%`;
+  return `${x.toFixed(2)}%`;
+}
+
 function HoldersList({
   holders,
   symbol,
-  note,
   totalSupply = 1e9,
   priceGnot = 0,
   openPriceGnot = null,
   avgEntryGnot = null,
-  pnlBasis = null,
+  stats = null,
   capped = false,
+  buyersEver = null,
 }) {
   const { showToast } = useApp();
-  if (!holders?.length) {
-    return (
-      <div className="trades-empty muted">
-        {note || "No holders listed (or pad does not expose ListBuyers)"}
-      </div>
-    );
-  }
-
   const supply = Number(totalSupply) || 1e9;
   const px = Number(priceGnot) || 0;
-  // Prefer market VWAP entry from API; fallback open price
   const entryPx =
     avgEntryGnot != null && Number(avgEntryGnot) > 0
       ? Number(avgEntryGnot)
       : openPriceGnot != null && Number(openPriceGnot) > 0
         ? Number(openPriceGnot)
         : null;
+
+  const derived = (() => {
+    if (stats && typeof stats === "object") return stats;
+    if (!holders?.length) {
+      return {
+        active: 0,
+        buyersEver: Number(buyersEver) || 0,
+        heldPct: 0,
+        top1Pct: 0,
+        top10Pct: 0,
+        capped: !!capped,
+      };
+    }
+    const heldBal = holders.reduce((s, h) => s + (Number(h.balance) || 0), 0);
+    const top1 = Number(holders[0]?.pctSupply) || (supply > 0 ? ((Number(holders[0]?.balance) || 0) / supply) * 100 : 0);
+    const top10 = holders.slice(0, 10).reduce((s, h) => {
+      const p =
+        h.pctSupply != null
+          ? Number(h.pctSupply)
+          : supply > 0
+            ? ((Number(h.balance) || 0) / supply) * 100
+            : 0;
+      return s + (Number.isFinite(p) ? p : 0);
+    }, 0);
+    return {
+      active: holders.length,
+      buyersEver: Number(buyersEver) || holders.length,
+      heldPct: supply > 0 ? (heldBal / supply) * 100 : 0,
+      top1Pct: top1,
+      top10Pct: top10,
+      capped: !!capped,
+    };
+  })();
 
   async function copyAddr(addr) {
     try {
@@ -2878,122 +2910,132 @@ function HoldersList({
 
   return (
     <div className="holders-panel">
-      {note ? (
-        <p className="holders-note muted" style={{ fontSize: "0.78rem", marginBottom: "0.55rem" }}>
-          {note}
-        </p>
-      ) : null}
-      {entryPx != null && px > 0 && (
-        <div className="holders-basis muted" style={{ fontSize: "0.78rem", marginBottom: "0.55rem" }}>
-          Spot <strong className="mono">{fmtPrice(px)}</strong> GNOT/token · Entry (VWAP buys){" "}
-          <strong className="mono">{fmtPrice(entryPx)}</strong>
-          {pnlBasis ? ` · basis=${pnlBasis}` : ""}
+      <div className="holders-stats" aria-label="On-chain holder stats">
+        <div className="holders-stat">
+          <span className="holders-stat-k">Holders</span>
+          <span className="holders-stat-v mono">{derived.active ?? 0}</span>
+        </div>
+        <div className="holders-stat">
+          <span className="holders-stat-k">Buyers</span>
+          <span className="holders-stat-v mono">{derived.buyersEver ?? 0}</span>
+        </div>
+        <div className="holders-stat">
+          <span className="holders-stat-k">Held</span>
+          <span className="holders-stat-v mono">{fmtHolderPct(derived.heldPct)}</span>
+        </div>
+        <div className="holders-stat">
+          <span className="holders-stat-k">Top 1</span>
+          <span className="holders-stat-v mono">{fmtHolderPct(derived.top1Pct)}</span>
+        </div>
+        <div className="holders-stat">
+          <span className="holders-stat-k">Top 10</span>
+          <span className="holders-stat-v mono">{fmtHolderPct(derived.top10Pct)}</span>
+        </div>
+      </div>
+
+      {!holders?.length ? (
+        <div className="trades-empty muted">No holders with balance yet</div>
+      ) : (
+        <div className="trades-list holders-list holders-list-pro holders-with-tx">
+          <div className="holders-head" aria-hidden>
+            <span>User</span>
+            <span>Position</span>
+            <span>Value</span>
+            <span>PnL</span>
+            <span>% Supply</span>
+            <span>Onchain</span>
+          </div>
+          {holders.map((h) => {
+            const bal = Number(h.balance) || 0;
+            const spot = h.spotGnot != null ? Number(h.spotGnot) : px;
+            const value =
+              h.valueGnot != null
+                ? Number(h.valueGnot)
+                : spot > 0
+                  ? bal * spot
+                  : 0;
+            const pct =
+              h.pctSupply != null
+                ? Number(h.pctSupply)
+                : supply > 0
+                  ? (bal / supply) * 100
+                  : 0;
+            const entry = h.entryGnot != null ? Number(h.entryGnot) : entryPx;
+            let pnl = h.pnlGnot;
+            let pnlPct = h.pnlPct;
+            if ((pnl == null || !Number.isFinite(Number(pnl))) && entry != null && entry > 0 && spot > 0) {
+              const cost = bal * entry;
+              pnl = value - cost;
+              pnlPct = ((spot - entry) / entry) * 100;
+            }
+            const pnlUp = pnl != null && pnl >= 0;
+            const acctUrl = accountExplorerUrl(h.address);
+            return (
+              <div key={h.address} className="holder-row-pro">
+                <div className="holder-user">
+                  <CreatorChip address={h.address} className="holder-name" />
+                  <button
+                    type="button"
+                    className="mono holder-addr-sub"
+                    title={`${h.address} · click to copy`}
+                    onClick={() => copyAddr(h.address)}
+                  >
+                    {shortAddr(h.address, 5)}
+                  </button>
+                </div>
+                <div className="holder-pos mono">
+                  <strong>{fmtNum(bal)}</strong>
+                  <span className="muted"> ${symbol}</span>
+                </div>
+                <div className="holder-val mono">
+                  {fmtGnot(value, { alreadyGnot: true })}
+                  <span className="trade-unit"> GNOT</span>
+                </div>
+                <div className={`holder-pnl mono ${pnl == null ? "" : pnlUp ? "up" : "down"}`}>
+                  {pnl == null || !Number.isFinite(Number(pnl)) ? (
+                    "—"
+                  ) : (
+                    <>
+                      <strong>{fmtPnl(pnl)}</strong>
+                      {pnlPct != null && Number.isFinite(pnlPct) && (
+                        <span className="holder-pnl-pct">
+                          {pnlPct >= 0 ? "+" : ""}
+                          {pnlPct.toFixed(1)}%
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className="holder-supply mono">
+                  <strong>{pct >= 0.01 ? `${pct.toFixed(2)}%` : "<0.01%"}</strong>
+                  <span className="holder-supply-bar" aria-hidden>
+                    <i style={{ width: `${Math.min(100, Math.max(0.5, pct))}%` }} />
+                  </span>
+                </div>
+                <div className="holder-tx">
+                  {acctUrl ? (
+                    <a
+                      className="tx-link mono is-account"
+                      href={acctUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`${h.address} · open on Gnoscan`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="tx-link-label">{shortAddr(h.address, 4)}</span>
+                      <span className="tx-link-ext" aria-hidden>
+                        ↗
+                      </span>
+                    </a>
+                  ) : (
+                    <span className="faint">—</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
-      <div className="trades-list holders-list holders-list-pro holders-with-tx">
-        <div className="holders-head" aria-hidden>
-          <span>User</span>
-          <span>Position</span>
-          <span>Value</span>
-          <span>PnL</span>
-          <span>% Supply</span>
-          <span>Onchain</span>
-        </div>
-        {holders.map((h) => {
-          const bal = Number(h.balance) || 0;
-          const spot = h.spotGnot != null ? Number(h.spotGnot) : px;
-          const value =
-            h.valueGnot != null
-              ? Number(h.valueGnot)
-              : spot > 0
-                ? bal * spot
-                : 0;
-          const pct =
-            h.pctSupply != null
-              ? Number(h.pctSupply)
-              : supply > 0
-                ? (bal / supply) * 100
-                : 0;
-          const entry = h.entryGnot != null ? Number(h.entryGnot) : entryPx;
-          let pnl = h.pnlGnot;
-          let pnlPct = h.pnlPct;
-          if ((pnl == null || !Number.isFinite(Number(pnl))) && entry != null && entry > 0 && spot > 0) {
-            const cost = bal * entry;
-            pnl = value - cost;
-            pnlPct = ((spot - entry) / entry) * 100;
-          }
-          const pnlUp = pnl != null && pnl >= 0;
-          const acctUrl = accountExplorerUrl(h.address);
-          return (
-            <div key={h.address} className="holder-row-pro">
-              <div className="holder-user">
-                <CreatorChip address={h.address} className="holder-name" />
-                <button
-                  type="button"
-                  className="mono holder-addr-sub"
-                  title={`${h.address} · click to copy`}
-                  onClick={() => copyAddr(h.address)}
-                >
-                  {shortAddr(h.address, 5)}
-                </button>
-              </div>
-              <div className="holder-pos mono">
-                <strong>{fmtNum(bal)}</strong>
-                <span className="muted"> ${symbol}</span>
-              </div>
-              <div className="holder-val mono">
-                {fmtGnot(value, { alreadyGnot: true })}
-                <span className="trade-unit"> GNOT</span>
-              </div>
-              <div className={`holder-pnl mono ${pnl == null ? "" : pnlUp ? "up" : "down"}`}>
-                {pnl == null || !Number.isFinite(Number(pnl)) ? (
-                  "—"
-                ) : (
-                  <>
-                    <strong>{fmtPnl(pnl)}</strong>
-                    {pnlPct != null && Number.isFinite(pnlPct) && (
-                      <span className="holder-pnl-pct">
-                        {pnlPct >= 0 ? "+" : ""}
-                        {pnlPct.toFixed(1)}%
-                      </span>
-                    )}
-                  </>
-                )}
-              </div>
-              <div className="holder-supply mono">
-                <strong>{pct >= 0.01 ? `${pct.toFixed(2)}%` : "<0.01%"}</strong>
-                <span className="holder-supply-bar" aria-hidden>
-                  <i style={{ width: `${Math.min(100, Math.max(0.5, pct))}%` }} />
-                </span>
-              </div>
-              <div className="holder-tx">
-                {acctUrl ? (
-                  <a
-                    className="tx-link mono is-account"
-                    href={acctUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`${h.address} · open on Gnoscan`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <span className="tx-link-label">{shortAddr(h.address, 4)}</span>
-                    <span className="tx-link-ext" aria-hidden>
-                      ↗
-                    </span>
-                  </a>
-                ) : (
-                  <span className="faint">—</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p className="holders-note muted">
-        PnL = value − balance × market VWAP of curve buys (shared entry; not personal cost basis)
-        {capped ? " · list may be capped" : ""}
-        {" · "}Onchain opens the wallet on Gnoscan
-      </p>
     </div>
   );
 }

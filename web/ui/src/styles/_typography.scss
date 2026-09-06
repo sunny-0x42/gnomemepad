@@ -1556,6 +1556,52 @@ main.app-main {
 }
 
 /* Holders pro */
+.holders-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+}
+
+.holders-stat {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.45rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.holders-stat-k {
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.holders-stat-v {
+  font-size: 0.92rem;
+  font-weight: 750;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+@media (max-width: 720px) {
+  .holders-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .holders-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .holders-panel {
   display: flex;
   flex-direction: column;
