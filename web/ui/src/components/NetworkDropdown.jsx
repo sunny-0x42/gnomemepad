@@ -46,7 +46,16 @@ export default function NetworkDropdown({
         title={`Network: ${current.label}${busy ? " (switching...)" : ""}`}
       >
         <span className={`net-dot net-dot-${current.id}`} aria-hidden="true" />
-        <span className="net-trigger-label">{current.label}</span>
+        <span className="net-trigger-label">
+          <span className="net-name-full">{current.label}</span>
+          <span className="net-name-short">
+            {current.id === "sapphire"
+              ? "Saph"
+              : current.id === "pearl"
+              ? "Pearl"
+              : "Main"}
+          </span>
+        </span>
         {busy ? (
           <svg
             className="net-spinner"

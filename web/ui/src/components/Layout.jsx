@@ -282,7 +282,14 @@ export default function Layout() {
                 ? t("connecting")
                 : wallet
                   ? shortAddr(wallet.address)
-                  : t("connect")}
+                  : (
+                    <>
+                      <span className="wallet-label-full">{t("connect")}</span>
+                      <span className="wallet-label-short">
+                        {String(t("connect") || "").toLowerCase().includes("kết") ? "Kết nối" : "Connect"}
+                      </span>
+                    </>
+                  )}
             </span>
           </button>
           <button
@@ -302,6 +309,18 @@ export default function Layout() {
           aria-label="Mobile full"
           aria-hidden={!menuOpen}
         >
+          <div className="nav-mobile-network-row">
+            <span className="nav-mobile-net-title">Network</span>
+            <NetworkDropdown
+              networkId={networkId}
+              networks={networks}
+              onChange={(next) => {
+                onNetworkChange(next);
+                setMenuOpen(false);
+              }}
+              busy={netBusy}
+            />
+          </div>
           <NavItems
             items={ALL_NAV}
             isAdmin={isAdmin}
@@ -309,22 +328,6 @@ export default function Layout() {
             t={t}
             onNavigate={() => setMenuOpen(false)}
           />
-          <button
-            type="button"
-            className="nav-btn"
-            onClick={() => {
-              setMenuOpen(false);
-              setCmdOpen(true);
-            }}
-          >
-            <span className="nav-btn-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </span>
-            {t("search")} (⌘K)
-          </button>
           <button
             type="button"
             className="nav-btn"

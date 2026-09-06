@@ -74,16 +74,41 @@
 
 .btn.wallet-btn {
   height: 38px;
-  padding: 0 1.5rem;
-  min-width: 140px;
+  padding: 0 1.25rem;
   justify-content: center;
   gap: 0.45rem;
   border-radius: 999px;
+  flex-shrink: 0;
+
+  .wallet-label-short {
+    display: none;
+  }
+
+  @media (max-width: 900px) {
+    height: 36px;
+    padding: 0 0.95rem;
+    font-size: 0.82rem;
+  }
 
   @media (max-width: 640px) {
+    height: 34px;
+    padding: 0 0.65rem;
+    font-size: 0.78rem;
+    gap: 0.3rem;
     min-width: auto;
-    padding: 0 0.85rem;
-    font-size: 0.8rem;
+
+    .wallet-label-full {
+      display: none;
+    }
+    .wallet-label-short {
+      display: inline;
+    }
+  }
+
+  @media (max-width: 380px) {
+    height: 32px;
+    padding: 0 0.5rem;
+    font-size: 0.74rem;
   }
 }
 

@@ -54,12 +54,21 @@ p {
   height: var(--header-h);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
-  padding: 0 var(--page-pad-x, 1.5rem);
+  padding: 0 var(--page-pad-x);
   background: var(--glass);
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   transition: box-shadow 0.2s ease;
+
+  @media (max-width: 900px) {
+    gap: 0.5rem;
+  }
+
+  @media (max-width: 640px) {
+    gap: 0.35rem;
+  }
 
   &.scrolled {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
@@ -3383,24 +3392,6 @@ span.trade-bal:hover {
     min-width: 720px;
   }
 
-  .markets-controls {
-    gap: 0.45rem;
-  }
-
-  .markets-controls-right {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .markets-search {
-    flex: 1;
-    min-width: 0;
-    width: auto;
-  }
-
-  .sort-select {
-    max-width: 42%;
-  }
 }
 
 @media (min-width: 641px) {

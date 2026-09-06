@@ -1432,14 +1432,23 @@ a {
 
 .filter-tabs {
   display: inline-flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
   padding: 4px;
   height: 42px;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
+  max-width: 100%;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .filter-btn {
@@ -1450,23 +1459,26 @@ a {
   justify-content: center;
   background: transparent;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   font-weight: 500;
-  padding: 0.45rem 1.25rem;
+  padding: 0 1rem;
   border-radius: 999px;
   cursor: pointer;
   transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .filter-btn:hover {
   color: var(--text);
-  background: var(--white-04);
+  background: var(--surface2);
 }
 
 .filter-btn.active {
   color: var(--on-accent);
   background: var(--accent);
   box-shadow: 0 4px 12px var(--accent-soft);
+  font-weight: 600;
 }
 
 .sort-label {
