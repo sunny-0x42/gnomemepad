@@ -11,6 +11,7 @@ import StatusBanners from "./StatusBanners";
 import Confetti from "./Confetti";
 import SettingsModal from "./SettingsModal";
 import WatchAlerts from "./WatchAlerts";
+import NetworkDropdown from "./NetworkDropdown";
 
 const PRIMARY_NAV = [
   { to: "/", key: "markets", end: true, icon: "markets" },
@@ -95,18 +96,16 @@ export default function Layout() {
   const moreRef = useRef(null);
   const mobileMenuRef = useRef(null);
 
-  async function onNetworkChange(e) {
-    const next = e.target.value;
-    if (!next || next === networkId) return;
+  async function onNetworkChange(next) {
+    const id = typeof next === "string" ? next : next?.target?.value;
+    if (!id || id === networkId) return;
     setNetBusy(true);
     try {
-      const okSwitch = await setNetworkId(next);
+      const okSwitch = await setNetworkId(id);
       if (okSwitch) {
         // Reload markets/home for the new chain
         if (location.pathname.startsWith("/token/")) nav("/");
         else nav(0);
-      } else {
-        e.target.value = networkId;
       }
     } finally {
       setNetBusy(false);
@@ -194,7 +193,6 @@ export default function Layout() {
           <div className="brand-logo-wrap">
             <img src="/gnomi-logo-light.svg" alt="Gnomi.fun" className="brand-logo logo-light" />
             <img src="/gnomi-logo-dark.svg" alt="Gnomi.fun" className="brand-logo logo-dark" />
-            <span className="brand-tag">Gnomi.fun</span>
           </div>
         </div>
 
@@ -203,7 +201,7 @@ export default function Layout() {
           <div className="nav-more-wrap" ref={moreRef}>
             <button
               type="button"
-              className={`nav-btn${moreOpen || moreActive ? " active" : ""}`}
+              className={`nav-btn nav-more-btn${moreOpen || moreActive ? " active" : ""}`}
               onClick={(e) => {
                 e.stopPropagation();
                 setMoreOpen((v) => !v);
@@ -211,7 +209,21 @@ export default function Layout() {
               aria-expanded={moreOpen}
               aria-haspopup="menu"
             >
-              {t("more")} ▾
+              <span>{t("more")}</span>
+              <svg
+                className={`nav-chevron${moreOpen ? " open" : ""}`}
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
             </button>
             {moreOpen && (
               <div className="nav-more-menu" role="menu">
@@ -228,7 +240,7 @@ export default function Layout() {
         </nav>
 
         <div className="header-right">
-          <button
+          {/* <button
             type="button"
             className="btn sm ghost cmd-trigger"
             onClick={() => setCmdOpen(true)}
@@ -236,24 +248,13 @@ export default function Layout() {
           >
             <span className="cmd-trigger-label">{t("search")}</span>
             <kbd className="kbd">⌘K</kbd>
-          </button>
-          <label className="net-select-wrap" title={`RPC ${network?.rpcUrl || ""}`}>
-            <span className="sr-only">Network</span>
-            <select
-              className="net-select"
-              value={networkId}
-              disabled={netBusy}
-              onChange={onNetworkChange}
-              aria-label="Select Gno network"
-            >
-              {(networks || []).map((n) => (
-                <option key={n.id} value={n.id} disabled={!n.enabled && n.comingSoon}>
-                  {n.label}
-                  {n.comingSoon ? " (soon)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          </button> */}
+          <NetworkDropdown
+            networkId={networkId}
+            networks={networks}
+            onChange={onNetworkChange}
+            busy={netBusy}
+          />
           <button
             type="button"
             className={`btn wallet-btn${wallet ? " connected" : ""}`}
@@ -280,8 +281,8 @@ export default function Layout() {
               {isConnecting
                 ? t("connecting")
                 : wallet
-                ? shortAddr(wallet.address)
-                : t("connect")}
+                  ? shortAddr(wallet.address)
+                  : t("connect")}
             </span>
           </button>
           <button

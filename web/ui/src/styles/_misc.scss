@@ -4138,38 +4138,7 @@
   text-align: center;
 }
 
-/* Desktop More menu */
-.nav-more-wrap {
-  position: relative;
-  flex-shrink: 0;
-}
 
-.nav-more-menu {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 0;
-  min-width: 180px;
-  padding: 0.4rem;
-  background: rgba(12, 14, 20, 0.98);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  z-index: 60;
-  backdrop-filter: blur(12px);
-}
-
-.nav-more-menu .nav-btn {
-  text-align: left;
-  width: 100%;
-  display: block;
-}
-
-[data-theme="light"] .nav-more-menu {
-  background: rgba(255, 255, 255, 0.98);
-}
 
 /* Mobile dock */
 .mobile-dock {
@@ -6429,7 +6398,7 @@ span.trade-bal:hover {
 
 @media (max-width: 640px) {
   main.app-main {
-    padding: 1.1rem 0rem 3.5rem !important;
+    padding: 1.1rem 0.9rem 3.5rem;
   }
 
   .hero-band {

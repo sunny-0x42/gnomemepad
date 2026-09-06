@@ -189,6 +189,10 @@ main.app-main:has(.admin-shell) {
   outline: none;
 }
 
+.custom-select-trigger svg {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .custom-select-trigger:hover,
 .custom-select-trigger[aria-expanded="true"] {
   border-color: var(--border-strong);
@@ -197,6 +201,10 @@ main.app-main:has(.admin-shell) {
 .custom-select-trigger[aria-expanded="true"] {
   box-shadow: 0 0 0 3px var(--accent-soft);
   border-color: var(--accent);
+
+  svg {
+    transform: rotate(180deg);
+  }
 }
 
 .custom-select-menu {
