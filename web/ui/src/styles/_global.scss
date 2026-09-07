@@ -1782,6 +1782,239 @@ a {
   color: var(--text);
 }
 
+/* Season 0 / Rewards */
+.season0-page {
+  max-width: 920px;
+}
+
+.season0-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.season0-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.season0-chip strong {
+  color: var(--text);
+}
+
+.season0-chip-warn {
+  border-color: color-mix(in srgb, #fbbf24 40%, var(--border));
+  color: #fbbf24;
+}
+
+.season0-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  position: sticky;
+  top: 4.25rem;
+  z-index: 4;
+}
+
+.season0-toc a {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+}
+
+.season0-toc a:hover {
+  color: var(--text);
+  background: var(--accent-soft, rgba(110, 231, 183, 0.12));
+}
+
+.season0-section {
+  margin-top: 1.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 6.5rem;
+}
+
+.season0-section h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1.05rem;
+}
+
+.season0-subh {
+  margin: 1rem 0 0.45rem;
+  font-size: 0.9rem;
+}
+
+.season0-hint {
+  font-size: 0.8rem !important;
+  margin: 0.45rem 0 0.75rem !important;
+}
+
+.season0-rules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+@media (max-width: 720px) {
+  .season0-rules-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.season0-rule-card h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.88rem;
+}
+
+.season0-rule-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.season0-rule-list li {
+  margin-bottom: 0.28rem;
+}
+
+.season0-quest-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+@media (max-width: 720px) {
+  .season0-quest-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.season0-quest-card h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.season0-quest-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.season0-quest-pts {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent, #6ee7b7);
+}
+
+.season0-quest-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 0.55rem 0 0.65rem;
+}
+
+.season0-quest-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent, #6ee7b7);
+}
+
+.season0-quest-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.season0-quest-card.is-done {
+  border-color: color-mix(in srgb, var(--accent, #6ee7b7) 35%, var(--border));
+}
+
+.season0-quest-card.is-soon {
+  opacity: 0.72;
+}
+
+.season0-badge-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.45rem;
+}
+
+.season0-badge {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  opacity: 0.45;
+}
+
+.season0-badge.on {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--accent, #6ee7b7) 40%, var(--border));
+}
+
+.season0-badge-icon {
+  font-size: 1.25rem;
+}
+
+.season0-badge-name {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.season0-badge-state {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.season0-board-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.season0-board-head h2 {
+  margin: 0;
+}
+
+.lb-row.is-you {
+  background: color-mix(in srgb, var(--accent-soft, rgba(110, 231, 183, 0.12)) 80%, transparent);
+}
+
+.season0-you-pill {
+  margin-left: 0.35rem;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--accent, #6ee7b7);
+}
+
 /* Docs / Guide */
 .docs {
   max-width: 820px;

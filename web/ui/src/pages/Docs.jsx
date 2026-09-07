@@ -200,6 +200,7 @@ export default function Docs() {
           <a href="#after-list">{t("After list", "Sau list")}</a>
           <a href="#pages">{t("Pages", "Trang")}</a>
           <a href="#fees">{t("Fees", "Phí")}</a>
+          <a href="#season0">{t("Season 0", "Season 0")}</a>
           <a href="#faq">{t("FAQ", "FAQ")}</a>
           <a href="#glossary">{t("Glossary", "Thuật ngữ")}</a>
           <a href="#shortcuts">{t("Keys", "Phím")}</a>
@@ -744,6 +745,20 @@ export default function Docs() {
               )}
             </li>
           </ul>
+        </section>
+
+        {/* ── Season 0 ── */}
+        <section className="docs-section" id="season0">
+          <h2>{t("Season 0: Curve Camp", "Season 0: Trại curve")}</h2>
+          <p>
+            {t(
+              "Optional points quests on Sapphire: check-in, referral, curve trades. Points are discretionary scores — not cash, not APR, not an investment return. Testnet activity does not auto-carry to mainnet.",
+              "Quest điểm tùy chọn trên Sapphire: check-in, referral, trade curve. Points là điểm tùy nghi — không phải tiền, không APR, không lợi nhuận đầu tư. Testnet không tự mang sang mainnet.",
+            )}
+          </p>
+          <p>
+            <Link to="/rewards">{t("Open Rewards / Season 0 →", "Mở Rewards / Season 0 →")}</Link>
+          </p>
         </section>
 
         {/* ── FAQ ── */}

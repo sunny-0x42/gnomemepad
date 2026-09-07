@@ -2663,6 +2663,177 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
 }
 
 /**
+ * Season 0 overlay: lifetime pointsv2 + best-effort quest heuristics from activity.
+ * Full historical OnTrade season filter needs a richer indexer later (partial: true).
+ */
+async function buildSeason0(RPC, POINTS, padSources, address, opts = {}) {
+  const networkId = opts.networkId || "sapphire";
+  const season = {
+    id: "s0",
+    name: "Season 0: Curve Camp",
+    nameVi: "Season 0: Trại curve",
+    network: networkId,
+    startHeight: null,
+    endHeight: null,
+  };
+
+  let params = {};
+  let lifetimePts = 0;
+  let referrer = "";
+  let board = [];
+  try {
+    const paramsRaw = await qeval(RPC, POINTS, `${POINTS}.ParamsInfo()`);
+    const pp = String(paramsRaw).split("|");
+    const isV2 = String(pp[pp.length - 1] || "").trim() === "v2" || pp.length >= 12;
+    params = {
+      referrerBonus: Number(pp[0]) || 50,
+      refereeBonus: Number(pp[1]) || 25,
+      checkIn: Number(pp[2]) || 5,
+      checkInInterval: Number(pp[3]) || 100,
+      version: isV2 ? 2 : 1,
+      createBonus: isV2 ? Number(pp[4]) || 0 : 0,
+      buyBase: isV2 ? Number(pp[5]) || 0 : 0,
+      sellBase: isV2 ? Number(pp[6]) || 0 : 0,
+      ptsPerGnotBuy: isV2 ? Number(pp[7]) || 0 : 0,
+      ptsPerGnotSell: isV2 ? Number(pp[8]) || 0 : 0,
+      maxPerHeight: isV2 ? Number(pp[9]) || 0 : 0,
+    };
+    const lbRaw = await qeval(RPC, POINTS, `${POINTS}.Leaderboard(25)`);
+    board = parseLeaderboard(lbRaw).map((row) => ({
+      address: row.address,
+      seasonScore: row.points,
+      points: row.points,
+    }));
+    if (address) {
+      lifetimePts =
+        Number(await qeval(RPC, POINTS, `${POINTS}.GetPoints(${JSON.stringify(address)})`)) ||
+        0;
+      referrer = String(
+        await qeval(RPC, POINTS, `${POINTS}.GetReferrer(${JSON.stringify(address)})`),
+      )
+        .replace(/^"|"$/g, "")
+        .trim();
+    }
+  } catch (e) {
+    return {
+      season,
+      partial: true,
+      error: String(e.message || e),
+      params,
+      me: address
+        ? {
+            address,
+            lifetimePts: 0,
+            seasonScore: 0,
+            rank: 0,
+            streak: 0,
+            uniqueMarkets: 0,
+            quests: {},
+            badges: [],
+          }
+        : null,
+      board: [],
+      quests: {},
+    };
+  }
+
+  // Best-effort: portfolio holdings ≈ markets user bought (still holds).
+  // Full buy/sell history needs trader-tagged activity indexer (partial until then).
+  let uniqueMarkets = 0;
+  let hasBuy = false;
+  let hasSell = false;
+  let buyVolumeGnot = 0;
+  let partial = true;
+  if (address) {
+    try {
+      const SIGNER = String(opts.signerAddr || "");
+      const port = await getPortfolio(RPC, padSources, SIGNER, address);
+      const holds = Array.isArray(port?.holdings) ? port.holdings : [];
+      uniqueMarkets = holds.length;
+      hasBuy = holds.length > 0;
+      buyVolumeGnot = holds.reduce((s, h) => s + (Number(h.valueGnotApprox) || 0), 0);
+      // Sell quest: cannot infer reliably without trade log — leave false unless pts suggest activity
+      hasSell = false;
+      partial = true; // honest: no full trade-log season filter yet
+    } catch {
+      partial = true;
+    }
+  }
+
+  const quests = {
+    wallet_wake: { current: address ? 1 : 0, target: 1, done: !!address },
+    first_dip: { current: hasBuy ? 1 : 0, target: 1, done: hasBuy },
+    two_way: { current: hasSell ? 1 : 0, target: 1, done: hasSell },
+    first_5_markets: {
+      current: Math.min(5, uniqueMarkets),
+      target: 5,
+      done: uniqueMarkets >= 5,
+    },
+    check_in: { current: lifetimePts > 0 ? 1 : 0, target: 1, done: false },
+    streak_7: { current: 0, target: 7, done: false },
+    set_referrer: {
+      current: referrer ? 1 : 0,
+      target: 1,
+      done: !!referrer,
+    },
+    curve_native: {
+      current: Math.min(10, Math.floor(buyVolumeGnot)),
+      target: 10,
+      done: buyVolumeGnot >= 10,
+    },
+    loop_scribe: { current: 0, target: 1, done: false },
+    adena_clip: { current: 0, target: 1, done: false },
+    lock_artist: { current: 0, target: 1, done: false },
+  };
+
+  // Season score MVP ≈ lifetime pts + quest bonuses (until height-filtered indexer ships)
+  let seasonScore = lifetimePts;
+  if (quests.first_5_markets.done) seasonScore += 100;
+  if (quests.curve_native.done) seasonScore += 50;
+  if (quests.streak_7.done) seasonScore += 40;
+
+  let rank = 0;
+  if (address && board.length) {
+    const idx = board.findIndex(
+      (r) => String(r.address || "").toLowerCase() === address.toLowerCase(),
+    );
+    if (idx >= 0) rank = idx + 1;
+  }
+
+  const badges = [];
+  if (address) badges.push("curve_camper");
+  if (quests.wallet_wake.done) badges.push("adena_awake");
+  if (quests.first_dip.done) badges.push("curve_sip");
+  if (quests.two_way.done) badges.push("both_sides");
+  if (quests.first_5_markets.done) badges.push("market_hopper");
+  if (quests.set_referrer.done) badges.push("scout");
+  if (rank > 0 && rank <= 20) badges.push("s0_top20");
+
+  // Prefer seasonScore on board rows when we only have lifetime — already mapped
+  return {
+    season,
+    partial,
+    params,
+    pointsPkg: POINTS,
+    me: address
+      ? {
+          address,
+          lifetimePts,
+          seasonScore,
+          rank,
+          streak: 0,
+          uniqueMarkets,
+          referrer: referrer || null,
+          quests,
+          badges,
+        }
+      : null,
+    board,
+    quests,
+  };
+}
+
+/**
  * Handle /api/* routes (path without host).
  * @param {string} method
  * @param {string} pathname e.g. /api/markets
@@ -3401,6 +3572,32 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           error: String(e.message || e),
           leaderboard: [],
           points: 0,
+        });
+      }
+    }
+
+    // Season 0: Curve Camp — overlay on pointsv2 (best-effort quest progress)
+    if (method === "GET" && p === "/api/season0") {
+      const address = (q.get("address") || "").trim();
+      try {
+        const out = await buildSeason0(RPC, POINTS, padSources, address, {
+          networkId,
+        });
+        return json(200, out, { maxAge: 15 });
+      } catch (e) {
+        return json(200, {
+          season: {
+            id: "s0",
+            name: "Season 0: Curve Camp",
+            network: networkId,
+            startHeight: null,
+            endHeight: null,
+          },
+          partial: true,
+          error: String(e.message || e),
+          me: null,
+          board: [],
+          quests: {},
         });
       }
     }
