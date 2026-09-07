@@ -11,11 +11,11 @@ export const SEASON0 = {
   taglineEn: "Learn the loop. Leave the hype.",
   taglineVi: "Học vòng đời. Bỏ hype.",
   network: "sapphire",
-  /** Set when ops enables points; null = “starts when points go live”. */
+  /** Set when ops announces a height window; null = live but window TBA. */
   startHeight: null,
   endHeight: null,
-  startLabelEn: "Starts when points are enabled on Sapphire",
-  startLabelVi: "Bắt đầu khi bật points trên Sapphire",
+  startLabelEn: "Live on Sapphire (testnet) · height window TBA",
+  startLabelVi: "Đang chạy trên Sapphire (testnet) · khung height TBA",
 };
 
 /** On-chain pointsv2 defaults (overridden by API params when present). */
@@ -30,19 +30,19 @@ export const POINT_TABLE = [
   },
   {
     id: "referrer",
-    en: "Referrer bonus",
-    vi: "Thưởng người giới thiệu",
+    en: "Referrer bonus pts",
+    vi: "Điểm bonus referrer",
     pts: "+50",
-    noteEn: "Once per referee",
-    noteVi: "Một lần / referee",
+    noteEn: "Once per referee · pts only",
+    noteVi: "Một lần / referee · chỉ điểm",
   },
   {
     id: "referee",
-    en: "Referee bonus",
-    vi: "Thưởng người được giới thiệu",
+    en: "Referee bonus pts",
+    vi: "Điểm bonus referee",
     pts: "+25",
-    noteEn: "When you set a referrer",
-    noteVi: "Khi set referrer",
+    noteEn: "When you set a referrer · pts only",
+    noteVi: "Khi set referrer · chỉ điểm",
   },
   {
     id: "create",
@@ -56,17 +56,17 @@ export const POINT_TABLE = [
     id: "buy",
     en: "Curve Buy",
     vi: "Buy trên curve",
-    pts: "+2 + 10×GNOT",
-    noteEn: "≤200 pts / height",
-    noteVi: "≤200 pts / height",
+    pts: "+2 pts + 10×GNOT vol",
+    noteEn: "Pts only — not a GNOT payout · ≤200 pts / height",
+    noteVi: "Chỉ điểm — không trả GNOT · ≤200 pts / height",
   },
   {
     id: "sell",
     en: "Curve Sell",
     vi: "Sell trên curve",
-    pts: "+1 + 3×GNOT",
-    noteEn: "Buy weighs more than sell",
-    noteVi: "Buy nặng điểm hơn Sell",
+    pts: "+1 pts + 3×GNOT vol",
+    noteEn: "Pts only · Buy weighs more than Sell",
+    noteVi: "Chỉ điểm · Buy nặng điểm hơn Sell",
   },
 ];
 
@@ -307,15 +307,17 @@ export function rulesBlocks(vi) {
         title: "Cách chấm điểm",
         items: [
           "Điểm on-chain từ pointsv2: CheckIn, Referral, Create, Buy/Sell trên bonding curve (pad).",
-          "Season Score ưu tiên trade trên curve. ExactIn Gnoswap sau list = 0 điểm Season.",
+          "BXH Season MVP ≈ lifetime pointsv2 cho đến khi có cửa sổ height + indexer.",
+          "ExactIn Gnoswap sau list = 0 điểm Season. Internal Swap* sau graduate vẫn có thể mint points on-chain (pad).",
           "Anti-spam: tối đa 200 trade/create pts mỗi địa chỉ mỗi height. Buy nặng điểm hơn Sell.",
-          "Quest bonus (unique markets, streak…) tính vào Season Score khi API xác nhận tiến độ.",
+          "Quest trade/streak hiện partial — chưa verify từ trade log; bonus quest chưa cộng vào BXH.",
         ],
       },
       networks: {
         title: "Testnet vs Mainnet",
         items: [
-          "Hoạt động trên Sapphire testnet không tự động mang sang mainnet.",
+          "Season 0 chỉ trên Sapphire testnet (không Pearl).",
+          "Hoạt động testnet không tự động mang sang mainnet.",
           "Token / số dư testnet không có giá trị mainnet.",
           "Snapshot hoặc quy đổi sau Season (nếu có) sẽ công bố riêng — có thể bằng 0.",
         ],
@@ -356,14 +358,16 @@ export function rulesBlocks(vi) {
       title: "How scoring works",
       items: [
         "On-chain pointsv2 awards: CheckIn, Referral, Create, Buy/Sell on the bonding curve (pad).",
-        "Season Score prioritizes curve trades. Post-list Gnoswap ExactIn earns 0 Season points.",
+        "Season board MVP ≈ lifetime pointsv2 until a height window + indexer ships.",
+        "Post-list Gnoswap ExactIn earns 0 Season points. Internal post-grad Swap* may still mint on-chain pts.",
         "Anti-spam: max 200 trade/create pts per address per height. Buys weigh more than sells.",
-        "Quest bonuses (unique markets, streak, …) count toward Season Score when progress is verified.",
+        "Trade/streak quests are partial (no trade log yet); quest bonuses are not added to the board.",
       ],
     },
     networks: {
       title: "Testnet vs Mainnet",
       items: [
+        "Season 0 is Sapphire testnet only (not Pearl).",
         "Sapphire testnet activity does not automatically carry to mainnet.",
         "Testnet tokens / balances have no mainnet value.",
         "Any post-season snapshot or conversion (if any) will be announced separately — it may be zero.",

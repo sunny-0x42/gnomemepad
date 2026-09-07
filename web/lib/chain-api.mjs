@@ -1856,6 +1856,7 @@ async function getCreatorDashboard(RPC, sources, SIGNER_ADDR, address) {
 
 function json(statusCode, body, opts = {}) {
   const maxAge = Number(opts.maxAge) || 0;
+  const scope = opts.private ? "private" : "public";
   return {
     statusCode,
     headers: {
@@ -1865,7 +1866,7 @@ function json(statusCode, body, opts = {}) {
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       "Cache-Control":
         maxAge > 0
-          ? `public, max-age=${maxAge}, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 2}`
+          ? `${scope}, max-age=${maxAge}, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 2}`
           : "no-store",
       ...(opts.headers || {}),
     },
@@ -2662,57 +2663,108 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
   };
 }
 
+const G1_ADDR_RE = /^g1[a-z0-9]{38,}$/i;
+
 /**
- * Season 0 overlay: lifetime pointsv2 + best-effort quest heuristics from activity.
- * Full historical OnTrade season filter needs a richer indexer later (partial: true).
+ * Season 0 overlay: lifetime pointsv2 board + honest quest stubs.
+ * Avoids full getPortfolio (Netlify timeout). Trade/streak quests stay
+ * undone until a trader-tagged indexer exists (partial: true).
  */
 async function buildSeason0(RPC, POINTS, padSources, address, opts = {}) {
   const networkId = opts.networkId || "sapphire";
+  const seasonEnabled = networkId === "sapphire";
   const season = {
     id: "s0",
     name: "Season 0: Curve Camp",
     nameVi: "Season 0: Trại curve",
-    network: networkId,
+    network: "sapphire",
+    enabled: seasonEnabled,
     startHeight: null,
     endHeight: null,
   };
+
+  const addrOk = address && G1_ADDR_RE.test(address) ? address : "";
+  if (address && !addrOk) {
+    return {
+      season,
+      partial: true,
+      error: "invalid address",
+      params: {},
+      pointsPkg: POINTS,
+      me: null,
+      board: [],
+      quests: {},
+      partialReasons: ["invalid_address"],
+    };
+  }
+
+  if (!seasonEnabled) {
+    return {
+      season,
+      partial: true,
+      params: {},
+      pointsPkg: POINTS,
+      me: null,
+      board: [],
+      quests: {},
+      partialReasons: ["sapphire_only"],
+      message: "Season 0 runs on Sapphire only",
+    };
+  }
 
   let params = {};
   let lifetimePts = 0;
   let referrer = "";
   let board = [];
+  const cacheKey = `season0:board:${networkId}`;
   try {
-    const paramsRaw = await qeval(RPC, POINTS, `${POINTS}.ParamsInfo()`);
-    const pp = String(paramsRaw).split("|");
-    const isV2 = String(pp[pp.length - 1] || "").trim() === "v2" || pp.length >= 12;
-    params = {
-      referrerBonus: Number(pp[0]) || 50,
-      refereeBonus: Number(pp[1]) || 25,
-      checkIn: Number(pp[2]) || 5,
-      checkInInterval: Number(pp[3]) || 100,
-      version: isV2 ? 2 : 1,
-      createBonus: isV2 ? Number(pp[4]) || 0 : 0,
-      buyBase: isV2 ? Number(pp[5]) || 0 : 0,
-      sellBase: isV2 ? Number(pp[6]) || 0 : 0,
-      ptsPerGnotBuy: isV2 ? Number(pp[7]) || 0 : 0,
-      ptsPerGnotSell: isV2 ? Number(pp[8]) || 0 : 0,
-      maxPerHeight: isV2 ? Number(pp[9]) || 0 : 0,
-    };
-    const lbRaw = await qeval(RPC, POINTS, `${POINTS}.Leaderboard(25)`);
-    board = parseLeaderboard(lbRaw).map((row) => ({
-      address: row.address,
-      seasonScore: row.points,
-      points: row.points,
-    }));
-    if (address) {
-      lifetimePts =
-        Number(await qeval(RPC, POINTS, `${POINTS}.GetPoints(${JSON.stringify(address)})`)) ||
-        0;
-      referrer = String(
-        await qeval(RPC, POINTS, `${POINTS}.GetReferrer(${JSON.stringify(address)})`),
-      )
-        .replace(/^"|"$/g, "")
-        .trim();
+    const cached = cacheGet(cacheKey);
+    if (cached?.board && cached?.params) {
+      board = cached.board;
+      params = cached.params;
+    } else {
+      const paramsRaw = await qeval(RPC, POINTS, `${POINTS}.ParamsInfo()`);
+      const pp = String(paramsRaw).split("|");
+      const isV2 = String(pp[pp.length - 1] || "").trim() === "v2" || pp.length >= 12;
+      params = {
+        referrerBonus: Number(pp[0]) || 50,
+        refereeBonus: Number(pp[1]) || 25,
+        checkIn: Number(pp[2]) || 5,
+        checkInInterval: Number(pp[3]) || 100,
+        version: isV2 ? 2 : 1,
+        createBonus: isV2 ? Number(pp[4]) || 0 : 0,
+        buyBase: isV2 ? Number(pp[5]) || 0 : 0,
+        sellBase: isV2 ? Number(pp[6]) || 0 : 0,
+        ptsPerGnotBuy: isV2 ? Number(pp[7]) || 0 : 0,
+        ptsPerGnotSell: isV2 ? Number(pp[8]) || 0 : 0,
+        maxPerHeight: isV2 ? Number(pp[9]) || 0 : 0,
+      };
+      const lbRaw = await qeval(RPC, POINTS, `${POINTS}.Leaderboard(25)`);
+      board = parseLeaderboard(lbRaw).map((row) => ({
+        address: row.address,
+        // MVP board = lifetime pointsv2 (height window TBA)
+        seasonScore: row.points,
+        points: row.points,
+      }));
+      cacheSet(cacheKey, { board, params }, 20_000);
+    }
+    if (addrOk) {
+      const meKey = `season0:me:${networkId}:${addrOk.toLowerCase()}`;
+      const meHit = cacheGet(meKey);
+      if (meHit && Number.isFinite(meHit.lifetimePts)) {
+        lifetimePts = meHit.lifetimePts;
+        referrer = meHit.referrer || "";
+      } else {
+        lifetimePts =
+          Number(await qeval(RPC, POINTS, `${POINTS}.GetPoints(${JSON.stringify(addrOk)})`)) ||
+          0;
+        referrer = String(
+          await qeval(RPC, POINTS, `${POINTS}.GetReferrer(${JSON.stringify(addrOk)})`),
+        )
+          .replace(/^"|"$/g, "")
+          .trim();
+        cacheSet(meKey, { lifetimePts, referrer }, 15_000);
+      }
     }
   } catch (e) {
     return {
@@ -2720,9 +2772,10 @@ async function buildSeason0(RPC, POINTS, padSources, address, opts = {}) {
       partial: true,
       error: String(e.message || e),
       params,
-      me: address
+      pointsPkg: POINTS,
+      me: addrOk
         ? {
-            address,
+            address: addrOk,
             lifetimePts: 0,
             seasonScore: 0,
             rank: 0,
@@ -2734,95 +2787,68 @@ async function buildSeason0(RPC, POINTS, padSources, address, opts = {}) {
         : null,
       board: [],
       quests: {},
+      partialReasons: ["points_rpc_error"],
     };
   }
 
-  // Best-effort: portfolio holdings ≈ markets user bought (still holds).
-  // Full buy/sell history needs trader-tagged activity indexer (partial until then).
-  let uniqueMarkets = 0;
-  let hasBuy = false;
-  let hasSell = false;
-  let buyVolumeGnot = 0;
-  let partial = true;
-  if (address) {
-    try {
-      const SIGNER = String(opts.signerAddr || "");
-      const port = await getPortfolio(RPC, padSources, SIGNER, address);
-      const holds = Array.isArray(port?.holdings) ? port.holdings : [];
-      uniqueMarkets = holds.length;
-      hasBuy = holds.length > 0;
-      buyVolumeGnot = holds.reduce((s, h) => s + (Number(h.valueGnotApprox) || 0), 0);
-      // Sell quest: cannot infer reliably without trade log — leave false unless pts suggest activity
-      hasSell = false;
-      partial = true; // honest: no full trade-log season filter yet
-    } catch {
-      partial = true;
-    }
-  }
+  // Honest stubs: no portfolio scan (was 16–22s / Netlify timeout risk).
+  const partial = true;
+  const partialReasons = [
+    "no_trade_log_indexer",
+    "lifetime_board_until_height_window",
+    "trade_quests_unverified",
+  ];
 
   const quests = {
-    wallet_wake: { current: address ? 1 : 0, target: 1, done: !!address },
-    first_dip: { current: hasBuy ? 1 : 0, target: 1, done: hasBuy },
-    two_way: { current: hasSell ? 1 : 0, target: 1, done: hasSell },
-    first_5_markets: {
-      current: Math.min(5, uniqueMarkets),
-      target: 5,
-      done: uniqueMarkets >= 5,
-    },
-    check_in: { current: lifetimePts > 0 ? 1 : 0, target: 1, done: false },
+    wallet_wake: { current: addrOk ? 1 : 0, target: 1, done: !!addrOk },
+    first_dip: { current: 0, target: 1, done: false },
+    two_way: { current: 0, target: 1, done: false },
+    first_5_markets: { current: 0, target: 5, done: false },
+    // Do not infer check-in from lifetime pts (false "Done" in UI).
+    check_in: { current: 0, target: 1, done: false },
     streak_7: { current: 0, target: 7, done: false },
     set_referrer: {
       current: referrer ? 1 : 0,
       target: 1,
       done: !!referrer,
     },
-    curve_native: {
-      current: Math.min(10, Math.floor(buyVolumeGnot)),
-      target: 10,
-      done: buyVolumeGnot >= 10,
-    },
+    curve_native: { current: 0, target: 10, done: false },
     loop_scribe: { current: 0, target: 1, done: false },
     adena_clip: { current: 0, target: 1, done: false },
     lock_artist: { current: 0, target: 1, done: false },
   };
 
-  // Season score MVP ≈ lifetime pts + quest bonuses (until height-filtered indexer ships)
-  let seasonScore = lifetimePts;
-  if (quests.first_5_markets.done) seasonScore += 100;
-  if (quests.curve_native.done) seasonScore += 50;
-  if (quests.streak_7.done) seasonScore += 40;
+  // Keep me.seasonScore === board metric (lifetime) until verified quest bonuses ship.
+  const seasonScore = lifetimePts;
 
   let rank = 0;
-  if (address && board.length) {
+  if (addrOk && board.length) {
     const idx = board.findIndex(
-      (r) => String(r.address || "").toLowerCase() === address.toLowerCase(),
+      (r) => String(r.address || "").toLowerCase() === addrOk.toLowerCase(),
     );
     if (idx >= 0) rank = idx + 1;
   }
 
   const badges = [];
-  if (address) badges.push("curve_camper");
+  if (addrOk) badges.push("curve_camper");
   if (quests.wallet_wake.done) badges.push("adena_awake");
-  if (quests.first_dip.done) badges.push("curve_sip");
-  if (quests.two_way.done) badges.push("both_sides");
-  if (quests.first_5_markets.done) badges.push("market_hopper");
   if (quests.set_referrer.done) badges.push("scout");
   if (rank > 0 && rank <= 20) badges.push("s0_top20");
 
-  // Prefer seasonScore on board rows when we only have lifetime — already mapped
   return {
     season,
     partial,
+    partialReasons,
     params,
     pointsPkg: POINTS,
-    me: address
+    me: addrOk
       ? {
-          address,
+          address: addrOk,
           lifetimePts,
           seasonScore,
           rank,
           streak: 0,
-          uniqueMarkets,
+          uniqueMarkets: 0,
           referrer: referrer || null,
           quests,
           badges,
@@ -3576,20 +3602,22 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       }
     }
 
-    // Season 0: Curve Camp — overlay on pointsv2 (best-effort quest progress)
+    // Season 0: Curve Camp — overlay on pointsv2 (honest stubs; no portfolio scan)
     if (method === "GET" && p === "/api/season0") {
       const address = (q.get("address") || "").trim();
       try {
         const out = await buildSeason0(RPC, POINTS, padSources, address, {
           networkId,
         });
-        return json(200, out, { maxAge: 15 });
+        // Board is public/short TTL; per-address responses stay private.
+        return json(200, out, address ? { maxAge: 10, private: true } : { maxAge: 15 });
       } catch (e) {
         return json(200, {
           season: {
             id: "s0",
             name: "Season 0: Curve Camp",
-            network: networkId,
+            network: "sapphire",
+            enabled: networkId === "sapphire",
             startHeight: null,
             endHeight: null,
           },

@@ -14,6 +14,9 @@ Discretionary points / quests on gnomi.fun. **Not cash. Not APR. Not an investme
 2. Pad `SetPointsEnabled(true)`
 3. Set `startHeight` / `endHeight` in `season0.js` + API season object when announcing
 4. Do **not** treat testnet Points as mainnet entitlement
+5. Keep only the active Season pad allowed: `SetPointsEnabled(false)` on legacy pads, then `RevokePad` (never revoke while points still enabled — trades would panic)
+
+**Live (post-enable cleanup):** Sapphire allowlist = `padv22` only; legacy padv6/7 points disabled + revoked.
 
 ## Scoring (summary)
 

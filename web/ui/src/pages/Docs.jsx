@@ -752,12 +752,12 @@ export default function Docs() {
           <h2>{t("Season 0: Curve Camp", "Season 0: Trại curve")}</h2>
           <p>
             {t(
-              "Optional points quests on Sapphire: check-in, referral, curve trades. Points are discretionary scores — not cash, not APR, not an investment return. Testnet activity does not auto-carry to mainnet.",
-              "Quest điểm tùy chọn trên Sapphire: check-in, referral, trade curve. Points là điểm tùy nghi — không phải tiền, không APR, không lợi nhuận đầu tư. Testnet không tự mang sang mainnet.",
+              "Optional points on Sapphire only: check-in, referral, curve trades. Points are discretionary scores — not cash, not APR, not an investment return. Testnet activity does not auto-carry to mainnet. Season board MVP mirrors lifetime pointsv2 until a height window + indexer ships; quest progress may be partial. Post-list Gnoswap ExactIn = 0 Season points.",
+              "Điểm tùy chọn chỉ trên Sapphire: check-in, referral, trade curve. Points là điểm tùy nghi — không phải tiền, không APR, không lợi nhuận đầu tư. Testnet không tự mang sang mainnet. BXH Season MVP trùng lifetime pointsv2 cho đến khi có cửa sổ height + indexer; tiến độ quest có thể partial. ExactIn Gnoswap sau list = 0 điểm Season.",
             )}
           </p>
           <p>
-            <Link to="/rewards">{t("Open Rewards / Season 0 →", "Mở Rewards / Season 0 →")}</Link>
+            <Link to="/rewards">{t("Open Season 0 →", "Mở Season 0 →")}</Link>
           </p>
         </section>
 

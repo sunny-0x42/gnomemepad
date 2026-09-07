@@ -20,8 +20,14 @@ function questStatus(quest, ctx) {
   const p = ctx.progress?.[quest.id];
   const current = Number(p?.current ?? 0) || 0;
   const target = Number(p?.target ?? quest.target ?? 1) || 1;
-  const done = !!(p?.done || current >= target);
-  if (done) return { state: "done", current: target, done: true, target };
+  // Prefer explicit API `done` — do not treat current>=target as Done for stubs.
+  if (p && typeof p.done === "boolean") {
+    if (p.done) return { state: "done", current: Math.max(current, target), done: true, target };
+    if (quest.action === "connect" && ctx.connected) {
+      return { state: "done", current: 1, done: true, target: 1 };
+    }
+    return { state: "active", current, done: false, target };
+  }
   if (quest.action === "connect" && ctx.connected) {
     return { state: "done", current: 1, done: true, target: 1 };
   }
@@ -60,15 +66,32 @@ export default function Rewards() {
   async function load() {
     setLoading(true);
     try {
+      // Season 0 is Sapphire-only; still fetch season0 (returns enabled:false off-Sapphire).
       const addrQ = wallet?.address
         ? `?address=${encodeURIComponent(wallet.address)}`
         : "";
-      const [p, s] = await Promise.all([
-        api(`/api/points${addrQ}`).catch(() => null),
-        api(`/api/season0${addrQ}`).catch(() => null),
-      ]);
-      setPointsData(p);
+      // Prefer /api/season0 (now lightweight). /api/points is fallback for referrer/params.
+      const s = await api(`/api/season0${addrQ}`).catch(() => null);
       setSeasonData(s);
+      if (s?.params && s?.me != null) {
+        setPointsData({
+          points: s.me.lifetimePts,
+          params: s.params,
+          pointsPkg: s.pointsPkg,
+          referrer: s.me.referrer,
+          leaderboard: s.board,
+        });
+      } else if (s?.params) {
+        setPointsData({
+          points: 0,
+          params: s.params,
+          pointsPkg: s.pointsPkg,
+          leaderboard: s.board,
+        });
+      } else {
+        const p = await api(`/api/points${addrQ}`).catch(() => null);
+        setPointsData(p);
+      }
     } catch {
       setPointsData(null);
       setSeasonData(null);
@@ -81,6 +104,10 @@ export default function Rewards() {
     load();
   }, [wallet, networkId]);
 
+  const sapphireOnly = networkId && networkId !== "sapphire";
+  const seasonEnabled = seasonData?.season?.enabled !== false && !sapphireOnly;
+  const seasonError = seasonData?.error || null;
+
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -92,8 +119,11 @@ export default function Rewards() {
   }, []);
 
   const progress = seasonData?.me?.quests || seasonData?.quests || {};
-  const seasonScore = Number(seasonData?.me?.seasonScore ?? pointsData?.points ?? 0) || 0;
-  const lifetimePts = Number(pointsData?.points ?? 0) || 0;
+  const lifetimePts =
+    Number(seasonData?.me?.lifetimePts ?? pointsData?.points ?? 0) || 0;
+  // Board + "Season score" share the same metric (lifetime MVP).
+  const seasonScore =
+    Number(seasonData?.me?.seasonScore ?? lifetimePts) || 0;
   const rank = Number(seasonData?.me?.rank ?? 0) || 0;
   const uniqueMarkets = Number(seasonData?.me?.uniqueMarkets ?? 0) || 0;
   const streak = useMemo(() => {
@@ -133,6 +163,20 @@ export default function Rewards() {
       return `h ${s.startHeight} → ${s.endHeight}`;
     }
     return vi ? SEASON0.startLabelVi : SEASON0.startLabelEn;
+  }, [seasonData, vi]);
+
+  const partialHint = useMemo(() => {
+    const reasons = seasonData?.partialReasons;
+    if (Array.isArray(reasons) && reasons.includes("no_trade_log_indexer")) {
+      return t(
+        "No trade-log indexer yet — trade/streak quests stay unverified. Board ≈ lifetime pointsv2.",
+        "Chưa có trade-log indexer — quest trade/streak chưa xác minh. BXH ≈ lifetime pointsv2.",
+      );
+    }
+    return t(
+      "Progress is best-effort until height window + indexer.",
+      "Tiến độ ước lượng cho đến khi có cửa sổ height + indexer.",
+    );
   }, [seasonData, vi]);
 
   async function checkIn() {
@@ -244,12 +288,40 @@ export default function Rewards() {
           <strong>S0</strong> Curve Camp
         </span>
         <span className="season0-chip">{windowLabel}</span>
+        <span className="season0-chip">{t("Sapphire testnet", "Sapphire testnet")}</span>
         {partial && (
-          <span className="season0-chip season0-chip-warn">
+          <span className="season0-chip season0-chip-warn" title={partialHint}>
             {t("Progress partial", "Tiến độ một phần")}
           </span>
         )}
       </div>
+
+      {sapphireOnly && (
+        <aside className="docs-callout docs-callout-warn" style={{ marginBottom: "1rem" }}>
+          <strong>{t("Sapphire only", "Chỉ Sapphire")}</strong>
+          <p style={{ margin: "0.35rem 0 0" }}>
+            {t(
+              "Season 0 Curve Camp runs on Sapphire. Switch network in the header to earn on-chain points for this board.",
+              "Season 0 Trại curve chạy trên Sapphire. Đổi network trên header để kiếm điểm on-chain cho BXH này.",
+            )}
+          </p>
+        </aside>
+      )}
+
+      {seasonError && (
+        <aside className="docs-callout docs-callout-warn" style={{ marginBottom: "1rem" }}>
+          <strong>{t("Could not load Season 0", "Không tải được Season 0")}</strong>
+          <p style={{ margin: "0.35rem 0 0" }} className="mono faint">
+            {String(seasonError)}
+          </p>
+        </aside>
+      )}
+
+      {partial && seasonEnabled && (
+        <p className="muted season0-hint" style={{ marginTop: 0 }}>
+          {partialHint}
+        </p>
+      )}
 
       <nav className="season0-toc" aria-label={t("Sections", "Mục")}>
         <a href="#s0-rules">{t("Rules", "Luật")}</a>
@@ -265,7 +337,7 @@ export default function Rewards() {
       <section className="season0-section" id="s0-rules">
         <h2>{t("Season rules", "Luật Season")}</h2>
         <aside className="docs-callout docs-callout-warn">
-          <strong>{t("Before you grind", "Trước khi farm")}</strong>
+          <strong>{t("Before you play", "Trước khi chơi")}</strong>
           <p style={{ margin: "0.35rem 0 0" }}>
             {t(
               "Points are discretionary scores — not cash, not APR, not an investment return. Testnet ≠ mainnet.",
@@ -353,7 +425,7 @@ export default function Rewards() {
               <Stat
                 label={t("Season score", "Season score")}
                 value={fmtNum(seasonScore)}
-                hint={partial ? t("best-effort", "ước lượng") : shortAddr(wallet.address)}
+                hint={t("= lifetime pts (MVP)", "= lifetime pts (MVP)")}
               />
               <Stat
                 label={t("Lifetime", "Lifetime")}
@@ -363,12 +435,12 @@ export default function Rewards() {
               <Stat
                 label={t("Rank", "Hạng")}
                 value={rank > 0 ? `#${rank}` : "—"}
-                hint={t("season board", "BXH season")}
+                hint={t("lifetime board", "BXH lifetime")}
               />
               <Stat
                 label={t("Unique markets", "Market khác nhau")}
                 value={String(uniqueMarkets)}
-                hint={t("Buys ≥ 0.5 GNOT", "Buy ≥ 0.5 GNOT")}
+                hint={t("needs trade indexer", "cần trade indexer")}
               />
             </div>
 
@@ -392,7 +464,12 @@ export default function Rewards() {
                     `+${params.checkIn ?? 5} pts · khoảng mỗi ${params.checkInInterval ?? 100} height.`,
                   )}
                 </p>
-                <button type="button" className="btn primary" onClick={checkIn} disabled={!pointsPkg}>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={checkIn}
+                  disabled={!pointsPkg || sapphireOnly}
+                >
                   {t("Check-in", "Check-in")}
                 </button>
               </div>
@@ -401,8 +478,8 @@ export default function Rewards() {
                 <h3 className="panel-title">{t("Referral", "Giới thiệu")}</h3>
                 <p className="muted season0-hint">
                   {t(
-                    `Share your link. Friend sets you as referrer (+${params.referrerBonus ?? 50} you / +${params.refereeBonus ?? 25} them).`,
-                    `Chia sẻ link. Bạn set bạn làm referrer (+${params.referrerBonus ?? 50} bạn / +${params.refereeBonus ?? 25} họ).`,
+                    `Share your link. A friend sets you as referrer (+${params.referrerBonus ?? 50} pts you / +${params.refereeBonus ?? 25} pts them).`,
+                    `Chia sẻ link. Bạn bè gắn bạn làm referrer (+${params.referrerBonus ?? 50} pts bạn / +${params.refereeBonus ?? 25} pts họ).`,
                   )}
                 </p>
                 <div className="referral-box mono">{referralLink || shortAddr(wallet.address)}</div>
@@ -420,7 +497,12 @@ export default function Rewards() {
                     className="mono"
                   />
                 </label>
-                <button type="button" className="btn sm" onClick={setReferrer} disabled={!pointsPkg}>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={setReferrer}
+                  disabled={!pointsPkg || sapphireOnly}
+                >
                   {t("Set referrer", "Gắn referrer")}
                 </button>
                 {pointsData?.referrer && (
@@ -452,7 +534,12 @@ export default function Rewards() {
                 <div className="season0-quest-head">
                   <h3>{title}</h3>
                   {quest.bonusPts ? (
-                    <span className="season0-quest-pts mono">+{quest.bonusPts}</span>
+                    <span
+                      className="season0-quest-pts mono"
+                      title={t("when verified", "khi xác nhận")}
+                    >
+                      +{quest.bonusPts}
+                    </span>
                   ) : null}
                 </div>
                 <p className="muted season0-hint">{desc}</p>
@@ -498,6 +585,12 @@ export default function Rewards() {
             {t("All-time points", "Điểm all-time")} →
           </Link>
         </div>
+        <p className="muted season0-hint">
+          {t(
+            "MVP board mirrors lifetime pointsv2 until a height window is announced (no cash / no prize).",
+            "BXH MVP trùng lifetime pointsv2 cho đến khi công bố cửa sổ height (không tiền / không giải).",
+          )}
+        </p>
         <div className="panel">
           {(board || []).slice(0, 25).map((row, i) => {
             const addr = row.address || "";
@@ -509,7 +602,9 @@ export default function Rewards() {
                 <span className="lb-left">
                   <span className="faint lb-rank">{i + 1}</span>
                   <span className="mono">{shortAddr(addr)}</span>
-                  {you ? <span className="season0-you-pill">you</span> : null}
+                  {you ? (
+                    <span className="season0-you-pill">{t("you", "bạn")}</span>
+                  ) : null}
                 </span>
                 <strong className="lb-pts">{fmtNum(pts)}</strong>
               </div>
@@ -517,7 +612,9 @@ export default function Rewards() {
           })}
           {!board?.length && !loading && (
             <div className="muted" style={{ padding: "0.5rem 0" }}>
-              {t("No entries yet — be the first camper.", "Chưa có ai — hãy là người đầu.")}
+              {seasonError
+                ? t("Board unavailable — try Refresh.", "Không tải BXH — thử Làm mới.")
+                : t("No entries yet — be the first camper.", "Chưa có ai — hãy là người đầu.")}
             </div>
           )}
         </div>
