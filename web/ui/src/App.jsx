@@ -1,4 +1,11 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { AppProvider, useApp } from "./context/AppContext";
 import { PrefsProvider } from "./context/PrefsContext";
 import Layout from "./components/Layout";
@@ -14,6 +21,22 @@ import Ops from "./pages/Ops";
 import Admin from "./pages/Admin";
 import Docs from "./pages/Docs";
 
+const GA_MEASUREMENT_ID = "G-1W967FFSVL";
+
+/** SPA pageviews for Google Analytics (gtag in index.html). */
+function AnalyticsRouteTracker() {
+  const location = useLocation();
+  useEffect(() => {
+    if (typeof window.gtag !== "function") return;
+    const pagePath = `${location.pathname}${location.search}`;
+    window.gtag("config", GA_MEASUREMENT_ID, {
+      page_path: pagePath,
+      page_title: document.title,
+    });
+  }, [location.pathname, location.search]);
+  return null;
+}
+
 function AdminGate({ children }) {
   const { isAdmin } = useApp();
   if (!isAdmin) return <Navigate to="/" replace />;
@@ -25,6 +48,7 @@ export default function App() {
     <PrefsProvider>
       <AppProvider>
         <BrowserRouter>
+          <AnalyticsRouteTracker />
           <Routes>
             <Route element={<Layout />}>
               <Route index element={<Markets />} />
