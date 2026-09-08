@@ -85,11 +85,9 @@ Ties: equal split of combined slots. If fewer than 5 eligible finishers, remaini
 
 | Pillar | Weight | Evidence |
 |---|---|---|
-| **Content quality** | **45%** | Thread / Guide / video; admin scores each submit **0–100** on `/ambassadors` (Grade tab) |
-| **On-chain referrals** | 25% | Referee `SetReferrer` → your `g1`; unique first-time referees with real curve activity |
-| **Qualified volume brought** | 15% | **Mainnet Month-1 only** — curve Buy volume of referred wallets on the active mainnet pad; Sapphire testnet volume does **not** count; wash / circular flow slashed |
-| **Quests / consistency** | 10% | Check-in / Season quests on `/rewards` (progress may be partial) |
-| **Community signal** | 5% | Community help, translations, useful bug reports — mod attestation |
+| **Content quality** | **50%** | Thread / Guide / video; admin scores each submit **0–100** on `/ambassadors` (Grade tab) |
+| **On-chain referrals** | **30%** | Referee `SetReferrer` → your `g1`; unique first-time referees with real curve activity |
+| **Qualified volume brought** | **20%** | **Mainnet Month-1 only** — curve Buy volume of referred wallets on the active mainnet pad; Sapphire testnet volume does **not** count; wash / circular flow slashed |
 
 **Does not count for volume:** post-list Gnoswap ExactIn (same spirit as Season 0).  
 **Weekly soft board** (preview) + **final snapshot** at D30 23:59 UTC (or stated block height).

@@ -583,8 +583,8 @@ export default function Ambassadors() {
           <p className="muted season0-hint">
             {boardNote ||
               t(
-                "MVP board uses admin content scores (45%). Volume (15%) counts on mainnet only — not Sapphire.",
-                "BXH MVP dùng điểm content admin (45%). Volume (15%) chỉ tính trên mainnet — không tính Sapphire.",
+                "MVP board uses admin content scores (50%). Volume (20%) counts on mainnet only — not Sapphire.",
+                "BXH MVP dùng điểm content admin (50%). Volume (20%) chỉ tính trên mainnet — không tính Sapphire.",
               )}
           </p>
           <div className="panel">
@@ -640,8 +640,8 @@ export default function Ambassadors() {
           <h2>{t("Grade submissions", "Chấm điểm bài nộp")}</h2>
           <p className="muted season0-hint">
             {t(
-              "Score each piece 0–100. Average feeds the 45% content pillar on the public Ranking tab.",
-              "Chấm mỗi bài 0–100. Điểm trung bình vào trụ content 45% trên tab Xếp hạng.",
+              "Score each piece 0–100. Average feeds the 50% content pillar on the public Ranking tab.",
+              "Chấm mỗi bài 0–100. Điểm trung bình vào trụ content 50% trên tab Xếp hạng.",
             )}
           </p>
           <div className="admin-actions" style={{ marginBottom: "0.75rem" }}>

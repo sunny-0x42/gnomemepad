@@ -1255,9 +1255,9 @@ function buildAmbassadorLeaderboard(contentRows) {
   }
   const rows = [...byKey.values()].map((e) => {
     const avg = e.scoredCount > 0 ? e.contentScoreSum / e.scoredCount : null;
-    // Weighted contribution of content pillar (45%) using average 0–100 score.
+    // Weighted contribution of content pillar (50%) using average 0–100 score.
     const contentWeighted =
-      avg != null ? Math.round((avg / 100) * 45 * 100) / 100 : 0;
+      avg != null ? Math.round((avg / 100) * 50 * 100) / 100 : 0;
     return {
       ...e,
       contentScoreAvg: avg != null ? Math.round(avg * 10) / 10 : null,
@@ -4571,11 +4571,9 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           metric: "option_a_protocol_fee_accrued_10pct",
           split: [40, 25, 15, 10, 10],
           rubric: [
-            { id: "content", pct: 45 },
-            { id: "referrals", pct: 25 },
-            { id: "volume", pct: 15 },
-            { id: "quests", pct: 10 },
-            { id: "community", pct: 5 },
+            { id: "content", pct: 50 },
+            { id: "referrals", pct: 30 },
+            { id: "volume", pct: 20 },
           ],
           counts: await ambassadorPublicCounts(),
         },
@@ -4594,7 +4592,7 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         {
           season: "amb-s1",
           updatedAt: Date.now(),
-          note: "MVP ranks by admin content scores (45%). Volume pillar (15%) is mainnet-only — Sapphire testnet volume does not count.",
+          note: "MVP ranks by admin content scores (50%). Volume pillar (20%) is mainnet-only — Sapphire testnet volume does not count.",
           board,
         },
         { maxAge: 15 },

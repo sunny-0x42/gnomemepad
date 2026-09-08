@@ -29,20 +29,18 @@ export const AMBASSADOR_SPLIT = [
 ];
 
 export const AMBASSADOR_RUBRIC = [
-  { id: "content", en: "Content quality", vi: "Chất lượng nội dung", pct: 45 },
-  { id: "referrals", en: "On-chain referrals (SetReferrer)", vi: "Referral on-chain (SetReferrer)", pct: 25 },
+  { id: "content", en: "Content quality", vi: "Chất lượng nội dung", pct: 50 },
+  { id: "referrals", en: "On-chain referrals (SetReferrer)", vi: "Referral on-chain (SetReferrer)", pct: 30 },
   {
     id: "volume",
     en: "Qualified curve volume brought (mainnet only)",
     vi: "Volume curve hợp lệ mang về (chỉ mainnet)",
-    pct: 15,
+    pct: 20,
   },
-  { id: "quests", en: "Quests / consistency", vi: "Quest / duy trì", pct: 10 },
-  { id: "community", en: "Community signal", vi: "Tín hiệu cộng đồng", pct: 5 },
 ];
 
 /** Content pillar weight used when folding admin scores into leaderboard. */
-export const CONTENT_WEIGHT = 45;
+export const CONTENT_WEIGHT = 50;
 
 export function ambassadorRulesBlocks(vi) {
   if (vi) {
@@ -61,7 +59,7 @@ export function ambassadorRulesBlocks(vi) {
         items: [
           "Nội dung dạy loop: Create → curve → graduate → locked LP / Gnoswap (đúng facts).",
           "Referral on-chain: referee SetReferrer tới g1 của bạn + hoạt động curve thật.",
-          "Trụ volume (15%): chỉ tính curve volume trên mainnet Month-1 — Sapphire testnet không tính.",
+          "Trụ volume (20%): chỉ tính curve volume trên mainnet Month-1 — Sapphire testnet không tính.",
           "ExactIn Gnoswap sau list không tính volume Ambassador.",
           "Wash / sybil / hứa lợi nhuận = loại.",
         ],
@@ -91,7 +89,7 @@ export function ambassadorRulesBlocks(vi) {
       items: [
         "Content that teaches Create → curve → graduate → locked LP / Gnoswap (correct facts).",
         "On-chain referrals: referee SetReferrer to your g1 + real curve activity.",
-        "Volume pillar (15%): mainnet Month-1 curve volume only — Sapphire testnet does not count.",
+        "Volume pillar (20%): mainnet Month-1 curve volume only — Sapphire testnet does not count.",
         "Post-list Gnoswap ExactIn does not count toward Ambassador volume.",
         "Wash / sybil / promised profits = disqualification.",
       ],
