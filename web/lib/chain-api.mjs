@@ -385,20 +385,30 @@ async function enrichLiveGnoswapLiquidity(RPC, m, opts = {}) {
   if (bal.tokens > 0 && bal.ugnot > 0) {
     poolSpotGnot = wugnotGnot / bal.tokens;
   }
-  // Prefer pool-implied spot for TVL; fall back to last trade / pad only if needed
+  const supply =
+    Number(m?.params?.totalSupply) ||
+    Number(m?.totalSupply) ||
+    1_000_000_000;
+  const poolShare = supply > 0 ? bal.tokens / supply : 0;
+  // Thin token-side LP: pool-implied spot is not usable for TVL (was ~$1B on JAE).
+  // Show WUGNOT leg only and flag reliability.
+  const thin = poolShare > 0 && poolShare < 0.005;
   const px =
-    poolSpotGnot > 0
+    !thin && poolSpotGnot > 0
       ? poolSpotGnot
       : Number(m.spotGnot || m.priceGnot) > 0
         ? Number(m.spotGnot || m.priceGnot)
         : 0;
-  const tokenGnot = px > 0 && bal.tokens > 0 ? bal.tokens * px : 0;
+  const tokenGnot =
+    !thin && px > 0 && bal.tokens > 0 ? bal.tokens * px : 0;
 
   m.liquidityWugnotGnot = wugnotGnot;
   m.liquidityTokenGnot = tokenGnot;
-  // Both sides at pool mark → ≈ 2 × WUGNOT when reserves are priced consistently
-  m.liquidityGnot = wugnotGnot + tokenGnot;
-  m.liquiditySource = "gnoswap_pool_balances";
+  m.liquidityGnot = thin ? wugnotGnot : wugnotGnot + tokenGnot;
+  m.liquiditySource = thin
+    ? "gnoswap_pool_wugnot_only"
+    : "gnoswap_pool_balances";
+  m.liquidityThin = thin;
   m.poolBalUgnot = bal.ugnot;
   m.poolBalTokens = bal.tokens;
   // Internal helper for TVL only — do NOT write into spotGnot/priceGnot
@@ -1020,8 +1030,68 @@ function parseTradeHistory(raw) {
 }
 
 /**
+ * Shared ExactIn reports from gnomi.fun clients (Gnoswap public indexer
+ * does not list Sapphire meme pools today — REST /swap/history stays empty).
+ * In-memory per Netlify isolate; cold start resets (MVP).
+ */
+const reportedTradesByToken = new Map(); // tokenKey -> { at, rows[] }
+const REPORTED_MAX_PER_TOKEN = 80;
+const REPORTED_TTL_MS = 6 * 60 * 60 * 1000;
+const reportRateByIp = new Map(); // ip -> { at, n }
+
+function reportedStoreKey(tokenKey, poolPath) {
+  return String(tokenKey || poolPath || "").trim();
+}
+
+function getReportedTrades(tokenKey, poolPath) {
+  const k = reportedStoreKey(tokenKey, poolPath);
+  if (!k) return [];
+  const e = reportedTradesByToken.get(k);
+  if (!e) return [];
+  if (Date.now() - e.at > REPORTED_TTL_MS) {
+    reportedTradesByToken.delete(k);
+    return [];
+  }
+  return Array.isArray(e.rows) ? e.rows.slice() : [];
+}
+
+function pushReportedTrade(tokenKey, poolPath, row) {
+  const k = reportedStoreKey(tokenKey, poolPath);
+  if (!k || !row) return false;
+  const prev = reportedTradesByToken.get(k);
+  const rows = prev && Array.isArray(prev.rows) ? prev.rows.slice() : [];
+  const merged = mergeChartPoints(rows, [row]);
+  // keep newest last for chart; merge sorts ascending
+  reportedTradesByToken.set(k, {
+    at: Date.now(),
+    rows: merged.slice(-REPORTED_MAX_PER_TOKEN),
+  });
+  if (reportedTradesByToken.size > 128) {
+    const first = reportedTradesByToken.keys().next().value;
+    if (first != null) reportedTradesByToken.delete(first);
+  }
+  return true;
+}
+
+function allowReportRequest(ip) {
+  const key = String(ip || "unknown");
+  const now = Date.now();
+  const cur = reportRateByIp.get(key) || { at: now, n: 0 };
+  if (now - cur.at > 60_000) {
+    reportRateByIp.set(key, { at: now, n: 1 });
+    return true;
+  }
+  if (cur.n >= 30) return false;
+  cur.n += 1;
+  reportRateByIp.set(key, cur);
+  return true;
+}
+
+/**
  * Post-list swaps live on Gnoswap, not pad TradeHistory.
  * Fetch recent WUGNOT↔token swaps for chart continuity after listing.
+ * Note: Sapphire meme pools are often missing from beta.api.gnoswap.io —
+ * empty 200 is common; transport errors must not poison-cache as empty.
  */
 async function fetchGnoswapSwapHistory(tokenPath, limit = 80) {
   const path = String(tokenPath || "").trim();
@@ -1035,16 +1105,31 @@ async function fetchGnoswapSwapHistory(tokenPath, limit = 80) {
     tokenBPath: path,
     limit: String(Math.min(100, Math.max(10, limit))),
   });
-  try {
+  const url = `${GNOSWAP_API_BASE}/swap/history?${qs}`;
+
+  async function once() {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8_000);
-    const res = await fetch(`${GNOSWAP_API_BASE}/swap/history?${qs}`, {
-      signal: ctrl.signal,
-      headers: { Accept: "application/json" },
-    });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`swap history HTTP ${res.status}`);
-    const body = await res.json();
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`swap history HTTP ${res.status}`);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  try {
+    let body;
+    try {
+      body = await once();
+    } catch (e1) {
+      // one retry on timeout / 5xx / network
+      body = await once();
+    }
     const rows = Array.isArray(body?.data) ? body.data : [];
     const points = [];
     for (const row of rows) {
@@ -1098,10 +1183,11 @@ async function fetchGnoswapSwapHistory(tokenPath, limit = 80) {
     }
     // oldest → newest for chart
     points.sort((a, b) => (a.timeMs || 0) - (b.timeMs || 0));
-    cacheSet(cacheKey, points, 25_000);
+    // Genuine empty 200: short TTL. Non-empty: normal TTL.
+    cacheSet(cacheKey, points, points.length ? 25_000 : 5_000);
     return points;
   } catch {
-    cacheSet(cacheKey, [], 10_000);
+    // Transport / 5xx — do NOT cache [] (avoids 10s blackout after blip)
     return [];
   }
 }
@@ -1202,8 +1288,18 @@ function lastTradePriceGnot(chart, sourceFilter = null) {
  */
 function resolveValuationSpotGnot(m, opts = {}) {
   const lastDex =
-    opts.lastDexPx != null ? Number(opts.lastDexPx) : lastTradePriceGnot(m?.chart, "gnoswap");
-  if (lastDex > 0) return { spot: lastDex, source: "gnoswap_last_trade" };
+    opts.lastDexPx != null
+      ? Number(opts.lastDexPx)
+      : lastTradePriceGnot(m?.chart, "gnoswap") ||
+        lastTradePriceGnot(m?.chart, "reported");
+  if (lastDex > 0) {
+    return {
+      spot: lastDex,
+      source: lastTradePriceGnot(m?.chart, "gnoswap")
+        ? "gnoswap_last_trade"
+        : "gnoswap_last_trade",
+    };
+  }
 
   const poolSpot = Number(m?.poolSpotGnot) || 0;
   const poolTok = Number(m?.poolBalTokens) || 0;
@@ -1370,39 +1466,61 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     /* non-fatal */
   }
 
-  // After Gnoswap list: pad TradeHistory stops; keep chart alive via indexer swaps
+  // After Gnoswap list: pad TradeHistory stops; keep chart alive via indexer
+  // swaps + client-reported ExactIn fills (indexer often empty for Sapphire memes).
+  const tokenKey = marketTokenKey(m);
   if (m.gnoswapListed) {
     try {
-      const tokenKey = marketTokenKey(m);
       if (tokenKey) {
         const dexPts = await fetchGnoswapSwapHistory(tokenKey, 80);
-        if (dexPts.length) {
-          m.chart = mergeChartPoints(m.chart, dexPts);
-          m.chartSources = {
-            curve: (m.chart || []).filter((p) => p.source === "curve" || p.source === "lp").length,
-            gnoswap: (m.chart || []).filter((p) => p.source === "gnoswap").length,
-          };
-        }
+        if (dexPts.length) m.chart = mergeChartPoints(m.chart, dexPts);
       }
     } catch {
-      /* non-fatal — UI still has curve history + local trades */
+      /* non-fatal — UI still has curve history + local/reported trades */
     }
+  }
+  try {
+    const reported = getReportedTrades(tokenKey, m.gnoswapPoolPath);
+    if (reported.length) m.chart = mergeChartPoints(m.chart, reported);
+  } catch {
+    /* non-fatal */
   }
 
   m.tradeStats = summarizeTradeStats(m.chart || []);
   // Real DEX swaps only (exclude injected list/LP rows that also use source=gnoswap)
   const dexSwapPts = (m.chart || []).filter(
+    (p) =>
+      (p.source === "gnoswap" || p.source === "reported") &&
+      (Number(p.side) === 0 || Number(p.side) === 1),
+  );
+  const curvePts = (m.chart || []).filter(
+    (p) => p.source === "curve" || p.source === "lp" || !p.source,
+  );
+  const restDexPts = (m.chart || []).filter(
     (p) => p.source === "gnoswap" && (Number(p.side) === 0 || Number(p.side) === 1),
   );
-  m.dexHistoryEmpty = m.gnoswapListed ? dexSwapPts.length === 0 : null;
+  const reportedPts = (m.chart || []).filter(
+    (p) => p.source === "reported" && (Number(p.side) === 0 || Number(p.side) === 1),
+  );
+  m.chartSources = {
+    curve: curvePts.length,
+    gnoswap: restDexPts.length,
+    reported: reportedPts.length,
+  };
+  m.dexHistoryEmpty = m.gnoswapListed ? restDexPts.length === 0 : null;
   m.volumeScope = !m.gnoswapListed
     ? "curve"
     : dexSwapPts.length > 0
       ? "curve_and_dex"
       : "curve_only";
-  if (m.volumeScope === "curve_only") {
+  if (m.volumeScope === "curve_only" && m.gnoswapListed) {
     m.volumeNote =
-      "Volume from bonding-curve trades only — Gnoswap swap history unavailable for this token.";
+      "Curve history only — Gnoswap public indexer has no swap history for this meme pool yet. Swaps done on gnomi.fun are recorded when reported.";
+    m.volumeNoteVi =
+      "Chỉ lịch sử curve — indexer Gnoswap chưa có swap history cho pool meme này. Swap trên gnomi.fun được ghi khi client report.";
+  } else {
+    m.volumeNote = m.volumeNote || null;
+    m.volumeNoteVi = m.volumeNoteVi || null;
   }
 
   // Listed: live pool balances first (needed for pool-implied valuation spot)
@@ -1415,7 +1533,9 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   }
 
   // Entry: market VWAP of curve buys (shared basis for holders table / leaderboard)
-  const lastDexPx = lastTradePriceGnot(m.chart, "gnoswap");
+  const lastDexPx =
+    lastTradePriceGnot(m.chart, "gnoswap") ||
+    lastTradePriceGnot(m.chart, "reported");
   const lastAnyPx = lastTradePriceGnot(m.chart);
   const lastCurvePx = lastTradePriceGnot(m.chart, "curve") || lastAnyPx;
   const supply = Number(params.totalSupply) || 1_000_000_000;
@@ -1443,6 +1563,19 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     supply,
     valued.source || (m.status === 1 ? "pool_mark" : "curve"),
   );
+
+  // Chart mark: only align candles to spot when source is a live trade/pool read.
+  // pool_mark after list (thin LP / empty DEX) must NOT invent a cliff candle.
+  const src = String(m.priceSource || "");
+  const reliableMark =
+    src === "gnoswap_last_trade" ||
+    src === "gnoswap_pool_spot" ||
+    src === "last_trade" ||
+    (src === "curve" && !m.gnoswapListed);
+  m.markReliable = !!reliableMark;
+  if (m.gnoswapListed && m.dexHistoryEmpty && !reportedPts.length && src === "pool_mark") {
+    m.markReliable = false;
+  }
 
   // Holders / buyers (padv7+ ListBuyers; graceful on older pads)
   m.holders = [];
@@ -3952,7 +4085,11 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         points: m.chart || [],
         volumeScope: m.volumeScope || null,
         volumeNote: m.volumeNote || null,
+        volumeNoteVi: m.volumeNoteVi || null,
         priceSource: m.priceSource || null,
+        markReliable: m.markReliable !== false,
+        dexHistoryEmpty: m.dexHistoryEmpty,
+        chartSources: m.chartSources || null,
       });
     }
 
@@ -3975,8 +4112,92 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         priceSource: m.priceSource || null,
         volumeScope: m.volumeScope || null,
         volumeNote: m.volumeNote || null,
+        markReliable: m.markReliable !== false,
+        chartSources: m.chartSources || null,
         trades,
         count: trades.length,
+      });
+    }
+
+    // Client ExactIn success → shared chart points (Gnoswap indexer often empty for memes)
+    if (method === "POST" && (p === "/api/trades/report" || p === "/api/trades/report/")) {
+      const ip =
+        hdrs["x-forwarded-for"]?.split(",")[0]?.trim() ||
+        hdrs["client-ip"] ||
+        hdrs["x-real-ip"] ||
+        "unknown";
+      if (!allowReportRequest(ip)) {
+        return json(429, { error: "rate_limited" });
+      }
+      let body = {};
+      try {
+        body = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        return json(400, { error: "invalid json" });
+      }
+      const id = String(body.id || "").trim();
+      const pkgQ = String(body.pkg || "").trim();
+      const poolPath = String(body.poolPath || body.gnoswapPoolPath || "").trim();
+      const tokenKey = String(body.tokenKey || body.tokenPath || "").trim();
+      const hash = String(body.hash || body.txHash || "").trim();
+      const sideRaw = body.side;
+      const side =
+        sideRaw === 1 || sideRaw === "1" || sideRaw === "sell"
+          ? 1
+          : sideRaw === 0 || sideRaw === "0" || sideRaw === "buy"
+            ? 0
+            : -1;
+      const ugnot = Math.floor(Number(body.ugnot) || 0);
+      const tokens = Math.floor(Number(body.tokens) || 0);
+      if (!id && !tokenKey && !poolPath) {
+        return json(400, { error: "id or tokenKey required" });
+      }
+      if (side < 0 || ugnot <= 0 || tokens <= 0) {
+        return json(400, { error: "side, ugnot, tokens required" });
+      }
+      if (hash && !/^[A-Za-z0-9+/=_-]{16,128}$/.test(hash)) {
+        return json(400, { error: "invalid hash" });
+      }
+      let m = null;
+      try {
+        if (id) {
+          m = await resolveMarketPkg(RPC, id, pkgQ || null, padSources);
+        } else {
+          const { markets } = await getMarkets(RPC, padSources);
+          m =
+            (markets || []).find(
+              (x) =>
+                (tokenKey && marketTokenKey(x) === tokenKey) ||
+                (poolPath && x.gnoswapPoolPath === poolPath),
+            ) || null;
+        }
+      } catch {
+        m = null;
+      }
+      if (!m || m.error || !m.gnoswapListed) {
+        return json(400, { error: "market not listed or not found" });
+      }
+      const tk = marketTokenKey(m) || tokenKey;
+      const priceGnot = tokens > 0 ? ugnot / UGNOT_PER_GNOT / tokens : 0;
+      const row = {
+        height: Number(body.height) || 0,
+        side,
+        sideLabel: side === 0 ? "buy" : "sell",
+        ugnot,
+        tokens,
+        price: Math.floor(priceGnot * UGNOT_PER_GNOT * 1_000_000),
+        priceGnot,
+        volumeGnot: ugnot / UGNOT_PER_GNOT,
+        timeMs: Number(body.timeMs) || Date.now(),
+        time: body.time || null,
+        hash,
+        source: "reported",
+      };
+      pushReportedTrade(tk, m.gnoswapPoolPath || poolPath, row);
+      return json(200, {
+        ok: true,
+        tokenKey: tk,
+        stored: getReportedTrades(tk, m.gnoswapPoolPath).length,
       });
     }
 

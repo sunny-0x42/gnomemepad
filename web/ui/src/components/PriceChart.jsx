@@ -51,6 +51,8 @@ export default function PriceChart({
   /** Canonical spot from API (pool_mark / gnoswap) — keeps header C in sync with Price/MCap metrics */
   markPriceGnot = null,
   markPriceUsd = null,
+  /** When false, never soft-patch / append synthetic mark candles (thin LP / pool_mark). */
+  allowMarkAlign = true,
 }) {
   const wrapRef = useRef(null);
   const tipRef = useRef(null);
@@ -67,14 +69,20 @@ export default function PriceChart({
 
   const fx = Number(gnotUsd) || 0;
   const showUsd = fx > 0;
-  const markPg = Number(markPriceGnot);
-  const markPu =
-    Number(markPriceUsd) > 0
+  const markPg = allowMarkAlign ? Number(markPriceGnot) : NaN;
+  const markPu = !allowMarkAlign
+    ? 0
+    : Number(markPriceUsd) > 0
       ? Number(markPriceUsd)
       : fx > 0 && markPg > 0
         ? markPg * fx
         : 0;
-  const markPrice = showUsd && markPu > 0 ? markPu : markPg > 0 ? markPg : 0;
+  const markPrice =
+    allowMarkAlign && showUsd && markPu > 0
+      ? markPu
+      : allowMarkAlign && markPg > 0
+        ? markPg
+        : 0;
 
   const series = useMemo(() => {
     let pts = (points || [])
@@ -180,7 +188,7 @@ export default function PriceChart({
     else if (range === "20") pts = pts.slice(-20);
 
     return pts;
-  }, [points, range, fx, showUsd, markPrice, markPg, markPu]);
+  }, [points, range, fx, showUsd, markPrice, markPg, markPu, allowMarkAlign]);
 
   function fmtChartPrice(v) {
     if (showUsd) return fmtPriceUsd(v);
