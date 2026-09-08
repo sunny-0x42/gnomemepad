@@ -27,9 +27,22 @@ Docs X: https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-c
 
 **Scopes tối thiểu (Ambassador verify):**
 ```
-users.read offline.access
+tweet.read users.read offline.access
 ```
-(`tweet.read` không bắt buộc nếu chỉ cần xác nhận tài khoản.)
+(`tweet.read` **bắt buộc** cùng `users.read` để gọi `GET /2/users/me`.)
+
+### Quan trọng — lỗi `Forbidden` / `client-not-enrolled`
+
+X **Free / Development** thường **chặn** `GET /2/users/me` dù OAuth login thành công → UI báo `X connect failed: Forbidden`.
+
+Cần trên [Developer Portal](https://developer.x.com) / [console.x.com](https://console.x.com):
+
+1. App gắn **Project**  
+2. Môi trường **Production** (không chỉ Development)  
+3. Gói **Pay per use** (hoặc tier có user-context read) + có credit  
+4. Regenerate **Client ID / Secret** nếu đổi môi trường → cập nhật lại Netlify env  
+
+Không có bước này thì Sign-in with X **không** lấy được `@username`.
 
 ---
 

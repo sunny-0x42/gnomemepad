@@ -29,7 +29,10 @@ export function xOAuthConfig() {
   const redirectUri = String(
     process.env.X_REDIRECT_URI || "https://gnomi.fun/api/auth/x/callback",
   ).trim();
-  const scopes = String(process.env.X_OAUTH_SCOPES || "users.read offline.access")
+  // users/me requires users.read + tweet.read per X v2 auth mapping
+  const scopes = String(
+    process.env.X_OAUTH_SCOPES || "tweet.read users.read offline.access",
+  )
     .trim()
     .split(/\s+/)
     .filter(Boolean)
@@ -99,6 +102,22 @@ export function buildAuthorizeUrl({ clientId, redirectUri, scopes, state, challe
   return u.toString();
 }
 
+function formatXApiError(json, fallback) {
+  if (!json || typeof json !== "object") return fallback;
+  const reason = json.reason || json.required_enrollment || "";
+  const detail = json.detail || json.error_description || json.error || json.title || "";
+  const parts = [detail, reason].filter(Boolean);
+  const msg = parts.join(" · ") || fallback;
+  // Friendly hint for the common Free/DEV enrollment block
+  if (
+    /client-not-enrolled|Appropriate Level of API Access|Client Forbidden/i.test(msg) ||
+    (json.title === "Forbidden" && json.status === 403)
+  ) {
+    return `${msg} — X App needs Production + paid/pay-per-use API access for users/me (Free/DEV blocks Sign-in with X).`;
+  }
+  return msg.slice(0, 220);
+}
+
 export async function exchangeCodeForToken({
   clientId,
   clientSecret,
@@ -106,15 +125,15 @@ export async function exchangeCodeForToken({
   code,
   verifier,
 }) {
+  // Confidential client: Basic auth; do not duplicate client_id in body (X docs).
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code: String(code),
     redirect_uri: redirectUri,
     code_verifier: verifier,
-    client_id: clientId,
   });
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-  const res = await fetch(TOKEN_URL, {
+  let res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -123,15 +142,37 @@ export async function exchangeCodeForToken({
     body,
     signal: AbortSignal.timeout(15_000),
   });
-  const text = await res.text();
+  let text = await res.text();
   let json;
   try {
     json = JSON.parse(text);
   } catch {
-    throw new Error(`token exchange failed: HTTP ${res.status}`);
+    json = null;
   }
-  if (!res.ok || !json.access_token) {
-    throw new Error(json.error_description || json.error || `token HTTP ${res.status}`);
+  // Fallback: public-client style (client_id in body, no Basic) if confidential fails
+  if (!res.ok || !json?.access_token) {
+    const bodyPublic = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: String(code),
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+      client_id: clientId,
+    });
+    res = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: bodyPublic,
+      signal: AbortSignal.timeout(15_000),
+    });
+    text = await res.text();
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`token exchange failed: HTTP ${res.status}`);
+    }
+  }
+  if (!res.ok || !json?.access_token) {
+    throw new Error(formatXApiError(json, `token HTTP ${res.status}`));
   }
   return json;
 }
@@ -142,9 +183,9 @@ export async function fetchXUserMe(accessToken) {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(12_000),
   });
-  const json = await res.json();
+  const json = await res.json().catch(() => ({}));
   if (!res.ok || !json?.data?.username) {
-    throw new Error(json?.detail || json?.title || `users/me HTTP ${res.status}`);
+    throw new Error(formatXApiError(json, `users/me HTTP ${res.status}`));
   }
   return json.data;
 }
