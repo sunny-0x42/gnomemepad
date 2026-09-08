@@ -29,12 +29,15 @@ export const AMBASSADOR_SPLIT = [
 ];
 
 export const AMBASSADOR_RUBRIC = [
-  { id: "content", en: "Content quality", vi: "Chất lượng nội dung", pct: 35 },
+  { id: "content", en: "Content quality", vi: "Chất lượng nội dung", pct: 45 },
   { id: "referrals", en: "On-chain referrals (SetReferrer)", vi: "Referral on-chain (SetReferrer)", pct: 25 },
-  { id: "volume", en: "Qualified curve volume brought", vi: "Volume curve hợp lệ mang về", pct: 20 },
+  { id: "volume", en: "Qualified curve volume brought", vi: "Volume curve hợp lệ mang về", pct: 15 },
   { id: "quests", en: "Quests / consistency", vi: "Quest / duy trì", pct: 10 },
-  { id: "community", en: "Community signal", vi: "Tín hiệu cộng đồng", pct: 10 },
+  { id: "community", en: "Community signal", vi: "Tín hiệu cộng đồng", pct: 5 },
 ];
+
+/** Content pillar weight used when folding admin scores into leaderboard. */
+export const CONTENT_WEIGHT = 45;
 
 export function ambassadorRulesBlocks(vi) {
   if (vi) {

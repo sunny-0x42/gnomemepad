@@ -1166,10 +1166,9 @@ async function loadAmbassadorList(kind) {
   return Array.isArray(ambassadorMem[k]) ? ambassadorMem[k].slice() : [];
 }
 
-async function pushAmbassadorRecord(kind, row) {
+async function saveAmbassadorList(kind, rows) {
   const k = kind === "apply" ? "apply" : "content";
-  const prev = await loadAmbassadorList(k);
-  const next = [...prev, row].slice(-AMBASSADOR_MAX);
+  const next = (Array.isArray(rows) ? rows : []).slice(-AMBASSADOR_MAX);
   ambassadorMem[k] = next;
   let durable = false;
   const store = await getAmbassadorBlobStore();
@@ -1184,10 +1183,86 @@ async function pushAmbassadorRecord(kind, row) {
   return { n: next.length, durable };
 }
 
+async function pushAmbassadorRecord(kind, row) {
+  const k = kind === "apply" ? "apply" : "content";
+  const prev = await loadAmbassadorList(k);
+  return saveAmbassadorList(k, [...prev, row]);
+}
+
 async function ambassadorPublicCounts() {
   const apply = await loadAmbassadorList("apply");
   const content = await loadAmbassadorList("content");
-  return { applications: apply.length, contentSubmissions: content.length };
+  const scored = content.filter((r) => Number.isFinite(Number(r.score)));
+  return {
+    applications: apply.length,
+    contentSubmissions: content.length,
+    contentScored: scored.length,
+  };
+}
+
+/** Aggregate public leaderboard from scored content (content pillar first). */
+function buildAmbassadorLeaderboard(contentRows) {
+  const byKey = new Map();
+  for (const row of contentRows || []) {
+    const g1 = String(row.g1 || "").toLowerCase();
+    const x = String(row.xHandle || "").toLowerCase();
+    const key = g1 || (x ? `x:${x}` : "");
+    if (!key) continue;
+    let e = byKey.get(key);
+    if (!e) {
+      e = {
+        g1: row.g1 || "",
+        xHandle: row.xHandle || "",
+        displayName: row.displayName || row.xHandle || shortAddrSafe(row.g1),
+        submissions: 0,
+        scoredCount: 0,
+        contentScoreSum: 0,
+        contentScoreAvg: null,
+        contentScoreBest: null,
+        lastSubmitAt: 0,
+      };
+      byKey.set(key, e);
+    }
+    e.submissions += 1;
+    e.lastSubmitAt = Math.max(e.lastSubmitAt, Number(row.at) || 0);
+    if (row.displayName) e.displayName = row.displayName;
+    if (row.xHandle) e.xHandle = row.xHandle;
+    if (row.g1) e.g1 = row.g1;
+    const sc = Number(row.score);
+    if (Number.isFinite(sc)) {
+      e.scoredCount += 1;
+      e.contentScoreSum += sc;
+      e.contentScoreBest =
+        e.contentScoreBest == null ? sc : Math.max(e.contentScoreBest, sc);
+    }
+  }
+  const rows = [...byKey.values()].map((e) => {
+    const avg = e.scoredCount > 0 ? e.contentScoreSum / e.scoredCount : null;
+    // Weighted contribution of content pillar (45%) using average 0–100 score.
+    const contentWeighted =
+      avg != null ? Math.round((avg / 100) * 45 * 100) / 100 : 0;
+    return {
+      ...e,
+      contentScoreAvg: avg != null ? Math.round(avg * 10) / 10 : null,
+      contentWeighted,
+      // MVP total = contentWeighted; other pillars filled later.
+      totalScore: contentWeighted,
+    };
+  });
+  rows.sort((a, b) => {
+    if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
+    if ((b.contentScoreBest || 0) !== (a.contentScoreBest || 0)) {
+      return (b.contentScoreBest || 0) - (a.contentScoreBest || 0);
+    }
+    return (b.lastSubmitAt || 0) - (a.lastSubmitAt || 0);
+  });
+  return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
+function shortAddrSafe(addr) {
+  const s = String(addr || "");
+  if (s.length < 12) return s || "—";
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
 }
 
 /**
@@ -4359,10 +4434,100 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           prizeTiming: "after_mainnet_month1",
           metric: "option_a_protocol_fee_accrued_10pct",
           split: [40, 25, 15, 10, 10],
+          rubric: [
+            { id: "content", pct: 45 },
+            { id: "referrals", pct: 25 },
+            { id: "volume", pct: 15 },
+            { id: "quests", pct: 10 },
+            { id: "community", pct: 5 },
+          ],
           counts: await ambassadorPublicCounts(),
         },
         { maxAge: 30 },
       );
+    }
+
+    if (
+      method === "GET" &&
+      (p === "/api/ambassadors/leaderboard" || p === "/api/ambassadors/leaderboard/")
+    ) {
+      const content = await loadAmbassadorList("content");
+      const board = buildAmbassadorLeaderboard(content);
+      return json(
+        200,
+        {
+          season: "amb-s1",
+          updatedAt: Date.now(),
+          note: "MVP ranks by admin content scores (45% pillar). Other pillars TBD after mainnet.",
+          board,
+        },
+        { maxAge: 15 },
+      );
+    }
+
+    if (
+      method === "GET" &&
+      (p === "/api/ambassadors/submissions" || p === "/api/ambassadors/submissions/")
+    ) {
+      const adminG1 = String(q.get("admin") || q.get("address") || "").trim().toLowerCase();
+      const signer = String(SIGNER_ADDR || DEFAULT_ADDR).toLowerCase();
+      if (!adminG1 || adminG1 !== signer) {
+        return json(403, { error: "admin only" });
+      }
+      const content = await loadAmbassadorList("content");
+      const apply = await loadAmbassadorList("apply");
+      // newest first
+      const submissions = content
+        .slice()
+        .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+      return json(200, {
+        submissions,
+        applications: apply.length,
+        signerAddr: SIGNER_ADDR,
+      });
+    }
+
+    if (
+      method === "POST" &&
+      (p === "/api/ambassadors/score" || p === "/api/ambassadors/score/")
+    ) {
+      let body = {};
+      try {
+        body = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        return json(400, { error: "invalid json" });
+      }
+      const adminG1 = String(body.adminG1 || body.address || "").trim().toLowerCase();
+      const signer = String(SIGNER_ADDR || DEFAULT_ADDR).toLowerCase();
+      if (!adminG1 || adminG1 !== signer) {
+        return json(403, { error: "admin only" });
+      }
+      const id = String(body.id || "").trim();
+      const score = Number(body.score);
+      if (!id) return json(400, { error: "id required" });
+      if (!Number.isFinite(score) || score < 0 || score > 100) {
+        return json(400, { error: "score must be 0–100" });
+      }
+      const list = await loadAmbassadorList("content");
+      const idx = list.findIndex((r) => String(r.id) === id);
+      if (idx < 0) return json(404, { error: "submission not found" });
+      const prev = list[idx];
+      const nextRow = {
+        ...prev,
+        score: Math.round(score * 10) / 10,
+        scoredAt: Date.now(),
+        scoredBy: adminG1,
+        scoreNote: String(body.note || body.scoreNote || "").trim().slice(0, 300),
+        status: "scored",
+      };
+      const next = list.slice();
+      next[idx] = nextRow;
+      const saved = await saveAmbassadorList("content", next);
+      return json(200, {
+        ok: true,
+        submission: nextRow,
+        durable: saved.durable,
+      });
     }
 
     // Client ExactIn success → shared chart points (Gnoswap indexer often empty for memes)

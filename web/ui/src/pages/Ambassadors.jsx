@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { usePrefs } from "../context/PrefsContext";
 import { EmptyState, PageHeader, Stat } from "../components/ui";
 import { api } from "../lib/api";
+import { shortAddr } from "../lib/format";
 import {
   AMBASSADOR_RUBRIC,
   AMBASSADOR_S1,
@@ -40,6 +41,12 @@ const emptyContent = {
 
 const X_HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
 
+function fmtScore(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
 function normalizeXHandle(raw) {
   return String(raw || "")
     .trim()
@@ -50,20 +57,58 @@ function normalizeXHandle(raw) {
 }
 
 export default function Ambassadors() {
-  const { wallet, connect, showToast } = useApp();
+  const { wallet, connect, showToast, isAdmin } = useApp();
   const { lang } = usePrefs();
   const vi = lang === "vi";
   const t = (en, vn) => (vi ? vn : en);
 
-  const [tab, setTab] = useState("rules"); // rules | apply | submit
+  const [tab, setTab] = useState("rules"); // rules | apply | submit | rank | grade
   const [apply, setApply] = useState(emptyApply);
   const [content, setContent] = useState(emptyContent);
   const [busy, setBusy] = useState(false);
   const [applyId, setApplyId] = useState("");
   const [contentId, setContentId] = useState("");
+  const [board, setBoard] = useState([]);
+  const [boardNote, setBoardNote] = useState("");
+  const [subs, setSubs] = useState([]);
+  const [scoreDraft, setScoreDraft] = useState({}); // id -> score string
+  const [noteDraft, setNoteDraft] = useState({});
 
   const open = isSubmitOpen();
   const rules = useMemo(() => ambassadorRulesBlocks(vi), [vi]);
+
+  const loadBoard = useCallback(async () => {
+    try {
+      const out = await api("/api/ambassadors/leaderboard");
+      setBoard(Array.isArray(out?.board) ? out.board : []);
+      setBoardNote(out?.note || "");
+    } catch {
+      setBoard([]);
+    }
+  }, []);
+
+  const loadSubs = useCallback(async () => {
+    if (!isAdmin || !wallet?.address) return;
+    try {
+      const out = await api(
+        `/api/ambassadors/submissions?admin=${encodeURIComponent(wallet.address)}`,
+      );
+      setSubs(Array.isArray(out?.submissions) ? out.submissions : []);
+      const drafts = {};
+      for (const s of out?.submissions || []) {
+        if (s?.id != null && s.score != null) drafts[s.id] = String(s.score);
+      }
+      setScoreDraft((prev) => ({ ...drafts, ...prev }));
+    } catch (e) {
+      showToast(e.message || String(e), false);
+      setSubs([]);
+    }
+  }, [isAdmin, wallet, showToast]);
+
+  useEffect(() => {
+    if (tab === "rank") loadBoard();
+    if (tab === "grade" && isAdmin) loadSubs();
+  }, [tab, loadBoard, loadSubs, isAdmin]);
 
   function fillG1FromWallet(target) {
     if (!wallet?.address) return connect();
@@ -173,6 +218,36 @@ export default function Ambassadors() {
       setContentId(out.id || "ok");
       showToast(t("Content submitted", "Đã gửi bài"));
       setContent((s) => ({ ...s, title: "", url: "", notes: "" }));
+      if (isAdmin) loadSubs();
+      loadBoard();
+    } catch (err) {
+      showToast(err.message || String(err), false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveScore(row) {
+    if (!isAdmin || !wallet?.address) return connect();
+    const raw = scoreDraft[row.id];
+    const score = Number(raw);
+    if (!Number.isFinite(score) || score < 0 || score > 100) {
+      return showToast(t("Score must be 0–100", "Điểm phải từ 0–100"), false);
+    }
+    setBusy(true);
+    try {
+      await api("/api/ambassadors/score", {
+        method: "POST",
+        body: {
+          id: row.id,
+          score,
+          note: noteDraft[row.id] || "",
+          adminG1: wallet.address,
+        },
+      });
+      showToast(t("Score saved", "Đã lưu điểm"));
+      await loadSubs();
+      await loadBoard();
     } catch (err) {
       showToast(err.message || String(err), false);
     } finally {
@@ -229,6 +304,14 @@ export default function Ambassadors() {
         <button type="button" className={`filter-btn${tab === "submit" ? " active" : ""}`} onClick={() => setTab("submit")}>
           {t("Submit content", "Nộp bài")}
         </button>
+        <button type="button" className={`filter-btn${tab === "rank" ? " active" : ""}`} onClick={() => setTab("rank")}>
+          {t("Ranking", "Xếp hạng")}
+        </button>
+        {isAdmin ? (
+          <button type="button" className={`filter-btn${tab === "grade" ? " active" : ""}`} onClick={() => setTab("grade")}>
+            {t("Grade", "Chấm điểm")}
+          </button>
+        ) : null}
       </nav>
 
       {tab === "rules" && (
@@ -454,6 +537,136 @@ export default function Ambassadors() {
                 {busy ? t("Sending…", "Đang gửi…") : t("Submit application", "Gửi đơn")}
               </button>
             </form>
+          )}
+        </section>
+      )}
+
+      {tab === "rank" && (
+        <section className="season0-section" id="amb-rank">
+          <h2>{t("Ranking", "Xếp hạng")}</h2>
+          <p className="muted season0-hint">
+            {boardNote ||
+              t(
+                "MVP board uses admin content scores (45% pillar). Other pillars fill in later.",
+                "BXH MVP dùng điểm content do admin chấm (trụ 45%). Các trụ khác bổ sung sau.",
+              )}
+          </p>
+          <div className="panel">
+            {(board || []).slice(0, 50).map((row) => {
+              const you =
+                wallet?.address &&
+                String(row.g1 || "").toLowerCase() === wallet.address.toLowerCase();
+              return (
+                <div key={`${row.g1 || row.xHandle}-${row.rank}`} className={`lb-row${you ? " is-you" : ""}`}>
+                  <span className="lb-left">
+                    <span className="faint lb-rank">{row.rank}</span>
+                    <span>
+                      <strong>{row.displayName || row.xHandle || shortAddr(row.g1)}</strong>
+                      {row.xHandle ? (
+                        <span className="muted mono" style={{ marginLeft: "0.5rem" }}>
+                          @{row.xHandle}
+                        </span>
+                      ) : null}
+                      {you ? (
+                        <span className="season0-you-pill" style={{ marginLeft: "0.4rem" }}>
+                          {t("you", "bạn")}
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                  <span className="lb-pts">
+                    <strong>{fmtScore(row.totalScore)}</strong>
+                    <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.8rem" }}>
+                      {t("content", "content")}{" "}
+                      {row.contentScoreAvg != null ? fmtScore(row.contentScoreAvg) : "—"}
+                      {" · "}
+                      {row.scoredCount || 0}/{row.submissions || 0}{" "}
+                      {t("scored", "đã chấm")}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+            {!board?.length && (
+              <div className="muted" style={{ padding: "0.5rem 0" }}>
+                {t("No scored submissions yet.", "Chưa có bài được chấm điểm.")}
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn sm ghost" style={{ marginTop: "0.75rem" }} onClick={loadBoard}>
+            {t("Refresh", "Làm mới")}
+          </button>
+        </section>
+      )}
+
+      {tab === "grade" && isAdmin && (
+        <section className="season0-section" id="amb-grade">
+          <h2>{t("Grade submissions", "Chấm điểm bài nộp")}</h2>
+          <p className="muted season0-hint">
+            {t(
+              "Score each piece 0–100. Average feeds the 45% content pillar on the public Ranking tab.",
+              "Chấm mỗi bài 0–100. Điểm trung bình vào trụ content 45% trên tab Xếp hạng.",
+            )}
+          </p>
+          <div className="admin-actions" style={{ marginBottom: "0.75rem" }}>
+            <button type="button" className="btn sm ghost" onClick={loadSubs} disabled={busy}>
+              {t("Refresh queue", "Làm mới hàng đợi")}
+            </button>
+          </div>
+          {!subs.length ? (
+            <EmptyState icon="✎" title={t("No submissions yet", "Chưa có bài nộp")} />
+          ) : (
+            <div className="season0-quest-grid">
+              {subs.map((row) => (
+                <article key={row.id} className="panel season0-quest-card">
+                  <div className="season0-quest-head">
+                    <h3>{row.title || "Untitled"}</h3>
+                    <span className="mono faint">
+                      {row.score != null ? `★ ${row.score}` : t("Unscored", "Chưa chấm")}
+                    </span>
+                  </div>
+                  <p className="muted season0-hint">
+                    {row.displayName || "—"}
+                    {row.xHandle ? ` · @${row.xHandle}` : ""}
+                    {row.g1 ? ` · ${shortAddr(row.g1)}` : ""}
+                  </p>
+                  <p>
+                    <a href={row.url} target="_blank" rel="noreferrer">
+                      {row.url}
+                    </a>
+                  </p>
+                  <label>
+                    {t("Score (0–100)", "Điểm (0–100)")}
+                    <input
+                      className="mono"
+                      value={scoreDraft[row.id] ?? ""}
+                      onChange={(e) =>
+                        setScoreDraft((s) => ({ ...s, [row.id]: e.target.value }))
+                      }
+                      placeholder="0–100"
+                    />
+                  </label>
+                  <label>
+                    {t("Note (optional)", "Ghi chú (tuỳ chọn)")}
+                    <input
+                      value={noteDraft[row.id] ?? ""}
+                      onChange={(e) =>
+                        setNoteDraft((s) => ({ ...s, [row.id]: e.target.value }))
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn sm primary"
+                    disabled={busy}
+                    onClick={() => saveScore(row)}
+                    style={{ marginTop: "0.5rem" }}
+                  >
+                    {t("Save score", "Lưu điểm")}
+                  </button>
+                </article>
+              ))}
+            </div>
           )}
         </section>
       )}
