@@ -24,6 +24,23 @@ import {
   normalizeNetworkId,
   DEFAULT_NETWORK_ID,
 } from "./networks.mjs";
+import {
+  buildAuthorizeUrl,
+  clearXOauthPendingCookies,
+  clearXSession,
+  clearXSessionCookie,
+  createPkcePair,
+  createXSession,
+  exchangeCodeForToken,
+  fetchXUserMe,
+  getXSession,
+  parseCookieHeader,
+  redirectResponse,
+  xOAuthConfig,
+  xOAuthConfigured,
+  xOauthPendingCookies,
+  xSessionCookie,
+} from "./x-oauth.mjs";
 
 const UGNOT_PER_GNOT = 1_000_000;
 
@@ -3213,6 +3230,111 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     else p = "/api" + (p.startsWith("/") ? p : "/" + p);
   }
 
+  // ── X OAuth (Ambassador verify) ───────────────────────────────────────
+  if (method === "GET" && (p === "/api/auth/x/start" || p === "/api/auth/x/start/")) {
+    if (!xOAuthConfigured()) {
+      return json(503, {
+        error: "x_oauth_not_configured",
+        hint: "Set X_CLIENT_ID, X_CLIENT_SECRET, X_REDIRECT_URI on Netlify",
+      });
+    }
+    const { clientId, redirectUri, scopes } = xOAuthConfig();
+    const { verifier, challenge, state } = createPkcePair();
+    const url = buildAuthorizeUrl({
+      clientId,
+      redirectUri,
+      scopes,
+      state,
+      challenge,
+    });
+    const cookies = xOauthPendingCookies(state, verifier);
+    return {
+      statusCode: 302,
+      headers: {
+        Location: url,
+        "Cache-Control": "no-store",
+      },
+      multiValueHeaders: {
+        "Set-Cookie": cookies,
+      },
+      body: "",
+    };
+  }
+
+  if (method === "GET" && (p === "/api/auth/x/callback" || p === "/api/auth/x/callback/")) {
+    const site = "https://gnomi.fun";
+    const fail = (msg) =>
+      redirectResponse(
+        `${site}/ambassadors?tab=apply&x_error=${encodeURIComponent(msg || "oauth_failed")}`,
+        {},
+        clearXOauthPendingCookies(),
+      );
+    try {
+      if (!xOAuthConfigured()) return fail("not_configured");
+      const err = q.get("error");
+      if (err) return fail(String(err));
+      const code = q.get("code");
+      const state = q.get("state");
+      if (!code || !state) return fail("missing_code");
+      const cookies = parseCookieHeader(hdrs.cookie || hdrs.Cookie || "");
+      if (!cookies.gnomi_x_oauth_state || cookies.gnomi_x_oauth_state !== String(state)) {
+        return fail("invalid_state");
+      }
+      const verifier = cookies.gnomi_x_oauth_verifier;
+      if (!verifier) return fail("missing_verifier");
+      const { clientId, clientSecret, redirectUri } = xOAuthConfig();
+      const token = await exchangeCodeForToken({
+        clientId,
+        clientSecret,
+        redirectUri,
+        code: String(code),
+        verifier,
+      });
+      const me = await fetchXUserMe(token.access_token);
+      const sess = createXSession(me);
+      return {
+        statusCode: 302,
+        headers: {
+          Location: `${site}/ambassadors?tab=apply&x_ok=1`,
+          "Cache-Control": "no-store",
+        },
+        multiValueHeaders: {
+          "Set-Cookie": [xSessionCookie(sess), ...clearXOauthPendingCookies()],
+        },
+        body: "",
+      };
+    } catch (e) {
+      return fail(String(e.message || e).slice(0, 120));
+    }
+  }
+
+  if (method === "GET" && (p === "/api/auth/x/me" || p === "/api/auth/x/me/")) {
+    const cookies = parseCookieHeader(hdrs.cookie || hdrs.Cookie || "");
+    const sess = getXSession(cookies.gnomi_x_sess);
+    if (!sess) return json(200, { connected: false });
+    return json(200, {
+      connected: true,
+      xUserId: sess.xUserId,
+      username: sess.username,
+      name: sess.name,
+    });
+  }
+
+  if (method === "POST" && (p === "/api/auth/x/logout" || p === "/api/auth/x/logout/")) {
+    const cookies = parseCookieHeader(hdrs.cookie || hdrs.Cookie || "");
+    if (cookies.gnomi_x_sess) clearXSession(cookies.gnomi_x_sess);
+    return {
+      statusCode: 200,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Set-Cookie": clearXSessionCookie(),
+        "Access-Control-Allow-Origin": "*",
+      },
+      body: JSON.stringify({ ok: true }),
+    };
+  }
+
   // Network catalog (no RPC required)
   if (method === "GET" && (p === "/api/networks" || p === "/api/networks/")) {
     return json(
@@ -4331,15 +4453,27 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         if (!body.ageOk || !body.rulesOk || !body.notInsider) {
           return json(400, { error: "required consents missing" });
         }
-        const xHandle = String(body.xHandle || "")
+        let xHandle = String(body.xHandle || "")
           .trim()
           .replace(/^@/, "")
           .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
           .split(/[/?#]/)[0]
           .trim()
           .slice(0, 15);
+        const cookies = parseCookieHeader(hdrs.cookie || hdrs.Cookie || "");
+        const xSess = getXSession(cookies.gnomi_x_sess);
+        let xUserId = String(body.xUserId || "").trim();
+        let xVerified = false;
+        if (xSess?.username) {
+          xHandle = xSess.username;
+          xUserId = xSess.xUserId;
+          xVerified = true;
+        }
         if (!/^[A-Za-z0-9_]{1,15}$/.test(xHandle)) {
-          return json(400, { error: "x account required" });
+          return json(400, { error: "x account required — connect X first" });
+        }
+        if (xOAuthConfigured() && !xVerified) {
+          return json(400, { error: "connect X via OAuth to verify account" });
         }
         const samples = Array.isArray(body.samples)
           ? body.samples.map((u) => String(u || "").trim()).filter(Boolean)
@@ -4364,6 +4498,8 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           displayName,
           email,
           xHandle,
+          xUserId: xUserId || null,
+          xVerified,
           g1,
           lang: String(body.lang || "en").slice(0, 16),
           samples: samples.slice(0, 5),

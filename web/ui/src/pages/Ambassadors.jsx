@@ -18,6 +18,7 @@ const emptyApply = {
   displayName: "",
   email: "",
   xHandle: "",
+  xUserId: "",
   xConnected: false,
   g1: "",
   g1Confirm: "",
@@ -110,6 +111,49 @@ export default function Ambassadors() {
     if (tab === "grade" && isAdmin) loadSubs();
   }, [tab, loadBoard, loadSubs, isAdmin]);
 
+  // After X OAuth callback (?tab=apply&x_ok=1) or restore session
+  useEffect(() => {
+    try {
+      const u = new URL(window.location.href);
+      const xErr = u.searchParams.get("x_error");
+      const wantApply = u.searchParams.get("tab") === "apply" || u.searchParams.get("x_ok") === "1";
+      if (xErr) {
+        showToast(t(`X connect failed: ${xErr}`, `Kết nối X lỗi: ${xErr}`), false);
+        setTab("apply");
+      }
+      if (wantApply) setTab("apply");
+      if (u.searchParams.has("x_ok") || u.searchParams.has("x_error") || u.searchParams.has("tab")) {
+        u.searchParams.delete("x_ok");
+        u.searchParams.delete("x_error");
+        u.searchParams.delete("tab");
+        window.history.replaceState({}, "", u.pathname + (u.search ? `?${u.searchParams}` : ""));
+      }
+    } catch {
+      /* ignore */
+    }
+    (async () => {
+      try {
+        const me = await api("/api/auth/x/me");
+        if (me?.connected && me.username) {
+          setApply((s) => ({
+            ...s,
+            xHandle: me.username,
+            xConnected: true,
+            xUserId: me.xUserId || "",
+            displayName: s.displayName || me.name || me.username,
+          }));
+          setContent((s) => ({
+            ...s,
+            xHandle: me.username,
+            displayName: s.displayName || me.name || me.username,
+          }));
+        }
+      } catch {
+        /* oauth not configured or no session */
+      }
+    })();
+  }, []);
+
   function fillG1FromWallet(target) {
     if (!wallet?.address) return connect();
     if (target === "apply") {
@@ -120,20 +164,17 @@ export default function Ambassadors() {
   }
 
   function connectXAccount() {
-    const handle = normalizeXHandle(apply.xHandle);
-    if (!X_HANDLE_RE.test(handle)) {
-      return showToast(
-        t("Enter a valid X username first", "Nhập username X hợp lệ trước"),
-        false,
-      );
-    }
-    window.open(`https://x.com/${handle}`, "_blank", "noopener,noreferrer");
-    setApply((s) => ({ ...s, xHandle: handle, xConnected: true }));
-    showToast(t(`X connected: @${handle}`, `Đã kết nối X: @${handle}`));
+    // Real OAuth 2.0 PKCE — server holds Client Secret
+    window.location.href = "/api/auth/x/start";
   }
 
-  function disconnectX() {
-    setApply((s) => ({ ...s, xConnected: false }));
+  async function disconnectX() {
+    try {
+      await api("/api/auth/x/logout", { method: "POST", body: {} });
+    } catch {
+      /* ignore */
+    }
+    setApply((s) => ({ ...s, xConnected: false, xHandle: "", xUserId: "" }));
   }
 
   async function onApply(e) {
@@ -166,6 +207,7 @@ export default function Ambassadors() {
           displayName: apply.displayName.trim(),
           email: apply.email.trim(),
           xHandle,
+          xUserId: apply.xUserId || undefined,
           g1: apply.g1.trim(),
           lang: apply.lang,
           samples: [apply.sample1, apply.sample2, apply.sample3].map((u) => u.trim()),
@@ -406,6 +448,9 @@ export default function Ambassadors() {
                 {apply.xConnected ? (
                   <div className="admin-actions" style={{ alignItems: "center", gap: "0.75rem" }}>
                     <span className="mono">@{normalizeXHandle(apply.xHandle)}</span>
+                    <span className="season0-chip" style={{ margin: 0 }}>
+                      {t("Verified", "Đã xác minh")}
+                    </span>
                     <a
                       className="btn sm ghost"
                       href={`https://x.com/${normalizeXHandle(apply.xHandle)}`}
@@ -420,21 +465,12 @@ export default function Ambassadors() {
                   </div>
                 ) : (
                   <>
-                    <label style={{ marginBottom: "0.5rem" }}>
-                      {t("X username", "Username X")}
-                      <input
-                        required
-                        value={apply.xHandle}
-                        onChange={(e) =>
-                          setApply((s) => ({
-                            ...s,
-                            xHandle: e.target.value,
-                            xConnected: false,
-                          }))
-                        }
-                        placeholder="@username"
-                      />
-                    </label>
+                    <p className="muted season0-hint" style={{ marginTop: 0 }}>
+                      {t(
+                        "Sign in with X to verify your account (OAuth). Username is filled automatically.",
+                        "Đăng nhập X để xác minh tài khoản (OAuth). Username sẽ được điền tự động.",
+                      )}
+                    </p>
                     <button type="button" className="btn sm primary" onClick={connectXAccount}>
                       {t("Connect X account", "Kết nối tài khoản X")}
                     </button>
