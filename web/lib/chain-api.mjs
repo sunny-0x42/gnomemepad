@@ -1116,6 +1116,80 @@ function allowReportRequest(ip) {
   return true;
 }
 
+/** Ambassador Season 1 applications + content URLs (Blobs + memory). */
+const ambassadorMem = { apply: [], content: [] };
+const ambassadorRateByIp = new Map();
+let ambassadorBlobStorePromise = null;
+const AMBASSADOR_MAX = 500;
+
+async function getAmbassadorBlobStore() {
+  if (ambassadorBlobStorePromise) return ambassadorBlobStorePromise;
+  ambassadorBlobStorePromise = (async () => {
+    try {
+      const mod = await import("@netlify/blobs");
+      const getStore = mod.getStore || mod.default?.getStore;
+      if (typeof getStore !== "function") return null;
+      return getStore("gnomi-ambassadors");
+    } catch {
+      return null;
+    }
+  })();
+  return ambassadorBlobStorePromise;
+}
+
+function allowAmbassadorRequest(ip) {
+  const key = String(ip || "unknown");
+  const now = Date.now();
+  const cur = ambassadorRateByIp.get(key) || { at: now, n: 0 };
+  if (now - cur.at > 60_000) {
+    ambassadorRateByIp.set(key, { at: now, n: 1 });
+    return true;
+  }
+  if (cur.n >= 20) return false;
+  cur.n += 1;
+  ambassadorRateByIp.set(key, cur);
+  return true;
+}
+
+async function loadAmbassadorList(kind) {
+  const k = kind === "apply" ? "apply" : "content";
+  const store = await getAmbassadorBlobStore();
+  if (store) {
+    try {
+      const raw = await store.get(k, { type: "json" });
+      if (Array.isArray(raw?.rows)) return raw.rows;
+      if (Array.isArray(raw)) return raw;
+    } catch {
+      /* memory */
+    }
+  }
+  return Array.isArray(ambassadorMem[k]) ? ambassadorMem[k].slice() : [];
+}
+
+async function pushAmbassadorRecord(kind, row) {
+  const k = kind === "apply" ? "apply" : "content";
+  const prev = await loadAmbassadorList(k);
+  const next = [...prev, row].slice(-AMBASSADOR_MAX);
+  ambassadorMem[k] = next;
+  let durable = false;
+  const store = await getAmbassadorBlobStore();
+  if (store) {
+    try {
+      await store.setJSON(k, { at: Date.now(), rows: next });
+      durable = true;
+    } catch {
+      durable = false;
+    }
+  }
+  return { n: next.length, durable };
+}
+
+async function ambassadorPublicCounts() {
+  const apply = await loadAmbassadorList("apply");
+  const content = await loadAmbassadorList("content");
+  return { applications: apply.length, contentSubmissions: content.length };
+}
+
 /**
  * Post-list swaps live on Gnoswap, not pad TradeHistory.
  * Fetch recent WUGNOT↔token swaps for chart continuity after listing.
@@ -4146,6 +4220,137 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         trades,
         count: trades.length,
       });
+    }
+
+    // Ambassador Season 1 — apply + content submit (open now; prizes after mainnet)
+    if (
+      method === "POST" &&
+      (p === "/api/ambassadors/apply" ||
+        p === "/api/ambassadors/apply/" ||
+        p === "/api/ambassadors/submit" ||
+        p === "/api/ambassadors/submit/")
+    ) {
+      const ip =
+        hdrs["x-forwarded-for"]?.split(",")[0]?.trim() ||
+        hdrs["client-ip"] ||
+        hdrs["x-real-ip"] ||
+        "unknown";
+      if (!allowAmbassadorRequest(ip)) {
+        return json(429, { error: "rate_limited" });
+      }
+      let body = {};
+      try {
+        body = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        return json(400, { error: "invalid json" });
+      }
+      const isApply = p.includes("/apply");
+      const g1 = String(body.g1 || "").trim();
+      if (!/^g1[a-z0-9]{38,}$/i.test(g1)) {
+        return json(400, { error: "invalid g1" });
+      }
+      const displayName = String(body.displayName || body.name || "").trim().slice(0, 80);
+      if (!displayName) return json(400, { error: "displayName required" });
+
+      if (isApply) {
+        if (!body.ageOk || !body.rulesOk || !body.notInsider) {
+          return json(400, { error: "required consents missing" });
+        }
+        const samples = Array.isArray(body.samples)
+          ? body.samples.map((u) => String(u || "").trim()).filter(Boolean)
+          : [];
+        if (samples.length < 3) return json(400, { error: "three sample links required" });
+        for (const u of samples) {
+          try {
+            const parsed = new URL(u);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+              return json(400, { error: "invalid sample url" });
+            }
+          } catch {
+            return json(400, { error: "invalid sample url" });
+          }
+        }
+        const email = String(body.email || "").trim().slice(0, 120);
+        if (!email || !email.includes("@")) return json(400, { error: "email required" });
+        const row = {
+          id: `app_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+          kind: "apply",
+          at: Date.now(),
+          displayName,
+          email,
+          discord: String(body.discord || "").trim().slice(0, 64),
+          xHandle: String(body.xHandle || "")
+            .trim()
+            .replace(/^@/, "")
+            .slice(0, 64),
+          g1,
+          lang: String(body.lang || "en").slice(0, 16),
+          samples: samples.slice(0, 5),
+          why: String(body.why || "").trim().slice(0, 500),
+          status: "pending",
+        };
+        const out = await pushAmbassadorRecord("apply", row);
+        return json(200, {
+          ok: true,
+          id: row.id,
+          stored: out.n,
+          durable: out.durable,
+          note: "Prizes settle after mainnet Month-1 (Option A).",
+        });
+      }
+
+      // content submit
+      const url = String(body.url || "").trim();
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          return json(400, { error: "invalid url" });
+        }
+      } catch {
+        return json(400, { error: "invalid url" });
+      }
+      const title = String(body.title || "").trim().slice(0, 160);
+      if (!title) return json(400, { error: "title required" });
+      const row = {
+        id: `cnt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        kind: "content",
+        at: Date.now(),
+        displayName,
+        g1,
+        discord: String(body.discord || "").trim().slice(0, 64),
+        xHandle: String(body.xHandle || "")
+          .trim()
+          .replace(/^@/, "")
+          .slice(0, 64),
+        title,
+        url,
+        lang: String(body.lang || "en").slice(0, 16),
+        notes: String(body.notes || "").trim().slice(0, 400),
+        status: "pending",
+      };
+      const out = await pushAmbassadorRecord("content", row);
+      return json(200, {
+        ok: true,
+        id: row.id,
+        stored: out.n,
+        durable: out.durable,
+        note: "Content accepted from today; prizes after mainnet.",
+      });
+    }
+
+    if (method === "GET" && (p === "/api/ambassadors" || p === "/api/ambassadors/")) {
+      return json(
+        200,
+        {
+          season: "amb-s1",
+          submitOpen: true,
+          prizeTiming: "after_mainnet_month1",
+          metric: "option_a_protocol_fee_accrued_10pct",
+          split: [40, 25, 15, 10, 10],
+          counts: await ambassadorPublicCounts(),
+        },
+        { maxAge: 30 },
+      );
     }
 
     // Client ExactIn success → shared chart points (Gnoswap indexer often empty for memes)

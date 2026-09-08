@@ -24,6 +24,7 @@ const MORE_NAV = [
   { to: "/creator", key: "creator" },
   { to: "/profile", key: "profile" },
   { to: "/rewards", key: "rewards" },
+  { to: "/ambassadors", key: "ambassadors" },
   { to: "/ops", key: "ops" },
   { to: "/docs", key: "guide" },
 ];

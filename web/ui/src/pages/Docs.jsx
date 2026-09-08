@@ -758,6 +758,16 @@ export default function Docs() {
           </p>
           <p>
             <Link to="/rewards">{t("Open Season 0 →", "Mở Season 0 →")}</Link>
+            {" · "}
+            <Link to="/ambassadors">
+              {t("Ambassador Season 1 →", "Ambassador Season 1 →")}
+            </Link>
+          </p>
+          <p className="docs-hint">
+            {t(
+              "Ambassadors: submit content from today; prize pool (Option A) settles after mainnet Month-1 — separate from Season 0 Points.",
+              "Ambassadors: nộp bài từ hôm nay; prize pool (Option A) tính sau mainnet Month-1 — tách khỏi Season 0 Points.",
+            )}
           </p>
         </section>
 

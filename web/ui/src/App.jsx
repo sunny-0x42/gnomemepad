@@ -16,6 +16,7 @@ import Portfolio from "./pages/Portfolio";
 import Creator from "./pages/Creator";
 import Profile from "./pages/Profile";
 import Rewards from "./pages/Rewards";
+import Ambassadors from "./pages/Ambassadors";
 import Leaderboard from "./pages/Leaderboard";
 import Ops from "./pages/Ops";
 import Admin from "./pages/Admin";
@@ -58,6 +59,7 @@ export default function App() {
               <Route path="creator" element={<Creator />} />
               <Route path="profile" element={<Profile />} />
               <Route path="rewards" element={<Rewards />} />
+              <Route path="ambassadors" element={<Ambassadors />} />
               <Route path="leaderboard" element={<Leaderboard />} />
               <Route path="ops" element={<Ops />} />
               <Route

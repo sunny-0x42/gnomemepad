@@ -11,6 +11,13 @@ const STATIC = [
   { id: "nav-leaderboard", label: "Leaderboard", hint: "Top traders, PnL, volume", to: "/leaderboard", group: "Navigate" },
   { id: "nav-creator", label: "Creator hub", hint: "Claim fees", to: "/creator", group: "Navigate" },
   { id: "nav-rewards", label: "Rewards", hint: "Points & check-in", to: "/rewards", group: "Navigate" },
+  {
+    id: "nav-ambassadors",
+    label: "Ambassadors",
+    hint: "Season 1 apply & submit",
+    to: "/ambassadors",
+    group: "Navigate",
+  },
   { id: "nav-ops", label: "Ops", hint: "Module health", to: "/ops", group: "Navigate" },
   { id: "nav-docs", label: "Guide", hint: "How it works", to: "/docs", group: "Navigate" },
 ];
