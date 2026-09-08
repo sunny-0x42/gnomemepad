@@ -4256,6 +4256,16 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         if (!body.ageOk || !body.rulesOk || !body.notInsider) {
           return json(400, { error: "required consents missing" });
         }
+        const xHandle = String(body.xHandle || "")
+          .trim()
+          .replace(/^@/, "")
+          .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+          .split(/[/?#]/)[0]
+          .trim()
+          .slice(0, 15);
+        if (!/^[A-Za-z0-9_]{1,15}$/.test(xHandle)) {
+          return json(400, { error: "x account required" });
+        }
         const samples = Array.isArray(body.samples)
           ? body.samples.map((u) => String(u || "").trim()).filter(Boolean)
           : [];
@@ -4278,11 +4288,7 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           at: Date.now(),
           displayName,
           email,
-          discord: String(body.discord || "").trim().slice(0, 64),
-          xHandle: String(body.xHandle || "")
-            .trim()
-            .replace(/^@/, "")
-            .slice(0, 64),
+          xHandle,
           g1,
           lang: String(body.lang || "en").slice(0, 16),
           samples: samples.slice(0, 5),
@@ -4311,17 +4317,23 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       }
       const title = String(body.title || "").trim().slice(0, 160);
       if (!title) return json(400, { error: "title required" });
+      const xHandle = String(body.xHandle || "")
+        .trim()
+        .replace(/^@/, "")
+        .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+        .split(/[/?#]/)[0]
+        .trim()
+        .slice(0, 15);
+      if (!/^[A-Za-z0-9_]{1,15}$/.test(xHandle)) {
+        return json(400, { error: "x account required" });
+      }
       const row = {
         id: `cnt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
         kind: "content",
         at: Date.now(),
         displayName,
         g1,
-        discord: String(body.discord || "").trim().slice(0, 64),
-        xHandle: String(body.xHandle || "")
-          .trim()
-          .replace(/^@/, "")
-          .slice(0, 64),
+        xHandle,
         title,
         url,
         lang: String(body.lang || "en").slice(0, 16),

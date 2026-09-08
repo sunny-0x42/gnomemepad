@@ -14,8 +14,7 @@ Use in Typeform / Google Form / Discord modal.
 | Country / region | short text or dropdown | yes | For geo/KYC screening later — not public |
 | Primary language | dropdown | yes | EN / VI / Other (specify) |
 | Email | email | yes | Payout + ops only; not public |
-| Discord username | short text | yes | `name#0000` or new username |
-| X (Twitter) handle | short text | yes | `@…` — must be public |
+| X account | short text + Connect | yes | `@username` — required social identity (no Discord) |
 | Telegram (optional) | short text | no | |
 | Other channel (optional) | URL | no | YouTube / TikTok / Lens / blog |
 
@@ -25,8 +24,8 @@ Use in Typeform / Google Form / Discord modal.
 
 | Field | Type | Required | Notes / validation |
 |---|---|---|---|
-| Adena `g1` address | short text | yes | Regex `^g1[a-z0-9]{38,}$`; used for SetReferrer + payout default |
-| Confirm `g1` | short text | yes | Must match above |
+| Gno wallet address | short text | yes | Label in English; `g1…`; SetReferrer + payout default |
+| Confirm Gno wallet address | short text | yes | Must match above |
 | Preferred payout note | short text | no | e.g. “same g1” / “contact me for USDC” — final asset TBD |
 
 ---
@@ -54,18 +53,9 @@ Use in Typeform / Google Form / Discord modal.
 
 ---
 
-## E. Legal / CoC (checkboxes — all required)
+## E. Legal / CoC (one checkbox on web)
 
-1. I have read **Ambassador Season 1 Rules (Option A)** and agree.  
-2. I understand the prize pool is **discretionary**, equal to **10% × ProtocolFeeAccrued** in the Season window (**if any**), and **may be zero**.  
-3. This is **not** salary, APR, dividend, or an investment return.  
-4. **Season 0 Points are not cash** and are separate from this contest.  
-5. **Testnet ≠ mainnet.**  
-6. I will not wash trade, sybil, buy fake engagement, or promise guaranteed profits.  
-7. I accept that Gnomi Labs may DQ / claw back for abuse and may require KYC before payout.  
-8. I am responsible for my local taxes and laws; Gnomi does not give legal/tax advice.  
-9. I will never ask users for seed phrases / private keys.  
-10. Team / protocol controllers: I confirm I am **not** an ineligible insider (or I am applying as mentor-only with no prize).
+**Single confirm:** I am 18+, agree to the Ambassador Rules (prizes after mainnet · discretionary · not APR/investment · Season 0 Points ≠ cash), and I am not a Gnomi team member applying for a prize.
 
 ---
 

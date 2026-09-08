@@ -16,8 +16,8 @@ import {
 const emptyApply = {
   displayName: "",
   email: "",
-  discord: "",
   xHandle: "",
+  xConnected: false,
   g1: "",
   g1Confirm: "",
   lang: "en",
@@ -25,21 +25,29 @@ const emptyApply = {
   sample2: "",
   sample3: "",
   why: "",
-  ageOk: false,
-  rulesOk: false,
-  notInsider: false,
+  agreeOk: false,
 };
 
 const emptyContent = {
   displayName: "",
   g1: "",
-  discord: "",
   xHandle: "",
   title: "",
   url: "",
   lang: "en",
   notes: "",
 };
+
+const X_HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+
+function normalizeXHandle(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/^@/, "")
+    .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+    .split(/[/?#]/)[0]
+    .trim();
+}
 
 export default function Ambassadors() {
   const { wallet, connect, showToast } = useApp();
@@ -66,14 +74,41 @@ export default function Ambassadors() {
     }
   }
 
+  function connectXAccount() {
+    const handle = normalizeXHandle(apply.xHandle);
+    if (!X_HANDLE_RE.test(handle)) {
+      return showToast(
+        t("Enter a valid X username first", "Nhập username X hợp lệ trước"),
+        false,
+      );
+    }
+    window.open(`https://x.com/${handle}`, "_blank", "noopener,noreferrer");
+    setApply((s) => ({ ...s, xHandle: handle, xConnected: true }));
+    showToast(t(`X connected: @${handle}`, `Đã kết nối X: @${handle}`));
+  }
+
+  function disconnectX() {
+    setApply((s) => ({ ...s, xConnected: false }));
+  }
+
   async function onApply(e) {
     e.preventDefault();
     if (!open) return showToast(t("Submissions not open yet", "Chưa mở nộp"), false);
-    if (!apply.ageOk || !apply.rulesOk || !apply.notInsider) {
-      return showToast(t("Accept all required checkboxes", "Cần tick đủ checkbox"), false);
+    if (!apply.agreeOk) {
+      return showToast(t("Please confirm the agreement", "Cần xác nhận đồng ý"), false);
+    }
+    const xHandle = normalizeXHandle(apply.xHandle);
+    if (!apply.xConnected || !X_HANDLE_RE.test(xHandle)) {
+      return showToast(
+        t("Connect your X account to continue", "Kết nối tài khoản X để tiếp tục"),
+        false,
+      );
     }
     if (!G1_RE.test(apply.g1.trim()) || apply.g1.trim() !== apply.g1Confirm.trim()) {
-      return showToast(t("Invalid or mismatched g1", "g1 không hợp lệ / không khớp"), false);
+      return showToast(
+        t("Invalid or mismatched Gno wallet address", "Địa chỉ ví Gno không hợp lệ / không khớp"),
+        false,
+      );
     }
     if (!apply.sample1.trim() || !apply.sample2.trim() || !apply.sample3.trim()) {
       return showToast(t("Three sample links required", "Cần 3 link mẫu"), false);
@@ -85,8 +120,7 @@ export default function Ambassadors() {
         body: {
           displayName: apply.displayName.trim(),
           email: apply.email.trim(),
-          discord: apply.discord.trim(),
-          xHandle: apply.xHandle.trim().replace(/^@/, ""),
+          xHandle,
           g1: apply.g1.trim(),
           lang: apply.lang,
           samples: [apply.sample1, apply.sample2, apply.sample3].map((u) => u.trim()),
@@ -110,7 +144,11 @@ export default function Ambassadors() {
     e.preventDefault();
     if (!open) return showToast(t("Submissions not open yet", "Chưa mở nộp"), false);
     if (!G1_RE.test(content.g1.trim())) {
-      return showToast(t("Invalid g1", "g1 không hợp lệ"), false);
+      return showToast(t("Invalid Gno wallet address", "Địa chỉ ví Gno không hợp lệ"), false);
+    }
+    const xHandle = normalizeXHandle(content.xHandle);
+    if (!X_HANDLE_RE.test(xHandle)) {
+      return showToast(t("X account required", "Cần tài khoản X"), false);
     }
     try {
       // eslint-disable-next-line no-new
@@ -125,8 +163,7 @@ export default function Ambassadors() {
         body: {
           displayName: content.displayName.trim(),
           g1: content.g1.trim(),
-          discord: content.discord.trim(),
-          xHandle: content.xHandle.trim().replace(/^@/, ""),
+          xHandle,
           title: content.title.trim(),
           url: content.url.trim(),
           lang: content.lang,
@@ -278,26 +315,52 @@ export default function Ambassadors() {
                   onChange={(e) => setApply((s) => ({ ...s, email: e.target.value }))}
                 />
               </label>
+
+              <div className="panel" style={{ margin: "0.75rem 0", padding: "0.85rem" }}>
+                <strong style={{ display: "block", marginBottom: "0.5rem" }}>
+                  {t("X account", "Tài khoản X")}
+                </strong>
+                {apply.xConnected ? (
+                  <div className="admin-actions" style={{ alignItems: "center", gap: "0.75rem" }}>
+                    <span className="mono">@{normalizeXHandle(apply.xHandle)}</span>
+                    <a
+                      className="btn sm ghost"
+                      href={`https://x.com/${normalizeXHandle(apply.xHandle)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {t("Open profile", "Mở profile")}
+                    </a>
+                    <button type="button" className="btn sm ghost" onClick={disconnectX}>
+                      {t("Disconnect", "Ngắt kết nối")}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <label style={{ marginBottom: "0.5rem" }}>
+                      {t("X username", "Username X")}
+                      <input
+                        required
+                        value={apply.xHandle}
+                        onChange={(e) =>
+                          setApply((s) => ({
+                            ...s,
+                            xHandle: e.target.value,
+                            xConnected: false,
+                          }))
+                        }
+                        placeholder="@username"
+                      />
+                    </label>
+                    <button type="button" className="btn sm primary" onClick={connectXAccount}>
+                      {t("Connect X account", "Kết nối tài khoản X")}
+                    </button>
+                  </>
+                )}
+              </div>
+
               <label>
-                Discord
-                <input
-                  required
-                  value={apply.discord}
-                  onChange={(e) => setApply((s) => ({ ...s, discord: e.target.value }))}
-                  placeholder="username"
-                />
-              </label>
-              <label>
-                X handle
-                <input
-                  required
-                  value={apply.xHandle}
-                  onChange={(e) => setApply((s) => ({ ...s, xHandle: e.target.value }))}
-                  placeholder="@..."
-                />
-              </label>
-              <label>
-                {t("Adena g1", "Adena g1")}
+                Gno wallet address
                 <input
                   required
                   className="mono"
@@ -307,12 +370,13 @@ export default function Ambassadors() {
                 />
               </label>
               <label>
-                {t("Confirm g1", "Xác nhận g1")}
+                Confirm Gno wallet address
                 <input
                   required
                   className="mono"
                   value={apply.g1Confirm}
                   onChange={(e) => setApply((s) => ({ ...s, g1Confirm: e.target.value }))}
+                  placeholder="g1..."
                 />
               </label>
               <div className="admin-actions" style={{ marginBottom: "0.75rem" }}>
@@ -370,37 +434,19 @@ export default function Ambassadors() {
                   onChange={(e) => setApply((s) => ({ ...s, why: e.target.value }))}
                 />
               </label>
-              <label className="season0-hint" style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+              <label
+                className="season0-hint"
+                style={{ display: "flex", gap: "0.55rem", alignItems: "flex-start", marginTop: "0.75rem" }}
+              >
                 <input
                   type="checkbox"
-                  checked={apply.ageOk}
-                  onChange={(e) => setApply((s) => ({ ...s, ageOk: e.target.checked }))}
-                />
-                <span>{t("I confirm I am 18+", "Tôi xác nhận đủ 18 tuổi")}</span>
-              </label>
-              <label className="season0-hint" style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                <input
-                  type="checkbox"
-                  checked={apply.rulesOk}
-                  onChange={(e) => setApply((s) => ({ ...s, rulesOk: e.target.checked }))}
+                  checked={apply.agreeOk}
+                  onChange={(e) => setApply((s) => ({ ...s, agreeOk: e.target.checked }))}
                 />
                 <span>
                   {t(
-                    "I agree to Option A Rules — discretionary pool after mainnet; not APR/investment; Points ≠ cash",
-                    "Tôi đồng ý Rules Option A — pool discretionary sau mainnet; không APR/đầu tư; Points ≠ tiền",
-                  )}
-                </span>
-              </label>
-              <label className="season0-hint" style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                <input
-                  type="checkbox"
-                  checked={apply.notInsider}
-                  onChange={(e) => setApply((s) => ({ ...s, notInsider: e.target.checked }))}
-                />
-                <span>
-                  {t(
-                    "I am not a Gnomi team / protocol admin seeking prize",
-                    "Tôi không phải team Gnomi / protocol admin nhận giải",
+                    "I am 18+, agree to the Ambassador Rules (prizes after mainnet · discretionary · not APR/investment · Season 0 Points ≠ cash), and I am not a Gnomi team member applying for a prize.",
+                    "Tôi đủ 18 tuổi, đồng ý Rules Ambassador (thưởng sau mainnet · discretionary · không APR/đầu tư · Season 0 Points ≠ tiền), và không phải thành viên team Gnomi nhận giải.",
                   )}
                 </span>
               </label>
@@ -440,7 +486,7 @@ export default function Ambassadors() {
                 />
               </label>
               <label>
-                {t("Adena g1 (same as apply)", "Adena g1 (cùng đơn apply)")}
+                Gno wallet address
                 <input
                   required
                   className="mono"
@@ -457,18 +503,12 @@ export default function Ambassadors() {
                 </button>
               </div>
               <label>
-                Discord
+                X account
                 <input
-                  value={content.discord}
-                  onChange={(e) => setContent((s) => ({ ...s, discord: e.target.value }))}
-                />
-              </label>
-              <label>
-                X handle
-                <input
+                  required
                   value={content.xHandle}
                   onChange={(e) => setContent((s) => ({ ...s, xHandle: e.target.value }))}
-                  placeholder="@..."
+                  placeholder="@username"
                 />
               </label>
               <label>
