@@ -1032,20 +1032,46 @@ function parseTradeHistory(raw) {
 /**
  * Shared ExactIn reports from gnomi.fun clients (Gnoswap public indexer
  * does not list Sapphire meme pools today — REST /swap/history stays empty).
- * In-memory per Netlify isolate; cold start resets (MVP).
+ * Prefer Netlify Blobs (cross-isolate); fall back to in-memory.
  */
 const reportedTradesByToken = new Map(); // tokenKey -> { at, rows[] }
 const REPORTED_MAX_PER_TOKEN = 80;
 const REPORTED_TTL_MS = 6 * 60 * 60 * 1000;
 const reportRateByIp = new Map(); // ip -> { at, n }
+let reportedBlobStorePromise = null;
 
 function reportedStoreKey(tokenKey, poolPath) {
   return String(tokenKey || poolPath || "").trim();
 }
 
-function getReportedTrades(tokenKey, poolPath) {
+async function getReportedBlobStore() {
+  if (reportedBlobStorePromise) return reportedBlobStorePromise;
+  reportedBlobStorePromise = (async () => {
+    try {
+      const mod = await import("@netlify/blobs");
+      const getStore = mod.getStore || mod.default?.getStore;
+      if (typeof getStore !== "function") return null;
+      return getStore("gnomi-reported-trades");
+    } catch {
+      return null;
+    }
+  })();
+  return reportedBlobStorePromise;
+}
+
+async function getReportedTrades(tokenKey, poolPath) {
   const k = reportedStoreKey(tokenKey, poolPath);
   if (!k) return [];
+  const store = await getReportedBlobStore();
+  if (store) {
+    try {
+      const raw = await store.get(k, { type: "json" });
+      const rows = Array.isArray(raw?.rows) ? raw.rows : Array.isArray(raw) ? raw : [];
+      return rows.slice(-REPORTED_MAX_PER_TOKEN);
+    } catch {
+      /* fall through to memory */
+    }
+  }
   const e = reportedTradesByToken.get(k);
   if (!e) return [];
   if (Date.now() - e.at > REPORTED_TTL_MS) {
@@ -1055,20 +1081,23 @@ function getReportedTrades(tokenKey, poolPath) {
   return Array.isArray(e.rows) ? e.rows.slice() : [];
 }
 
-function pushReportedTrade(tokenKey, poolPath, row) {
+async function pushReportedTrade(tokenKey, poolPath, row) {
   const k = reportedStoreKey(tokenKey, poolPath);
   if (!k || !row) return false;
-  const prev = reportedTradesByToken.get(k);
-  const rows = prev && Array.isArray(prev.rows) ? prev.rows.slice() : [];
-  const merged = mergeChartPoints(rows, [row]);
-  // keep newest last for chart; merge sorts ascending
-  reportedTradesByToken.set(k, {
-    at: Date.now(),
-    rows: merged.slice(-REPORTED_MAX_PER_TOKEN),
-  });
+  const prevRows = await getReportedTrades(k, "");
+  const merged = mergeChartPoints(prevRows, [row]).slice(-REPORTED_MAX_PER_TOKEN);
+  reportedTradesByToken.set(k, { at: Date.now(), rows: merged });
   if (reportedTradesByToken.size > 128) {
     const first = reportedTradesByToken.keys().next().value;
     if (first != null) reportedTradesByToken.delete(first);
+  }
+  const store = await getReportedBlobStore();
+  if (store) {
+    try {
+      await store.setJSON(k, { at: Date.now(), rows: merged });
+    } catch {
+      /* memory still holds for this isolate */
+    }
   }
   return true;
 }
@@ -1480,7 +1509,7 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     }
   }
   try {
-    const reported = getReportedTrades(tokenKey, m.gnoswapPoolPath);
+    const reported = await getReportedTrades(tokenKey, m.gnoswapPoolPath);
     if (reported.length) m.chart = mergeChartPoints(m.chart, reported);
   } catch {
     /* non-fatal */
@@ -4193,11 +4222,13 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         hash,
         source: "reported",
       };
-      pushReportedTrade(tk, m.gnoswapPoolPath || poolPath, row);
+      await pushReportedTrade(tk, m.gnoswapPoolPath || poolPath, row);
+      const stored = (await getReportedTrades(tk, m.gnoswapPoolPath)).length;
       return json(200, {
         ok: true,
         tokenKey: tk,
-        stored: getReportedTrades(tk, m.gnoswapPoolPath).length,
+        stored,
+        durable: !!(await getReportedBlobStore()),
       });
     }
 
