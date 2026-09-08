@@ -73,8 +73,7 @@ export default function Token() {
     toggleWatch,
     health,
   } = useApp();
-  const { t, lang } = usePrefs();
-  const vi = lang === "vi";
+  const { t } = usePrefs();
 
   const [m, setM] = useState(null);
   const [meta, setMeta] = useState(null);
@@ -2083,24 +2082,6 @@ export default function Token() {
 
           {/* Chart container */}
           <div className="terminal-chart-box">
-            {(m.dexHistoryEmpty || m.volumeScope === "curve_only") &&
-              !!(m.gnoswapListed || m.listVenue) && (
-                <div
-                  className="docs-callout docs-callout-warn"
-                  style={{ margin: "0 0 0.65rem", padding: "0.55rem 0.75rem" }}
-                >
-                  <strong>
-                    {vi ? "Chart post-list (best-effort)" : "Post-list chart (best-effort)"}
-                  </strong>
-                  <p style={{ margin: "0.25rem 0 0", fontSize: "0.85rem" }}>
-                    {vi
-                      ? m.volumeNoteVi ||
-                        "Indexer Gnoswap chưa có swap history cho pool meme này. Chart = curve (+ swap bạn làm trên gnomi.fun)."
-                      : m.volumeNote ||
-                        "Gnoswap public indexer has no swap history for this meme pool yet. Chart = curve history (+ swaps you make on gnomi.fun)."}
-                  </p>
-                </div>
-              )}
             <PriceChart
               points={trades}
               symbol={m.symbol}
