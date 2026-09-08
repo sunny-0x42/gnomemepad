@@ -4614,11 +4614,53 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       const submissions = content
         .slice()
         .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+      const applications = apply
+        .slice()
+        .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
       return json(200, {
         submissions,
-        applications: apply.length,
+        applications,
+        applicationCount: applications.length,
+        submissionCount: submissions.length,
         signerAddr: SIGNER_ADDR,
       });
+    }
+
+    if (
+      method === "POST" &&
+      (p === "/api/ambassadors/application-status" ||
+        p === "/api/ambassadors/application-status/")
+    ) {
+      let body = {};
+      try {
+        body = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        return json(400, { error: "invalid json" });
+      }
+      const adminG1 = String(body.adminG1 || body.address || "").trim().toLowerCase();
+      const signer = String(SIGNER_ADDR || DEFAULT_ADDR).toLowerCase();
+      if (!adminG1 || adminG1 !== signer) {
+        return json(403, { error: "admin only" });
+      }
+      const id = String(body.id || "").trim();
+      const status = String(body.status || "").trim().toLowerCase();
+      if (!id) return json(400, { error: "id required" });
+      if (!["pending", "approved", "rejected"].includes(status)) {
+        return json(400, { error: "status must be pending|approved|rejected" });
+      }
+      const list = await loadAmbassadorList("apply");
+      const idx = list.findIndex((r) => String(r.id) === id);
+      if (idx < 0) return json(404, { error: "application not found" });
+      const nextRow = {
+        ...list[idx],
+        status,
+        statusAt: Date.now(),
+        statusBy: adminG1,
+      };
+      const next = list.slice();
+      next[idx] = nextRow;
+      const saved = await saveAmbassadorList("apply", next);
+      return json(200, { ok: true, application: nextRow, durable: saved.durable });
     }
 
     if (

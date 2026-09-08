@@ -22,6 +22,8 @@ export default function Admin() {
   const [listFeeGnsInput, setListFeeGnsInput] = useState("100");
   const [claimBusy, setClaimBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [ambApps, setAmbApps] = useState([]);
+  const [ambBusy, setAmbBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -34,15 +36,42 @@ export default function Admin() {
       setD(data);
       setBond(b);
       setOps(o);
+      if (wallet?.address) {
+        try {
+          const amb = await api(
+            `/api/ambassadors/submissions?admin=${encodeURIComponent(wallet.address)}`,
+          );
+          setAmbApps(Array.isArray(amb?.applications) ? amb.applications : []);
+        } catch {
+          setAmbApps([]);
+        }
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [wallet?.address]);
 
   useEffect(() => {
     if (!isAdmin) return;
     load().catch((e) => setLog(e.message || String(e)));
   }, [isAdmin, load]);
+
+  async function setApplicationStatus(id, status) {
+    if (!wallet?.address) return;
+    setAmbBusy(true);
+    try {
+      await api("/api/ambassadors/application-status", {
+        method: "POST",
+        body: { id, status, adminG1: wallet.address },
+      });
+      showToast(`Application ${status}`);
+      await load();
+    } catch (e) {
+      showToast(e.message || String(e), false);
+    } finally {
+      setAmbBusy(false);
+    }
+  }
 
   if (!wallet) {
     return (
@@ -747,6 +776,151 @@ export default function Admin() {
                     EndPromo
                   </button>
                 </div>
+              </article>
+
+              <article className="admin-card admin-card-wide">
+                <div className="admin-fees-head">
+                  <div>
+                    <h3 style={{ margin: 0 }}>Ambassador applications</h3>
+                    <p className="muted admin-hint" style={{ margin: "0.35rem 0 0" }}>
+                      Season 1 Signal Builders · {ambApps.length} apply
+                      {" · "}
+                      <a href="/ambassadors">Open Ambassadors page</a>
+                      {" (Grade content)"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn sm ghost"
+                    disabled={loading || ambBusy}
+                    onClick={() => load()}
+                  >
+                    Refresh list
+                  </button>
+                </div>
+                {!ambApps.length ? (
+                  <p className="muted" style={{ marginTop: "0.75rem" }}>
+                    No applications yet.
+                  </p>
+                ) : (
+                  <div className="admin-kv" style={{ marginTop: "0.75rem", gap: "0.65rem" }}>
+                    {ambApps.map((row) => {
+                      const st = String(row.status || "pending");
+                      const when = row.at
+                        ? new Date(Number(row.at)).toISOString().slice(0, 16).replace("T", " ")
+                        : "—";
+                      return (
+                        <div
+                          key={row.id}
+                          style={{
+                            borderTop: "1px solid var(--border, #333)",
+                            paddingTop: "0.65rem",
+                            marginTop: "0.35rem",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "0.5rem 1rem",
+                              alignItems: "baseline",
+                              justifyContent: "space-between",
+                            }}
+                          >
+                            <div>
+                              <strong>{row.displayName || "—"}</strong>
+                              {row.xHandle ? (
+                                <a
+                                  className="mono"
+                                  style={{ marginLeft: "0.5rem" }}
+                                  href={`https://x.com/${row.xHandle}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  @{row.xHandle}
+                                </a>
+                              ) : null}
+                              {row.xVerified ? (
+                                <span className="badge heat-hot" style={{ marginLeft: "0.4rem" }}>
+                                  X verified
+                                </span>
+                              ) : null}
+                              <span
+                                className="badge"
+                                style={{ marginLeft: "0.4rem", textTransform: "capitalize" }}
+                              >
+                                {st}
+                              </span>
+                            </div>
+                            <span className="mono faint" style={{ fontSize: "0.75rem" }}>
+                              {when} UTC
+                            </span>
+                          </div>
+                          <div className="mono faint" style={{ fontSize: "0.8rem", marginTop: "0.25rem" }}>
+                            {row.g1 ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn sm ghost"
+                                  style={{ padding: "0.1rem 0.35rem", marginRight: "0.35rem" }}
+                                  onClick={() => copyText(row.g1).then(() => showToast("g1 copied"))}
+                                >
+                                  {shortAddr(row.g1)}
+                                </button>
+                              </>
+                            ) : (
+                              "no g1"
+                            )}
+                            {row.email ? ` · ${row.email}` : ""}
+                            {row.lang ? ` · ${row.lang}` : ""}
+                          </div>
+                          {row.why ? (
+                            <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>
+                              {row.why}
+                            </p>
+                          ) : null}
+                          {Array.isArray(row.samples) && row.samples.length > 0 ? (
+                            <div style={{ marginTop: "0.35rem", fontSize: "0.8rem" }}>
+                              {row.samples.map((u) => (
+                                <div key={u}>
+                                  <a href={u} target="_blank" rel="noreferrer">
+                                    {u}
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="admin-actions" style={{ marginTop: "0.5rem" }}>
+                            <button
+                              type="button"
+                              className="btn sm primary"
+                              disabled={ambBusy || st === "approved"}
+                              onClick={() => setApplicationStatus(row.id, "approved")}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="btn sm"
+                              disabled={ambBusy || st === "rejected"}
+                              onClick={() => setApplicationStatus(row.id, "rejected")}
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              className="btn sm ghost"
+                              disabled={ambBusy || st === "pending"}
+                              onClick={() => setApplicationStatus(row.id, "pending")}
+                            >
+                              Reset pending
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </article>
 
               <article className="admin-card admin-card-wide admin-danger-zone">
