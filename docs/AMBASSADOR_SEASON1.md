@@ -90,11 +90,9 @@ Payout asset: GNOT or stable to registered `g1` — **not** a new pad token, **n
 
 | Pillar | Weight | How |
 |---|---|---|
-| Content quality | **35%** | Guide/thread/video on Create → curve → graduate → Gnoswap; facts correct; human panel |
-| On-chain referrals | **25%** | `pointsv2.SetReferrer`; unique first-time referees with real curve activity |
-| Qualified volume brought | **20%** | Curve Buy volume of referred wallets; wash/sell loops slash; post-list Gnoswap ExactIn **does not** count (same as Season 0) |
-| Quests / consistency | **10%** | Check-in / quests on `/rewards` |
-| Community signal | **10%** | Discord help, translations, useful bugs — mod attestation |
+| Content quality | **50%** | Guide/thread/video; admin scores each submit 0–100 |
+| On-chain referrals | **30%** | `pointsv2.SetReferrer`; unique first-time referees with real curve activity |
+| Qualified volume brought | **20%** | **Mainnet Month-1 only**; Sapphire testnet does not count; post-list Gnoswap ExactIn does not count |
 
 **DQ:** sybil, wash, fake engagement, “guaranteed profit”, self-referral rings.
 
