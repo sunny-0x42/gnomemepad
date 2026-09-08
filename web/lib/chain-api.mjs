@@ -4458,7 +4458,7 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         {
           season: "amb-s1",
           updatedAt: Date.now(),
-          note: "MVP ranks by admin content scores (45% pillar). Other pillars TBD after mainnet.",
+          note: "MVP ranks by admin content scores (45%). Volume pillar (15%) is mainnet-only — Sapphire testnet volume does not count.",
           board,
         },
         { maxAge: 15 },

@@ -547,8 +547,8 @@ export default function Ambassadors() {
           <p className="muted season0-hint">
             {boardNote ||
               t(
-                "MVP board uses admin content scores (45% pillar). Other pillars fill in later.",
-                "BXH MVP dùng điểm content do admin chấm (trụ 45%). Các trụ khác bổ sung sau.",
+                "MVP board uses admin content scores (45%). Volume (15%) counts on mainnet only — not Sapphire.",
+                "BXH MVP dùng điểm content admin (45%). Volume (15%) chỉ tính trên mainnet — không tính Sapphire.",
               )}
           </p>
           <div className="panel">

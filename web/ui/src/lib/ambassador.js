@@ -31,7 +31,12 @@ export const AMBASSADOR_SPLIT = [
 export const AMBASSADOR_RUBRIC = [
   { id: "content", en: "Content quality", vi: "Chất lượng nội dung", pct: 45 },
   { id: "referrals", en: "On-chain referrals (SetReferrer)", vi: "Referral on-chain (SetReferrer)", pct: 25 },
-  { id: "volume", en: "Qualified curve volume brought", vi: "Volume curve hợp lệ mang về", pct: 15 },
+  {
+    id: "volume",
+    en: "Qualified curve volume brought (mainnet only)",
+    vi: "Volume curve hợp lệ mang về (chỉ mainnet)",
+    pct: 15,
+  },
   { id: "quests", en: "Quests / consistency", vi: "Quest / duy trì", pct: 10 },
   { id: "community", en: "Community signal", vi: "Tín hiệu cộng đồng", pct: 5 },
 ];
@@ -56,7 +61,8 @@ export function ambassadorRulesBlocks(vi) {
         items: [
           "Nội dung dạy loop: Create → curve → graduate → locked LP / Gnoswap (đúng facts).",
           "Referral on-chain: referee SetReferrer tới g1 của bạn + hoạt động curve thật.",
-          "ExactIn Gnoswap sau list không tính volume Season/Ambassador (cùng tinh thần Season 0).",
+          "Trụ volume (15%): chỉ tính curve volume trên mainnet Month-1 — Sapphire testnet không tính.",
+          "ExactIn Gnoswap sau list không tính volume Ambassador.",
           "Wash / sybil / hứa lợi nhuận = loại.",
         ],
       },
@@ -85,7 +91,8 @@ export function ambassadorRulesBlocks(vi) {
       items: [
         "Content that teaches Create → curve → graduate → locked LP / Gnoswap (correct facts).",
         "On-chain referrals: referee SetReferrer to your g1 + real curve activity.",
-        "Post-list Gnoswap ExactIn does not count toward volume (same spirit as Season 0).",
+        "Volume pillar (15%): mainnet Month-1 curve volume only — Sapphire testnet does not count.",
+        "Post-list Gnoswap ExactIn does not count toward Ambassador volume.",
         "Wash / sybil / promised profits = disqualification.",
       ],
     },
