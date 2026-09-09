@@ -14,7 +14,9 @@ web/server.err.log
 # ── Local-only API helpers (not needed for Netlify CI) ──
 # Read API for Netlify is published: web/lib/* + web/netlify/functions/*
 web/server.mjs
-web/api-dev.mjs
+# api-dev.mjs is tracked (local snapshot worker for markets speedups)
+# Built frontend artifacts
+web/.cache/
 # Built frontend artifacts
 web/ui/dist/
 web/ui/node_modules/
