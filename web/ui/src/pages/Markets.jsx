@@ -157,23 +157,36 @@ export default function Markets() {
 
   const load = useCallback(async (opts = {}) => {
     const soft = !!opts.soft;
+    const hard = !!opts.hard;
     try {
       if (!soft) setErr("");
       if (soft) setRefreshing(true);
-      const [m, b, act] = await Promise.all([
-        api("/api/markets?refresh=1"),
+      // Speedup #1: lite first (no Gnoswap enrich); soft poll uses cache (no refresh=1)
+      const marketsQs = hard ? "/api/markets?refresh=1" : "/api/markets-lite";
+      const m = await api(marketsQs);
+      setData(m);
+      setUpdatedAt(Date.now());
+      // Progressive: bond + activity after first paint
+      Promise.all([
         api("/api/bond").catch(() => null),
         api("/api/activity?limit=120").catch(() => ({ events: [] })),
-      ]);
-      setData(m);
-      setBond(b);
-      setVolMap(volumeMapFromActivity(act?.events || []));
-      setUpdatedAt(Date.now());
+      ]).then(([b, act]) => {
+        setBond(b);
+        setVolMap(volumeMapFromActivity(act?.events || []));
+      });
+      // Optional full enrich in background (live Gnoswap spots) — don't block list
+      if (!soft && !hard) {
+        api("/api/markets")
+          .then((full) => {
+            if (full?.markets?.length) setData(full);
+          })
+          .catch(() => {});
+      }
       const items = (m?.markets || [])
         .filter((x) => !x.error && x.id && x.pkg)
         .map((x) => ({ pkg: x.pkg, id: x.id }));
       if (items.length) {
-        fetchMetaBatch(items).then(setMetaMap).catch(() => { });
+        fetchMetaBatch(items).then(setMetaMap).catch(() => {});
       }
     } catch (e) {
       if (!soft) setErr(e.message || String(e));

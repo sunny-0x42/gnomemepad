@@ -42,3 +42,5 @@ venv/
 
 # Gno cache (if any under project)
 .gno/
+
+web/.cache/

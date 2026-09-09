@@ -41,6 +41,11 @@ import {
   xOauthPendingCookies,
   xSessionCookie,
 } from "./x-oauth.mjs";
+import {
+  readMarketsSnapshot,
+  snapshotFresh,
+  writeMarketsSnapshot,
+} from "./markets-snapshot.mjs";
 
 const UGNOT_PER_GNOT = 1_000_000;
 
@@ -66,6 +71,22 @@ function cacheSet(key, value, ttlMs) {
     const first = memCache.keys().next().value;
     if (first != null) memCache.delete(first);
   }
+}
+
+/** Concurrency-limited Promise.all (speedup #2 — avoid sequential qeval). */
+async function mapPool(items, concurrency, fn) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, Math.min(Number(concurrency) || 6, 16));
+  const out = new Array(list.length);
+  let i = 0;
+  async function worker() {
+    while (i < list.length) {
+      const idx = i++;
+      out[idx] = await fn(list[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, list.length || 1) }, () => worker()));
+  return out;
 }
 
 /** Default config = DEFAULT_NETWORK_ID (Sapphire unless env says Pearl). */
@@ -812,50 +833,64 @@ async function getMarketsOne(RPC, PKG, meta = {}) {
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
-  const markets = [];
-  for (const id of ids) {
+
+  // Speedup #2: PadAddress once per pad (not per market)
+  let padAddr = "";
+  try {
+    const pa = String(await qeval(RPC, PKG, `${PKG}.PadAddress()`) || "").replace(/^"|"$/g, "");
+    if (/^g1[a-z0-9]+$/i.test(pa)) padAddr = pa;
+  } catch {
+    /* optional */
+  }
+
+  const padLabel = String(PKG).split("/").pop() || "pad";
+  const collateral = /padv1[4-9]\b|padv[2-9]\d\b/i.test(String(PKG)) ? "wugnot" : "ugnot";
+
+  // Speedup #2: parallel LaunchInfo (bounded concurrency)
+  const markets = await mapPool(ids, 8, async (id) => {
     try {
       const info = await qeval(RPC, PKG, `${PKG}.LaunchInfo(${JSON.stringify(id)})`);
       const parsed = parseLaunchInfo(String(info), params.totalSupply, params.graduation);
-      if (parsed) {
-        if (parsed.status !== 1 && params.graduation > 0) {
-          parsed.progressPct = Math.min(100, Math.floor((parsed.raised * 100) / params.graduation));
-        }
-        enrichPricing(parsed, params.totalSupply);
-        parsed.pkg = PKG;
-        parsed.sourceKey = meta.sourceKey || "pad";
-        parsed.active = !!meta.active;
-        parsed.legacy = !!meta.legacy;
-        parsed.padLabel = String(PKG).split("/").pop() || "pad";
-        // padv14+: WUGNOT collateral (list endpoint must expose this for UI buy path)
-        parsed.collateral = /padv1[4-9]\b|padv[2-9]\d\b/i.test(String(PKG))
-          ? "wugnot"
-          : "ugnot";
-        try {
-          const pa = String(await qeval(RPC, PKG, `${PKG}.PadAddress()`) || "").replace(
-            /^"|"$/g,
-            "",
-          );
-          if (/^g1[a-z0-9]+$/i.test(pa)) parsed.padAddr = pa;
-        } catch {
-          /* optional */
-        }
-        const rem = remainingRaiseUgnot(parsed, params.graduation);
-        parsed.remainingRaiseUgnot = rem;
-        parsed.remainingRaiseGnot = rem / UGNOT_PER_GNOT;
-        markets.push(parsed);
+      if (!parsed) {
+        return {
+          id,
+          pkg: PKG,
+          sourceKey: meta.sourceKey,
+          active: !!meta.active,
+          legacy: !!meta.legacy,
+          error: "parse_failed",
+        };
       }
+      if (parsed.status !== 1 && params.graduation > 0) {
+        parsed.progressPct = Math.min(
+          100,
+          Math.floor((parsed.raised * 100) / params.graduation),
+        );
+      }
+      enrichPricing(parsed, params.totalSupply);
+      parsed.pkg = PKG;
+      parsed.sourceKey = meta.sourceKey || "pad";
+      parsed.active = !!meta.active;
+      parsed.legacy = !!meta.legacy;
+      parsed.padLabel = padLabel;
+      parsed.collateral = collateral;
+      if (padAddr) parsed.padAddr = padAddr;
+      const rem = remainingRaiseUgnot(parsed, params.graduation);
+      parsed.remainingRaiseUgnot = rem;
+      parsed.remainingRaiseGnot = rem / UGNOT_PER_GNOT;
+      return parsed;
     } catch (e) {
-      markets.push({
+      return {
         id,
         pkg: PKG,
         sourceKey: meta.sourceKey,
         active: !!meta.active,
         legacy: !!meta.legacy,
         error: String(e.message || e),
-      });
+      };
     }
-  }
+  });
+
   let protocolFees = 0;
   let protocolFeesPaid = 0;
   let protocolAddr = "";
@@ -895,10 +930,21 @@ async function getMarketsOne(RPC, PKG, meta = {}) {
   };
 }
 
-/** Aggregate markets across active + legacy pads. */
-async function getMarkets(RPC, sources) {
+/** Aggregate markets across active + legacy pads.
+ *  opts.lite: skip Gnoswap enrich (speedup #1 markets-lite).
+ */
+async function getMarkets(RPC, sources, opts = {}) {
+  const lite = !!opts.lite;
   if (!Array.isArray(sources) || sources.length === 0) {
-    return { params: null, protocolFees: 0, protocolFeesGnot: 0, markets: [], count: 0, sources: [] };
+    return {
+      params: null,
+      protocolFees: 0,
+      protocolFeesGnot: 0,
+      markets: [],
+      count: 0,
+      sources: [],
+      lite,
+    };
   }
   const active = sources.find((s) => s.active) || sources[0];
   const parts = await Promise.all(
@@ -926,9 +972,10 @@ async function getMarkets(RPC, sources) {
     return (Number(b.created) || 0) - (Number(a.created) || 0);
   });
 
-  // Listed tokens: pad poolUgnot/poolToken freezes at list time — refresh
-  // spot from recent Gnoswap swaps so Markets cards match Token page.
-  await enrichListedMarketsFromGnoswap(RPC, markets, parts);
+  // Full path only: live Gnoswap enrich (skip on markets-lite — speedup #1)
+  if (!lite) {
+    await enrichListedMarketsFromGnoswap(RPC, markets, parts);
+  }
 
   const params = (parts.find((p) => p.active) || parts[0])?.params || null;
   return {
@@ -937,6 +984,7 @@ async function getMarkets(RPC, sources) {
     protocolFeesGnot: protocolFees / UGNOT_PER_GNOT,
     markets,
     count: markets.length,
+    lite,
     sources: sources.map((s) => ({
       key: s.key,
       pkg: s.pkg,
@@ -2045,14 +2093,21 @@ async function getPortfolio(RPC, sources, SIGNER_ADDR, address) {
   if (!address || !/^g1[a-z0-9]{38,}$/i.test(address)) {
     throw new Error("invalid g1 address");
   }
-  const { markets, params } = await getMarkets(RPC, sources);
+  const { markets, params } = await getMarkets(RPC, sources, { lite: true });
   const holdings = [];
   let memePositions = 0;
-  for (const m of markets) {
-    if (m.error) continue;
-    const pkg = m.pkg || sources[0]?.pkg;
-    const bal = await tokenBalance(RPC, pkg, m.id, address);
-    if (bal <= 0) continue;
+  // Speedup #2: parallel BalanceOf (was sequential — 16–22s class)
+  const balRows = await mapPool(
+    (markets || []).filter((m) => !m.error),
+    8,
+    async (m) => {
+      const pkg = m.pkg || sources[0]?.pkg;
+      const bal = await tokenBalance(RPC, pkg, m.id, address);
+      return { m, pkg, bal };
+    },
+  );
+  for (const { m, pkg, bal } of balRows) {
+    if (!(bal > 0)) continue;
     memePositions += 1;
     // Prefer live valuation spot from markets enrichment (DEX / pool), not pad dump reserves
     const spotGnot =
@@ -3195,6 +3250,38 @@ async function buildSeason0(RPC, POINTS, padSources, address, opts = {}) {
  * @param {string|null} bodyText
  * @param {Record<string,string>|null} headers
  */
+/**
+ * Build markets payload for a network (used by API + local snapshot worker).
+ * opts.lite — skip Gnoswap enrich (#1). opts.useSnapshot — prefer fresh snapshot (#3).
+ */
+export async function buildNetworkMarketsPayload(networkId, opts = {}) {
+  const lite = opts.lite !== false; // default lite for snapshot/worker
+  const net = normalizeNetworkId(networkId);
+  if (opts.useSnapshot && !opts.force) {
+    const snap = await readMarketsSnapshot(net);
+    if (snapshotFresh(snap) && snap.data) {
+      return { ...snap.data, cached: true, snapshot: true, snapshotAgeMs: Date.now() - snap.at };
+    }
+  }
+  const cfg = getConfig(net);
+  const hubInfo = await getHubInfo(cfg.RPC, cfg);
+  const padSources = listPadSources(hubInfo, cfg);
+  const t0 = Date.now();
+  const raw = await getMarkets(cfg.RPC, padSources, { lite });
+  const markets = await withUsdPricing(raw);
+  const buildMs = Date.now() - t0;
+  const payload = {
+    ...markets,
+    network: net,
+    buildMs,
+    snapshot: false,
+  };
+  if (opts.writeSnapshot) {
+    await writeMarketsSnapshot(net, payload, buildMs);
+  }
+  return payload;
+}
+
 export async function handleApi(method, pathname, query, bodyText, headers = null) {
   const q =
     query instanceof URLSearchParams
@@ -4212,15 +4299,45 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       }
     }
 
-    if (method === "GET" && p === "/api/markets") {
-      const mKey = `markets:${padSources.map((s) => s.pkg).join(",")}`;
+    if (method === "GET" && (p === "/api/markets" || p === "/api/markets-lite")) {
+      const lite = p === "/api/markets-lite" || q.get("lite") === "1";
+      const wantSnap = !noCache && q.get("nosnapshot") !== "1";
+      // Speedup #3: serve fresh snapshot when available
+      if (wantSnap) {
+        const snap = await readMarketsSnapshot(networkId);
+        if (snapshotFresh(snap) && snap.data) {
+          const data = {
+            ...snap.data,
+            cached: true,
+            snapshot: true,
+            snapshotAgeMs: Date.now() - snap.at,
+            lite: snap.data.lite ?? lite,
+          };
+          // If caller wants full enrich but snap is lite, fall through to live full
+          if (!(lite === false && data.lite === true)) {
+            return json(200, data, { maxAge: 15 });
+          }
+        }
+      }
+      const mKey = `markets:${lite ? "lite:" : ""}${padSources.map((s) => s.pkg).join(",")}`;
       if (!noCache) {
         const hit = cacheGet(mKey);
-        if (hit) return json(200, { ...hit, cached: true }, { maxAge: 15 });
+        if (hit) return json(200, { ...hit, cached: true, snapshot: false }, { maxAge: 15 });
       }
-      const markets = await withUsdPricing(await getMarkets(RPC, padSources));
-      cacheSet(mKey, markets, 20_000);
-      return json(200, markets, { maxAge: 15 });
+      const t0 = Date.now();
+      const markets = await withUsdPricing(await getMarkets(RPC, padSources, { lite }));
+      const buildMs = Date.now() - t0;
+      const payload = { ...markets, network: networkId, buildMs, snapshot: false };
+      cacheSet(mKey, payload, 20_000);
+      // Keep snapshot warm for next callers (lite preferred for worker parity)
+      if (lite) {
+        try {
+          await writeMarketsSnapshot(networkId, payload, buildMs);
+        } catch {
+          /* ignore */
+        }
+      }
+      return json(200, payload, { maxAge: 15 });
     }
 
     // ── Gnoswap token-resource (canonical registry + auto-PR) ──
