@@ -1,5 +1,4 @@
-# Auto-register gnomemepad tokens so Gnoswap/Adena can show logos.
-# Opens a PR against onbloc/gno-token-resource from your fork.
+# Register one token logo when asked. No schedule, so it does not open PRs by itself.
 #
 # Required secrets:
 #   TOKEN_RESOURCE_GITHUB_TOKEN  — PAT (repo) that can push to FORK + open PR upstream
@@ -10,10 +9,12 @@
 name: Sync token-resource (Gnoswap logos)
 
 on:
-  schedule:
-    - cron: "20 */6 * * *"
   workflow_dispatch:
     inputs:
+      symbol:
+        description: "Symbol to register, for example GNOMI"
+        required: true
+        type: string
       dry_run:
         description: "Dry run (list missing only, no PR)"
         required: false
@@ -44,17 +45,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TOKEN_RESOURCE_GITHUB_TOKEN }}
           TOKEN_RESOURCE_FORK: ${{ secrets.TOKEN_RESOURCE_FORK }}
           TOKEN_RESOURCE_UPSTREAM: onbloc/gno-token-resource
+          TOKEN_SYMBOL: ${{ github.event.inputs.symbol }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
         run: |
           export API_BASE="${API_BASE:-https://gnomemepad-sapphire.netlify.app}"
+          if [ -z "${TOKEN_SYMBOL}" ]; then
+            echo "No symbol given. Nothing registered."
+            exit 0
+          fi
           if [ -z "${TOKEN_RESOURCE_GITHUB_TOKEN}" ] || [ -z "${TOKEN_RESOURCE_FORK}" ]; then
             echo "Missing TOKEN_RESOURCE_GITHUB_TOKEN or TOKEN_RESOURCE_FORK secrets."
             echo "Add them under repo Settings → Secrets, then re-run."
-            # A schedule with no secrets must not fail every 6 hours.
-            if [ "${{ github.event_name }}" = "schedule" ]; then
-              echo "Scheduled run skipped. No pull request opened."
-              exit 0
-            fi
             exit 1
           fi
           node scripts/sync-token-resource.mjs

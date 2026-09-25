@@ -111,6 +111,13 @@ async function runLocal() {
   });
   // Use missing from remote plan entries (imageFile etc.)
   localPlan.missingItems = plan.missingItems || localPlan.missingItems;
+  const only = String(process.env.TOKEN_SYMBOL || "").trim().toUpperCase();
+  if (only) {
+    localPlan.missingItems = (localPlan.missingItems || []).filter(
+      (item) => String(item.symbol || "").toUpperCase() === only,
+    );
+    console.log("symbol filter", only, "to send", localPlan.missingItems.length);
+  }
   localPlan.missing = localPlan.missingItems.length;
 
   const result = await syncTokenResourcePr(localPlan);
