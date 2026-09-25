@@ -50,6 +50,11 @@ jobs:
           if [ -z "${TOKEN_RESOURCE_GITHUB_TOKEN}" ] || [ -z "${TOKEN_RESOURCE_FORK}" ]; then
             echo "Missing TOKEN_RESOURCE_GITHUB_TOKEN or TOKEN_RESOURCE_FORK secrets."
             echo "Add them under repo Settings → Secrets, then re-run."
+            # A schedule with no secrets must not fail every 6 hours.
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "Scheduled run skipped. No pull request opened."
+              exit 0
+            fi
             exit 1
           fi
           node scripts/sync-token-resource.mjs
