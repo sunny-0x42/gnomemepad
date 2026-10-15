@@ -44,6 +44,10 @@ process.env.META = process.env.META || process.env.MAINNET_META;
 process.env.POINTS = process.env.POINTS || process.env.MAINNET_POINTS;
 process.env.BOND = process.env.BOND || process.env.MAINNET_BOND;
 process.env.SIGNER_ADDR = process.env.SIGNER_ADDR || process.env.MAINNET_SIGNER;
+// VPS host. Empty or unset becomes full metrics. Explicit "0" stays off (Netlify).
+if (process.env.FULL_METRICS == null || process.env.FULL_METRICS === "") {
+  process.env.FULL_METRICS = "1";
+}
 
 import http from "node:http";
 import fs from "node:fs";
@@ -168,7 +172,13 @@ server.listen(PORT, HOST, () => {
       networkIds: nets,
       intervalMs: Number(process.env.MARKETS_SNAP_INTERVAL_MS || 60_000),
       buildFn: (id) =>
-        buildNetworkMarketsPayload(id, { lite: true, writeSnapshot: true, force: true }),
+        buildNetworkMarketsPayload(id, {
+          // Homepage serves this snapshot. Enrich stays off the request path.
+          lite: process.env.FULL_METRICS === "1" ? false : true,
+          tradeStats: true,
+          writeSnapshot: true,
+          force: true,
+        }),
     });
   }
 });

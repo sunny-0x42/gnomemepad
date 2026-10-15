@@ -22,6 +22,7 @@ import {
 import {
   buildFeaturedRails,
   cardVolumeOf,
+  graduationGnotOf,
   heatLabel,
   isAlmostList,
   isRaising,
@@ -30,6 +31,8 @@ import {
   marketHeatScore,
   marketKey,
   mergeVolumeMaps,
+  formatProgressPct,
+  progressPctOf,
   raisedGnotOf,
   volumeMapFromActivity,
   volumeMapFromMarkets,
@@ -273,7 +276,7 @@ export default function Markets() {
     if (status === "hot") {
       list = list.filter((m) => {
         const tier = featured.tiers.get(marketKey(m.id, m.pkg || "")) || 0;
-        return tier >= 2 || (volMap[marketKey(m.id, m.pkg || "")]?.volumeGnot || 0) > 0;
+        return tier >= 2 || cardVolumeOf(m, volMap).volumeGnot > 0;
       });
     }
     if (status === "watch") {
@@ -319,8 +322,8 @@ export default function Markets() {
           const pb = safeNum(b.priceUsd) || safeNum(b.priceGnot) * safeNum(b.gnotUsd);
           cmp = pb - pa || safeNum(b.priceGnot) - safeNum(a.priceGnot);
         } else if (sort === "volume") {
-          const va = safeNum(volMap[marketKey(a.id, a.pkg || "")]?.volumeGnot);
-          const vb = safeNum(volMap[marketKey(b.id, b.pkg || "")]?.volumeGnot);
+          const va = cardVolumeOf(a, volMap).volumeGnot;
+          const vb = cardVolumeOf(b, volMap).volumeGnot;
           cmp = vb - va || marketHeatScore(b, volMap) - marketHeatScore(a, volMap);
         } else {
           // hot (default): live interaction — volume/trades bubble up, quiet sinks
@@ -352,13 +355,6 @@ export default function Markets() {
   const isPromo = bond?.statusLabel === "promo";
   const promoLeft = bond?.secondsLeft;
   const showTrending = data && !q && status === "all" && trending.length > 0;
-
-  const gradTarget =
-    params?.graduationGnot != null
-      ? Number(params.graduationGnot)
-      : params?.graduation != null
-        ? Number(params.graduation) / 1e6
-        : 100;
 
   // Stable order signature for FLIP when live heat reorders cards
   const orderSig = useMemo(
@@ -392,7 +388,8 @@ export default function Markets() {
           <div className="trending-scroll">
             <div className={`trending-scroll-track${trending.length > 4 ? " animate" : ""}`}>
               {(trending.length > 4 ? [...trending, ...trending] : trending).map((m, i) => {
-                const pct = Math.min(100, m.progressPct || 0);
+                const pctValue = progressPctOf(m, params);
+                const pct = pctValue == null ? null : Math.min(100, pctValue);
                 const img = resolveTokenImage(m, metaMap[metaKey(m.pkg, m.id)]);
                 const almost = isAlmostList(m, 70);
                 const ready = isReadyToGraduate(m);
@@ -420,7 +417,12 @@ export default function Markets() {
                         ) : heatLabel(tier) ? (
                           <Badge kind={heatLabel(tier).kind}>{heatLabel(tier).text}</Badge>
                         ) : (
-                          <Badge kind="neutral">+{pct}%</Badge>
+                          <Badge kind="neutral">
+                            {(() => {
+                              const label = formatProgressPct(pct, m);
+                              return label === "—" ? label : `+${label}`;
+                            })()}
+                          </Badge>
                         )}
                       </div>
                       <div className="tc-desc">
@@ -428,10 +430,10 @@ export default function Markets() {
                       </div>
                       <div className="tc-footer">
                         <span className="muted">Progress</span>
-                        <span className="tc-pct">{pct}%</span>
+                        <span className="tc-pct">{pct == null ? "—" : formatProgressPct(pct, m)}</span>
                       </div>
                     </div>
-                    <div className="tc-progress-line" style={{ width: `${pct}%` }} />
+                    <div className="tc-progress-line" style={{ width: `${pct == null ? 0 : pct}%` }} />
                   </Link>
                 );
               })}
@@ -627,7 +629,7 @@ export default function Markets() {
                       m={m}
                       volMap={volMap}
                       meta={metaMap[metaKey(m.pkg, m.id)]}
-                      gradTarget={gradTarget}
+                      pageParams={params}
                       tier={tierOf(featured.tiers, m.id, m.pkg)}
                       watched={isWatched(watchlist, m.id, m.pkg)}
                       tipHeight={health?.height}
@@ -667,7 +669,7 @@ function MarketCard({
   m,
   volMap,
   meta,
-  gradTarget = 500,
+  pageParams = null,
   tier,
   watched,
   onToggleWatch,
@@ -680,14 +682,16 @@ function MarketCard({
   const listedVenue = venueOf(m);
   const listed = isListed(m);
   const tradeUrl = listed ? dexTradeUrl(m, networkId) : null;
-  const pct = Math.min(100, m.progressPct || 0);
+  const pctValue = progressPctOf(m, pageParams);
+  const pct = pctValue == null ? null : Math.min(100, pctValue);
+  const gradTarget = graduationGnotOf(m, pageParams);
   const isGrad = m.status === 1;
   const almost = isAlmostList(m, 70);
   const ready = isReadyToGraduate(m);
-  // Prefer tradeStats (full TradeHistory) over truncated activity sample
+  // Curve tradeStats + DEX dexTradeStats. Activity sample only if stats are absent.
   const rv = cardVolumeOf(m, volMap);
-  const vol = rv.volumeGnot || 0;
-  const trades = rv.trades || 0;
+  const vol = Number(rv.volumeGnot) || 0;
+  const trades = Number(rv.trades) || 0;
   const buyVol = rv.buyVol || 0;
   const heat = heatLabel(tier);
   const metaData = m.meta || {};
@@ -800,16 +804,24 @@ function MarketCard({
           ) : !isGrad ? (
             <div className="mc-progress-sec">
               <div className="mc-progress-head">
-                <span>{t("processing") || "Processing"} {pct}%</span>
+                <span>
+                  {t("processing") || "Processing"} {formatProgressPct(pct, m)}
+                </span>
               </div>
               <div className="mc-progress-track">
-                <div className="mc-progress-fill" style={{ width: `${pct}%` }}>
+                <div className="mc-progress-fill" style={{ width: `${pct == null ? 0 : pct}%` }}>
                   <div className="mc-progress-thumb" />
                 </div>
               </div>
               <div className="mc-progress-foot">
-                <span>{fmtGnot(raised, { alreadyGnot: true })} GNOT</span>
-                <span>{fmtGnot(gradTarget, { alreadyGnot: true })} GNOT</span>
+                <span>
+                  {m.raisedGnot != null || m.raised != null
+                    ? `${fmtGnot(raised, { alreadyGnot: true })} GNOT`
+                    : "—"}
+                </span>
+                <span>
+                  {gradTarget != null ? `${fmtGnot(gradTarget, { alreadyGnot: true })} GNOT` : "—"}
+                </span>
               </div>
             </div>
           ) : null}
@@ -840,7 +852,15 @@ function MarketCard({
               </span>
             </div>
             <div className="mc-stat-pill">
-              <span className="muted">{t("volume") || "Vol"}:</span> <span>{hasRv && vol > 0 ? (toUsd(vol, fx) > 0 ? fmtMcapUsd(toUsd(vol, fx)) : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`) : "—"}{hasRv && trades > 0 ? ` · ${trades} tx` : ""}</span>
+              <span className="muted">{t("volume") || "Vol"}:</span>{" "}
+              <span>
+                {hasRv && vol > 0
+                  ? toUsd(vol, fx) > 0
+                    ? fmtMcapUsd(toUsd(vol, fx))
+                    : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`
+                  : "—"}
+                {hasRv && trades > 0 ? ` · ${trades} tx` : ""}
+              </span>
             </div>
             <div className="mc-stat-pill">
               <span className="muted">{t("buyers") || "Buyers"}:</span> <span>{buyers > 0 ? fmtNum(buyers) : "—"}</span>

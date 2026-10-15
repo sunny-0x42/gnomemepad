@@ -7,7 +7,7 @@ import { Badge, EmptyState, PageHeader, ProgressBar, SkeletonPanel, Stat } from 
 import { api } from "../lib/api";
 import { copyText, fmtGnot, shortAddr } from "../lib/format";
 import { safeImageUrl } from "../lib/avatar";
-import { isRetiredPad } from "../lib/marketHeat";
+import { formatProgressPct, isRetiredPad, progressPctOf } from "../lib/marketHeat";
 import { AchievementBadgeRow } from "../components/AchievementBadge";
 
 export default function Profile() {
@@ -267,7 +267,8 @@ export default function Profile() {
         )}
         <div className="market-grid">
           {launches.map((m) => {
-            const pct = Math.min(100, Number(m.progressPct) || 0);
+            const pctValue = progressPctOf(m);
+            const pct = pctValue == null ? null : Math.min(100, pctValue);
             const isGrad = m.status === 1;
             return (
               <Link
@@ -300,9 +301,9 @@ export default function Profile() {
                 </div>
                 {!isGrad && (
                   <div style={{ marginTop: "0.65rem" }}>
-                    <ProgressBar pct={pct} />
+                    <ProgressBar pct={pct == null ? 0 : pct} />
                     <div className="muted" style={{ fontSize: "0.72rem", marginTop: "0.25rem" }}>
-                      {pct}%
+                      {pct == null ? "—" : formatProgressPct(pct, m)}
                     </div>
                   </div>
                 )}

@@ -20,7 +20,7 @@ import {
   shortAddr,
   toUsd,
 } from "../lib/format";
-import { isRetiredPad } from "../lib/marketHeat";
+import { formatProgressPct, isRetiredPad, progressPctOf } from "../lib/marketHeat";
 import { resolveTokenImage } from "../lib/meta";
 import { AchievementBadgeRow } from "../components/AchievementBadge";
 import {
@@ -428,7 +428,8 @@ export default function Creator() {
           const fees = feesGnotOf(m);
           const raised = raisedGnotOf(m);
           const hasFees = fees > 0;
-          const pct = Math.min(100, Number(m.progressPct) || 0);
+          const pctValue = progressPctOf(m);
+          const pct = pctValue == null ? null : Math.min(100, pctValue);
           const key = `${m.pkg}:${m.id}`;
           const claiming = claimingId === key;
           const isGrad = m.status === 1;
@@ -512,9 +513,9 @@ export default function Creator() {
                 <div className="creator-card-raise">
                   <div className="creator-card-raise-top">
                     <span className="muted">{vi ? "Tiến độ raise" : "Raise progress"}</span>
-                    <strong className="mono">{pct}%</strong>
+                    <strong className="mono">{pct == null ? "—" : formatProgressPct(pct, m)}</strong>
                   </div>
-                  <ProgressBar pct={pct} />
+                  <ProgressBar pct={pct == null ? 0 : pct} />
                 </div>
               )}
 

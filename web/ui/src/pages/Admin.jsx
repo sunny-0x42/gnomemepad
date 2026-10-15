@@ -4,6 +4,48 @@ import { useApp } from "../context/AppContext";
 import { SkeletonPanel } from "../components/ui";
 import { api } from "../lib/api";
 import { copyText, fmtGnot, fmtUsd, shortAddr, usdBesideGnot } from "../lib/format";
+import { displayVolumeGnot, formatProgressPct, graduationGnotOf, progressPctOf } from "../lib/marketHeat";
+
+function finiteOrNull(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function gnotText(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  return `${fmtGnot(n, { alreadyGnot: true })} GNOT`;
+}
+
+function rowRaisedGnot(row) {
+  const g = finiteOrNull(row?.raisedGnot);
+  if (g != null) return g;
+  const ug = finiteOrNull(row?.raised);
+  if (ug != null) return ug / 1e6;
+  return null;
+}
+
+function rowCreatorFeesGnot(row) {
+  const g = finiteOrNull(row?.creatorFeesGnot);
+  if (g != null) return g;
+  const ug = finiteOrNull(row?.creatorFees);
+  if (ug != null) return ug / 1e6;
+  return null;
+}
+
+function rowVolumeGnot(row) {
+  const summed = displayVolumeGnot(row);
+  if (summed != null) return summed;
+  return finiteOrNull(row?.volumeGnot);
+}
+
+function marketStatusLabel(row) {
+  if (row?.statusLabel) return String(row.statusLabel);
+  if (Number(row?.status) === 1) return "graduated";
+  if (row?.status === 0 || row?.status === "0" || row?.status === "curve") return "curve";
+  if (row?.gnoswapListed || row?.listed) return "listed";
+  return "—";
+}
 
 /**
  * Deploy-wallet only. Route is also gated; this is a second line of defense.
@@ -117,7 +159,13 @@ export default function Admin() {
   const byPad = Array.isArray(f.byPad) ? f.byPad : [];
   const claimablePads = byPad.filter((row) => Number(row.pending) > 0);
   const inv = d?.ops?.inventory;
-  const raiseGnot = Number(p.graduationGnot) || inv?.raiseNeedGnot || 10000;
+  const raiseGnot = graduationGnotOf({ params: p }) ?? finiteOrNull(inv?.raiseNeedGnot);
+  const raiseLabel = raiseGnot != null ? `${raiseGnot} GNOT` : "—";
+  const marketsList = Array.isArray(d?.marketsList)
+    ? d.marketsList
+    : Array.isArray(d?.markets?.marketsList)
+      ? d.markets.marketsList
+      : null;
 
   function usdMark(gnot) {
     const label = usdBesideGnot(gnot, gnotUsd);
@@ -553,7 +601,7 @@ export default function Admin() {
             <article className="admin-card admin-card-wide admin-fund-wizard">
               <h3 style={{ marginTop: 0 }}>Gnoswap fund wizard (auto-list)</h3>
               <p className="muted admin-hint" style={{ marginTop: 0 }}>
-                Before markets hit raise target ({raiseGnot} GNOT), fund pad with WUGNOT + GNS so
+                Before markets hit raise target ({raiseLabel}), fund pad with WUGNOT + GNS so
                 graduate can CreatePool automatically.
               </p>
               {inv ? (
@@ -566,9 +614,9 @@ export default function Admin() {
                         {usdMark(inv.wugnotGnot)}
                       </span>
                       <span className="admin-stat-s">
-                        need {fmtGnot(inv.raiseNeedGnot ?? raiseGnot, { alreadyGnot: true })} for LP
-                        {usdBesideGnot(inv.raiseNeedGnot ?? raiseGnot, gnotUsd)
-                          ? ` (${usdBesideGnot(inv.raiseNeedGnot ?? raiseGnot, gnotUsd)})`
+                        need {raiseLabel} for LP
+                        {raiseGnot != null && usdBesideGnot(raiseGnot, gnotUsd)
+                          ? ` (${usdBesideGnot(raiseGnot, gnotUsd)})`
                           : ""}
                       </span>
                     </div>
@@ -588,7 +636,7 @@ export default function Admin() {
                       Wrap GNOT -&gt; WUGNOT (EOA Deposit on wugnot)
                     </li>
                     <li className={inv.lpReady ? "done" : ""}>
-                      Transfer WUGNOT &gt;= <strong>{raiseGnot} GNOT</strong> to pad address
+                      Transfer WUGNOT &gt;= <strong>{raiseLabel}</strong> to pad address
                     </li>
                     <li className={inv.feeReady ? "done" : ""}>
                       Transfer &gt;= <strong>100 GNS</strong> to pad (preferred over ExactOut)
@@ -607,7 +655,7 @@ export default function Admin() {
                 <ol className="admin-steps">
                   <li>Wrap GNOT -&gt; WUGNOT (EOA Deposit)</li>
                   <li>
-                    Transfer WUGNOT &gt;= <strong>{raiseGnot} GNOT</strong> (LP) to pad
+                    Transfer WUGNOT &gt;= <strong>{raiseLabel}</strong> (LP) to pad
                   </li>
                   <li>
                     <strong>Preferred:</strong> send &gt;=100 GNS to pad
@@ -647,14 +695,18 @@ export default function Admin() {
               <div className="admin-stat">
                 <span className="admin-stat-k">Creator fees (markets)</span>
                 <span className="admin-stat-v">
-                  {fmtGnot(m.totalCreatorFeesGnot ?? m.totalCreatorFees, {
-                    alreadyGnot: m.totalCreatorFeesGnot != null,
-                  })}
-                  {usdMark(
-                    m.totalCreatorFeesGnot != null
-                      ? m.totalCreatorFeesGnot
-                      : Number(m.totalCreatorFees) / 1e6,
-                  )}
+                  {m.totalCreatorFeesGnot != null && Number.isFinite(Number(m.totalCreatorFeesGnot))
+                    ? gnotText(Number(m.totalCreatorFeesGnot))
+                    : m.totalCreatorFees != null && Number.isFinite(Number(m.totalCreatorFees))
+                      ? gnotText(Number(m.totalCreatorFees) / 1e6)
+                      : "—"}
+                  {m.totalCreatorFeesGnot != null || m.totalCreatorFees != null
+                    ? usdMark(
+                        m.totalCreatorFeesGnot != null
+                          ? Number(m.totalCreatorFeesGnot)
+                          : Number(m.totalCreatorFees) / 1e6,
+                      )
+                    : null}
                 </span>
               </div>
             </div>
@@ -746,6 +798,16 @@ export default function Admin() {
                     <span className="muted">Gnoswap</span>
                     <strong>{m.gnoswapListed ?? "—"}</strong>
                   </div>
+                  <div>
+                    <span className="muted">Raised</span>
+                    <strong>
+                      {m.totalRaisedGnot != null && Number.isFinite(Number(m.totalRaisedGnot))
+                        ? gnotText(Number(m.totalRaisedGnot))
+                        : m.totalRaised != null && Number.isFinite(Number(m.totalRaised))
+                          ? gnotText(Number(m.totalRaised) / 1e6)
+                          : "—"}
+                    </strong>
+                  </div>
                 </div>
                 <div className="admin-actions">
                   <button
@@ -767,6 +829,56 @@ export default function Admin() {
                 </div>
               </article>
 
+              {marketsList && (
+                <article className="admin-card admin-card-wide">
+                  <h3 style={{ marginTop: 0 }}>All markets</h3>
+                  <p className="muted admin-hint" style={{ marginTop: 0 }}>
+                    One row per market. Volume is curve plus DEX.
+                  </p>
+                  {marketsList.length === 0 ? (
+                    <p className="muted">No markets.</p>
+                  ) : (
+                    <div className="admin-fee-table-wrap">
+                      <table className="admin-fee-table">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Raised</th>
+                            <th>Progress</th>
+                            <th>Creator fees</th>
+                            <th>Volume</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {marketsList.map((row, i) => {
+                            const pct = progressPctOf(row, p);
+                            const key = `${row?.pkg || ""}:${row?.id || row?.name || i}`;
+                            return (
+                              <tr key={key}>
+                                <td>
+                                  <strong>{row?.name || row?.symbol || row?.id || "—"}</strong>
+                                  {row?.symbol ? (
+                                    <span className="muted"> ${row.symbol}</span>
+                                  ) : null}
+                                </td>
+                                <td>{marketStatusLabel(row)}</td>
+                                <td className="mono">{gnotText(rowRaisedGnot(row))}</td>
+                                <td className="mono">
+                                  {formatProgressPct(pct, row)}
+                                </td>
+                                <td className="mono">{gnotText(rowCreatorFeesGnot(row))}</td>
+                                <td className="mono">{gnotText(rowVolumeGnot(row))}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </article>
+              )}
+
               <article className="admin-card">
                 <h3>Params (live)</h3>
                 <div className="admin-kv">
@@ -784,7 +896,7 @@ export default function Admin() {
                 </div>
                 <div className="admin-kv">
                   <span>Graduate</span>
-                  <strong>{p.graduationGnot ?? raiseGnot ?? "—"} GNOT</strong>
+                  <strong>{raiseLabel}</strong>
                 </div>
                 <div className="admin-kv">
                   <span>List fee GNS</span>
@@ -812,7 +924,7 @@ export default function Admin() {
                     className="admin-input"
                     value={gradGnotInput}
                     onChange={(e) => setGradGnotInput(e.target.value)}
-                    placeholder={`raise GNOT (current ${p.graduationGnot ?? raiseGnot ?? "—"})`}
+                    placeholder={`raise GNOT (current ${raiseLabel})`}
                   />
                   <button
                     type="button"

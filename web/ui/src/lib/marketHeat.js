@@ -1,5 +1,11 @@
 import { UGNOT_PER_GNOT } from "./format";
 
+function finiteNum(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function marketKey(id, pkg = "") {
   return `${id || ""}|${pkg || ""}`;
 }
@@ -62,18 +68,126 @@ export function volumeMapFromActivity(events) {
   return map;
 }
 
-/** Volume row from market.tradeStats (full TradeHistory ring — matches Token page). */
+function readTradeStats(ts) {
+  if (!ts || typeof ts !== "object") return null;
+  const volumeGnot = finiteNum(ts.volumeGnot);
+  const trades = finiteNum(ts.trades);
+  const buyVol = finiteNum(ts.buyVolumeGnot);
+  const sellVol = finiteNum(ts.sellVolumeGnot);
+  if (volumeGnot == null && trades == null && buyVol == null && sellVol == null) return null;
+  return {
+    volumeGnot: volumeGnot ?? 0,
+    trades: trades ?? 0,
+    buyVol: buyVol ?? 0,
+    sellVol: sellVol ?? 0,
+  };
+}
+
+/**
+ * Display volume = curve tradeStats.volumeGnot + DEX dexTradeStats.volumeGnot.
+ * null when both sides are missing — never raisedGnot.
+ */
+export function displayVolumeGnot(m) {
+  const curve = finiteNum(m?.tradeStats?.volumeGnot);
+  const dex = finiteNum(m?.dexTradeStats?.volumeGnot);
+  if (curve == null && dex == null) return null;
+  return (curve || 0) + (dex || 0);
+}
+
+/** Curve trades + DEX trades. null when both counts are missing. */
+export function displayTradeCount(m) {
+  const curve = finiteNum(m?.tradeStats?.trades);
+  const dex = finiteNum(m?.dexTradeStats?.trades);
+  if (curve == null && dex == null) return null;
+  return (curve || 0) + (dex || 0);
+}
+
+/**
+ * Graduation target in GNOT from the market or pad params.
+ * params.graduation is ugnot. No hardcoded 10000.
+ */
+export function graduationGnotOf(m, fallbackParams) {
+  const bags = [m?.params, m, fallbackParams].filter(Boolean);
+  for (const src of bags) {
+    const g = finiteNum(
+      src.graduationGnot ?? src.thresholdGnot ?? src.raiseTargetGnot ?? src.raiseNeedGnot,
+    );
+    if (g != null && g > 0) return g;
+  }
+  for (const src of bags) {
+    const namedUg = finiteNum(src.graduationUgnot ?? src.raiseNeedUgnot);
+    if (namedUg != null && namedUg > 0) return namedUg / UGNOT_PER_GNOT;
+    const raw = finiteNum(src.graduation);
+    if (raw == null || !(raw > 0)) continue;
+    // ParamsInfo.graduation is ugnot. A bare small number is already GNOT.
+    const asUgnot =
+      raw >= UGNOT_PER_GNOT ||
+      src.ugnotPerGnot != null ||
+      src.feeBps != null ||
+      src.totalSupply != null;
+    return asUgnot ? raw / UGNOT_PER_GNOT : raw;
+  }
+  return null;
+}
+
+/** Progress 0–100. A floored API 0 must not hide raisedGnot > 0 when the threshold is known. */
+export function progressPctOf(m, fallbackParams) {
+  if (!m) return null;
+  if (Number(m.status) === 1 || String(m.statusLabel || "").toLowerCase() === "graduated") {
+    return 100;
+  }
+  const given = finiteNum(m.progressPct);
+  const thr = graduationGnotOf(m, fallbackParams);
+  const raisedG = m.raisedGnot != null && m.raisedGnot !== "" ? finiteNum(m.raisedGnot) : null;
+  if (thr != null && thr > 0 && raisedG != null && raisedG > 0 && !(given > 0)) {
+    return Math.min(100, (raisedG / thr) * 100);
+  }
+  if (given != null) return Math.min(100, Math.max(0, given));
+  let raised = raisedG;
+  if (raised == null && m.raised != null && m.raised !== "") {
+    const ug = finiteNum(m.raised);
+    raised = ug == null ? null : ug / UGNOT_PER_GNOT;
+  }
+  if (thr != null && thr > 0 && raised != null) return Math.min(100, (raised / thr) * 100);
+  return null;
+}
+
+/**
+ * One decimal between 0 and 10, otherwise a whole number.
+ * Genuine 0 stays 0%. Missing raised with a 0 pct is an em dash.
+ */
+export function formatProgressPct(pct, m) {
+  const n = finiteNum(pct);
+  if (n == null) return "—";
+  const capped = Math.min(100, Math.max(0, n));
+  if (!(capped > 0)) {
+    const raisedMissing =
+      m &&
+      (m.raisedGnot == null || m.raisedGnot === "") &&
+      (m.raised == null || m.raised === "");
+    return raisedMissing ? "—" : "0%";
+  }
+  if (capped < 10) {
+    const one = Math.round(capped * 10) / 10;
+    if (one >= 10) return "10%";
+    return `${one.toFixed(1)}%`;
+  }
+  return `${Math.round(capped)}%`;
+}
+
+/** Volume row: curve tradeStats + DEX dexTradeStats. null if both are empty. */
 export function volumeRowFromMarket(m) {
-  const ts = m?.tradeStats;
-  if (!ts) return null;
-  const volumeGnot = Number(ts.volumeGnot) || 0;
-  const trades = Number(ts.trades) || 0;
+  const curve = readTradeStats(m?.tradeStats);
+  const dex = readTradeStats(m?.dexTradeStats);
+  if (!curve && !dex) return null;
+  const volumeGnot = (curve?.volumeGnot || 0) + (dex?.volumeGnot || 0);
+  const trades = (curve?.trades || 0) + (dex?.trades || 0);
   if (volumeGnot <= 0 && trades <= 0) return null;
   return {
     volumeGnot,
     trades,
-    buyVol: Number(ts.buyVolumeGnot) || 0,
-    sellVol: Number(ts.sellVolumeGnot) || 0,
+    buyVol: (curve?.buyVol || 0) + (dex?.buyVol || 0),
+    sellVol: (curve?.sellVol || 0) + (dex?.sellVol || 0),
   };
 }
 
@@ -126,27 +240,20 @@ export function mergeVolumeMaps(...maps) {
 }
 
 /**
- * Card volume: prefer market.tradeStats (full ring), else volMap (activity).
- * Keeps Markets Vol in sync with Token page tradeStats.
+ * Card volume: curve + DEX stats when present. Else activity volMap.
+ * Never substitutes raisedGnot.
  */
 export function cardVolumeOf(m, volMap = {}) {
   const fromTs = volumeRowFromMarket(m);
+  if (fromTs) return fromTs;
   const fromMap = volMap[marketKey(m?.id, m?.pkg || "")] || null;
-  if (fromTs && fromMap) {
-    if (
-      fromTs.volumeGnot > fromMap.volumeGnot ||
-      (fromTs.volumeGnot === fromMap.volumeGnot && fromTs.trades >= fromMap.trades)
-    ) {
-      return fromTs;
-    }
-    return {
-      volumeGnot: Math.max(fromTs.volumeGnot, fromMap.volumeGnot || 0),
-      trades: Math.max(fromTs.trades, fromMap.trades || 0),
-      buyVol: Math.max(fromTs.buyVol, fromMap.buyVol || 0),
-      sellVol: Math.max(fromTs.sellVol, fromMap.sellVol || 0),
-    };
-  }
-  return fromTs || fromMap || { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+  if (!fromMap) return { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+  return {
+    volumeGnot: Number(fromMap.volumeGnot) || 0,
+    trades: Number(fromMap.trades) || 0,
+    buyVol: Number(fromMap.buyVol) || 0,
+    sellVol: Number(fromMap.sellVol) || 0,
+  };
 }
 
 /**

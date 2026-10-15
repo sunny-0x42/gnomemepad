@@ -140,21 +140,28 @@ export function startMarketsSnapshotWorker({
     throw new Error("buildFn required");
   }
   let stopped = false;
+  let running = false;
   const nets = Array.isArray(networkIds) ? networkIds : [networkIds];
 
   async function tick() {
-    for (const id of nets) {
-      if (stopped) return;
-      const t0 = Date.now();
-      try {
-        const data = await buildFn(id);
-        await writeMarketsSnapshot(id, data, Date.now() - t0);
-        console.log(
-          `[snapshot] ${id} ok ${Date.now() - t0}ms markets=${data?.count ?? data?.markets?.length ?? "?"}`,
-        );
-      } catch (e) {
-        console.warn(`[snapshot] ${id} fail`, String(e.message || e).slice(0, 160));
+    if (running || stopped) return;
+    running = true;
+    try {
+      for (const id of nets) {
+        if (stopped) return;
+        const t0 = Date.now();
+        try {
+          const data = await buildFn(id);
+          await writeMarketsSnapshot(id, data, Date.now() - t0);
+          console.log(
+            `[snapshot] ${id} ok ${Date.now() - t0}ms markets=${data?.count ?? data?.markets?.length ?? "?"}`,
+          );
+        } catch (e) {
+          console.warn(`[snapshot] ${id} fail`, String(e.message || e).slice(0, 160));
+        }
       }
+    } finally {
+      running = false;
     }
   }
 

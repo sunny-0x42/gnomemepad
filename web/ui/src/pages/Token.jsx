@@ -39,6 +39,13 @@ import {
   twitterUrl,
   websiteUrl,
 } from "../lib/meta";
+import {
+  displayTradeCount,
+  displayVolumeGnot,
+  formatProgressPct,
+  graduationGnotOf,
+  progressPctOf,
+} from "../lib/marketHeat";
 import { isWatched } from "../lib/watchlist";
 import CreatorChip from "../components/CreatorChip";
 import { AchievementBadgeRow } from "../components/AchievementBadge";
@@ -354,12 +361,13 @@ export default function Token() {
   // Document title + basic share meta for SPA
   useEffect(() => {
     if (!m) return;
-    const pct = m.progressPct || 0;
-    const title = `$${m.symbol} · ${pct}% · gnomi`;
+    const pctRaw = progressPctOf(m);
+    const title =
+      pctRaw == null ? `$${m.symbol} · gnomi` : `$${m.symbol} · ${formatProgressPct(pctRaw, m)} · gnomi`;
     document.title = title;
     const desc =
       meta?.description ||
-      `${m.name} ($${m.symbol}) — ${pct}% to graduate on Gno ${netLabel}. Fair bonding curve.`;
+      `${m.name} ($${m.symbol}) — ${pctRaw == null ? "curve" : `${formatProgressPct(pctRaw, m)} to graduate`} on Gno ${netLabel}. Fair bonding curve.`;
     let el = document.querySelector('meta[name="description"]');
     if (el) el.setAttribute("content", desc);
     let og = document.querySelector('meta[property="og:title"]');
@@ -2157,8 +2165,11 @@ export default function Token() {
   function shareX() {
     const og = `${window.location.origin}/.netlify/functions/og?id=${encodeURIComponent(m?.id || id)}${m?.pkg ? `&pkg=${encodeURIComponent(m.pkg)}` : ""}`;
     const url = m?.id ? og : window.location.href;
+    const pctShare = progressPctOf(m);
     const text = m
-      ? `$${m.symbol} on gnomi — ${m.progressPct || 0}% to graduate on Gno ${netLabel}`
+      ? pctShare == null
+        ? `$${m.symbol} on gnomi`
+        : `$${m.symbol} on gnomi — ${formatProgressPct(pctShare, m)} to graduate on Gno ${netLabel}`
       : "gnomi";
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
@@ -2286,8 +2297,10 @@ export default function Token() {
     return <TokenSkeleton t={t} />;
   }
 
-  const canGrad = !isPool && (m.progressPct || 0) >= 100;
-  const pct = Math.min(100, m.progressPct || 0);
+  const pctValue = progressPctOf(m);
+  const pctKnown = pctValue != null;
+  const pct = pctKnown ? Math.min(100, pctValue) : 0;
+  const canGrad = !isPool && pctKnown && pctValue >= 100;
   const watched = isWatched(watchlist, m.id, m.pkg);
   // Adena / Gnoswap: packagePath.SYMBOL — NEVER Token.ID with .seq (…SYMBOL.0000001)
   const adenaTokenPath = adenaPath(m);
@@ -2303,20 +2316,24 @@ export default function Token() {
   const wugnotCurve = isWugnotCollateralPad(m.pkg || pkgQ || health?.pkg);
   /** Display unit for raise / price on WUGNOT pads (1 WUGNOT = 1 GNOT). */
   const raiseUnit = wugnotCurve ? "WUGNOT" : "GNOT";
-  const gradGnot =
-    Number(m.params?.graduationGnot) ||
-    (Number(m.params?.graduation) || 0) / UGNOT_PER_GNOT ||
-    500;
-  const raisedG = Number(m.raisedGnot != null ? m.raisedGnot : (m.raised || 0) / UGNOT_PER_GNOT) || 0;
+  const gradGnot = graduationGnotOf(m);
+  const raisedG =
+    m.raisedGnot != null && m.raisedGnot !== "" && Number.isFinite(Number(m.raisedGnot))
+      ? Number(m.raisedGnot)
+      : m.raised != null && m.raised !== "" && Number.isFinite(Number(m.raised))
+        ? Number(m.raised) / UGNOT_PER_GNOT
+        : null;
   const leftGnot =
-    m.remainingRaiseGnot != null
+    m.remainingRaiseGnot != null && Number.isFinite(Number(m.remainingRaiseGnot))
       ? Number(m.remainingRaiseGnot)
       : isPool
         ? 0
-        : Math.max(0, gradGnot - raisedG);
+        : gradGnot != null && raisedG != null
+          ? Math.max(0, gradGnot - raisedG)
+          : null;
   const trades = mergedTrades;
   const holders = m.holders || [];
-  const vol = m.tradeStats?.volumeGnot || 0;
+  const vol = displayVolumeGnot(m);
   const img = resolveTokenImage(m, meta);
   const tw = twitterUrl(meta?.twitter);
   const tg = telegramUrl(meta?.telegram);
@@ -2332,12 +2349,14 @@ export default function Token() {
     priceDelta =
       ((chartPrices[chartPrices.length - 1] - chartPrices[0]) / chartPrices[0]) * 100;
   }
-  const volUsd =
-    toUsd(vol, m.gnotUsd, m.tradeStats?.volumeUsd) ||
-    (vol > 0 && m.gnotUsd > 0 ? vol * m.gnotUsd : 0);
-  const txCount = Number(m.tradeStats?.trades != null ? m.tradeStats.trades : trades?.length || 0);
+  const volKnown = vol != null;
+  const volUsd = volKnown
+    ? toUsd(vol, m.gnotUsd) || (vol > 0 && Number(m.gnotUsd) > 0 ? vol * Number(m.gnotUsd) : 0)
+    : 0;
+  const summedTx = displayTradeCount(m);
+  const txCount = summedTx != null ? summedTx : trades?.length ? trades.length : null;
   const mcapGnotNum = Number(m.mcapGnot || 0);
-  const volGnotNum = Number(vol || 0);
+  const volGnotNum = volKnown ? Number(vol) || 0 : null;
   const milestones = [25, 50, 75, 100];
   const totalSupply = Number(m.params?.totalSupply) || 1e9;
   const curveSupply = Number(m.params?.curveSupply) || 8e8;
@@ -2387,18 +2406,20 @@ export default function Token() {
           <span>
             {canGrad ? (
               <strong>{t("readyGraduate")}</strong>
-            ) : (
+            ) : leftGnot != null ? (
               <>
                 <strong>
                   {fmtGnot(leftGnot, { alreadyGnot: true })} {raiseUnit}
                 </strong>
                 <span className="muted"> {t("leftToGraduate")}</span>
               </>
+            ) : (
+              <span className="muted">—</span>
             )}
           </span>
           <span className="mono">
-            {fmtGnot(raisedG, { alreadyGnot: true })} / {fmtGnot(gradGnot, { alreadyGnot: true })}{" "}
-            {raiseUnit}
+            {raisedG != null ? fmtGnot(raisedG, { alreadyGnot: true }) : "—"} /{" "}
+            {gradGnot != null ? fmtGnot(gradGnot, { alreadyGnot: true }) : "—"} {raiseUnit}
           </span>
         </div>
         {wugnotCurve && !compact && (
@@ -2425,10 +2446,12 @@ export default function Token() {
         </div>
         <div className="grad-fomo-foot muted">
           <span>
-            <strong className="raise-pct-num">{pct}%</strong> {t("filled")}
+            <strong className="raise-pct-num">{pctKnown ? formatProgressPct(pct, m) : "—"}</strong>{" "}
+            {t("filled")}
           </span>
           <span>
-            {t("targetRaise")} {fmtGnot(gradGnot, { alreadyGnot: true })} {raiseUnit} → {t("poolGnoswap")}
+            {t("targetRaise")} {gradGnot != null ? fmtGnot(gradGnot, { alreadyGnot: true }) : "—"}{" "}
+            {raiseUnit} → {t("poolGnoswap")}
           </span>
         </div>
         {canGrad && (
@@ -2613,17 +2636,28 @@ export default function Token() {
           <div className="ths-metric-item">
             <span className="ths-metric-label">{(t("volume") || "VOLUME").toUpperCase()}</span>
             <strong className="ths-metric-val mono ths-vol-val">
-              {volUsd > 0
+              {volKnown && volUsd > 0
                 ? fmtMcapUsd(volUsd)
-                : volGnotNum > 0
+                : volKnown && volGnotNum > 0
                   ? `${fmtGnot(volGnotNum, { alreadyGnot: true })} GNOT`
-                  : Number(m.gnotUsd) > 0
-                    ? "$0"
+                  : volKnown
+                    ? "0"
                     : "—"}
             </strong>
             <span className="ths-metric-sub faint mono">
-              {`${fmtNum(txCount)} tx · ${volGnotNum > 0 ? volGnotNum.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "0.0000"} GNOT`}
-              {m.volumeScope === "curve_only" ? " · curve only" : ""}
+              {txCount == null ? "—" : `${fmtNum(txCount)} tx`}
+              {volKnown
+                ? ` · ${(volGnotNum > 0 ? volGnotNum : 0).toLocaleString("en-US", {
+                    minimumFractionDigits: 4,
+                    maximumFractionDigits: 4,
+                  })} GNOT`
+                : ""}
+              {m.volumeScope === "curve_only" && !(Number(m.dexTradeStats?.volumeGnot) > 0)
+                ? " · curve only"
+                : ""}
+              {m.tradeStats?.volumeCapped || m.tradeStats?.volumeNote
+                ? " · On-chain window, not lifetime."
+                : ""}
             </span>
           </div>
 
@@ -2655,7 +2689,9 @@ export default function Token() {
                   if (usd > 0) return fmtMcapUsd(usd);
                   return `${fmtGnot(shownG, { alreadyGnot: true })} GNOT`;
                 }
-                return `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`;
+                return gradGnot != null
+                  ? `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`
+                  : "—";
               })()}
             </strong>
             <span className="ths-metric-sub faint mono">
@@ -2672,7 +2708,7 @@ export default function Token() {
                     if (listed) return t("poolReserves") || "Listed pool TVL";
                     return t("poolReserves") || "Pool TVL";
                   })()
-                : `${pct}% ${t("filled") || "filled"}`}
+                : `${pctKnown ? formatProgressPct(pct, m) : "—"} ${t("filled") || "filled"}`}
             </span>
           </div>
 
@@ -2862,6 +2898,7 @@ export default function Token() {
                   avgEntryGnot={m.avgEntryGnot}
                   stats={m.holdersStats}
                   capped={m.holdersCapped}
+                  source={m.holdersSource}
                   buyersEver={m.buyers}
                 />
               ) : (
@@ -3733,8 +3770,10 @@ function SlippageSelect({ value, onChange, label = "Max slippage" }) {
 }
 
 function fmtHolderPct(n) {
+  if (n == null || n === "") return "—";
   const x = Number(n);
-  if (!Number.isFinite(x) || x <= 0) return "0%";
+  if (!Number.isFinite(x)) return "—";
+  if (x <= 0) return "0%";
   if (x < 0.01) return "<0.01%";
   if (x >= 10) return `${x.toFixed(1)}%`;
   return `${x.toFixed(2)}%`;
@@ -3749,6 +3788,7 @@ function HoldersList({
   avgEntryGnot = null,
   stats = null,
   capped = false,
+  source = null,
   buyersEver = null,
 }) {
   const { showToast } = useApp();
@@ -3766,7 +3806,8 @@ function HoldersList({
     if (!holders?.length) {
       return {
         active: 0,
-        buyersEver: Number(buyersEver) || 0,
+        buyersEver:
+          buyersEver != null && Number.isFinite(Number(buyersEver)) ? Number(buyersEver) : null,
         heldPct: 0,
         top1Pct: 0,
         top10Pct: 0,
@@ -3786,7 +3827,8 @@ function HoldersList({
     }, 0);
     return {
       active: holders.length,
-      buyersEver: Number(buyersEver) || holders.length,
+      buyersEver:
+        buyersEver != null && Number.isFinite(Number(buyersEver)) ? Number(buyersEver) : null,
       heldPct: supply > 0 ? (heldBal / supply) * 100 : 0,
       top1Pct: top1,
       top10Pct: top10,
@@ -3808,11 +3850,17 @@ function HoldersList({
       <div className="holders-stats" aria-label="On-chain holder stats">
         <div className="holders-stat">
           <span className="holders-stat-k">Holders</span>
-          <span className="holders-stat-v mono">{derived.active ?? 0}</span>
+          <span className="holders-stat-v mono">
+            {derived.active != null && Number.isFinite(Number(derived.active)) ? derived.active : "—"}
+          </span>
         </div>
         <div className="holders-stat">
           <span className="holders-stat-k">Buyers</span>
-          <span className="holders-stat-v mono">{derived.buyersEver ?? 0}</span>
+          <span className="holders-stat-v mono">
+            {derived.buyersEver != null && Number.isFinite(Number(derived.buyersEver))
+              ? derived.buyersEver
+              : "—"}
+          </span>
         </div>
         <div className="holders-stat">
           <span className="holders-stat-k">Held</span>
@@ -3827,6 +3875,15 @@ function HoldersList({
           <span className="holders-stat-v mono">{fmtHolderPct(derived.top10Pct)}</span>
         </div>
       </div>
+
+      {(capped || stats?.capped || source || stats?.source) && (
+        <p className="holders-note muted">
+          {capped || stats?.capped ? "Holder list is still truncated." : ""}
+          {source || stats?.source
+            ? `${capped || stats?.capped ? " " : ""}Source: ${source || stats.source}.`
+            : ""}
+        </p>
+      )}
 
       {!holders?.length ? (
         <div className="trades-empty muted">No holders with balance yet</div>
@@ -3996,7 +4053,7 @@ function AboutPanel({
         <div className="tok-row">
           <span>{t("targetRaise")}</span>
           <strong className="mono">
-            {fmtGnot(gradGnot, { alreadyGnot: true })} {raiseUnit}
+            {gradGnot != null ? `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}` : "—"}
           </strong>
         </div>
         <div className="tok-row">
