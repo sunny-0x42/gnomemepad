@@ -86,8 +86,8 @@ function cacheGet(key) {
 
 function cacheSet(key, value, ttlMs) {
   memCache.set(key, { at: Date.now(), ttlMs, value });
-  // Soft cap — drop oldest if oversized
-  if (memCache.size > 64) {
+  // Soft cap — drop oldest if oversized. Room for pad-tx walks plus one detail per launch.
+  if (memCache.size > 160) {
     const first = memCache.keys().next().value;
     if (first != null) memCache.delete(first);
   }
@@ -823,6 +823,9 @@ function parseLaunchInfo(line, totalSupply = 1_000_000_000, gradUgnot = 0) {
 }
 
 async function getParams(RPC, PKG) {
+  const cacheKey = `params:${PKG}:${fullMetrics() ? "full" : "fast"}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
   try {
     const raw = await qeval(
       RPC,
@@ -831,7 +834,10 @@ async function getParams(RPC, PKG) {
       fullMetrics() ? 20_000 : 0,
     );
     const parsed = paramsFromInfoRaw(raw);
-    if (parsed) return parsed;
+    if (parsed) {
+      cacheSet(cacheKey, parsed, 60_000);
+      return parsed;
+    }
     throw new Error("bad ParamsInfo");
   } catch {
     // Netlify fast path keeps the old display fallback. Full metrics must not
@@ -1032,6 +1038,7 @@ async function getMarketsOne(RPC, PKG, meta = {}) {
           }));
           parsed.tradeStats = summarizeTradeStats(pts);
           markCurveRingLowerBound(parsed.tradeStats, pts.length);
+          rememberCurvePoints(PKG, id, pts);
           await maybeUpgradeCurveVolume(PKG, id, parsed.tradeStats, pts, null);
           attachCurveDexVolume(parsed);
         } catch (e) {
@@ -1131,6 +1138,10 @@ async function getMarkets(RPC, sources, opts = {}) {
     };
   }
   const active = sources.find((s) => s.active) || sources[0];
+  if (fullMetrics()) {
+    const pkgs = new Set((sources || []).map((s) => s && s.pkg).filter(Boolean));
+    for (const pkg of pkgs) replayPadBalances(pkg).catch(() => {});
+  }
   const parts = await Promise.all(
     sources.map((s) =>
       getMarketsOne(RPC, s.pkg, {
@@ -1970,6 +1981,23 @@ export async function indexerPadBuyers(pkg, id) {
 }
 
 const curveVolumeInflight = new Map();
+const padTxInflight = new Map();
+const curvePtsCache = new Map();
+
+function rememberCurvePoints(pkg, id, pts) {
+  if (!pkg || !id || !Array.isArray(pts)) return;
+  curvePtsCache.set(`${pkg}|${id}`, { at: Date.now(), pts });
+  if (curvePtsCache.size > 400) {
+    const first = curvePtsCache.keys().next().value;
+    if (first != null) curvePtsCache.delete(first);
+  }
+}
+
+function rememberedCurvePoints(pkg, id, maxAgeMs = 90_000) {
+  const hit = curvePtsCache.get(`${pkg}|${id}`);
+  if (!hit || Date.now() - hit.at > maxAgeMs) return null;
+  return hit.pts;
+}
 
 function eventAttr(attrs, key) {
   for (const a of attrs || []) {
@@ -2057,21 +2085,26 @@ async function indexerTradeEventPage(pkg, func, afterHeight) {
   }
 }
 
-/**
- * Lifetime pad curve volume from Buy, Sell, SwapBuy, SwapSell events.
- * ugnot on those events is the same integer recordTrade stores.
- * Swap* is the pad CPMM and is not a Gnoswap fill, so it is not in dexTradeStats.
- * Returns ok:false when a call has no ugnot/id or the page walk does not finish.
- */
-async function scanIndexerCurveVolume(pkg) {
-  const byId = Object.create(null);
-  const seen = new Set();
-  const buySide = new Set(["Buy", "SwapBuy"]);
-  for (const func of ["Buy", "Sell", "SwapBuy", "SwapSell"]) {
+/** One finished walk of a pad MsgCall, shared by volume and the holder ledger. */
+async function cachedIndexerFuncTxs(pkg, func) {
+  const cacheKey = `pad-txs:${pkg}:${func}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  const inflightKey = `${pkg}|${func}`;
+  const inflight = padTxInflight.get(inflightKey);
+  if (inflight) return inflight;
+  const job = (async () => {
+    const rows = [];
+    const seen = new Set();
     let cursor = 0;
     let pages = 0;
     let done = false;
-    while (pages < INDEXER_CURVE_VOLUME_MAX_PAGES) {
+    // Volume funcs keep the old 8-page budget on every host. Holder funcs use it only in full mode.
+    const volumeFunc =
+      func === "Buy" || func === "Sell" || func === "SwapBuy" || func === "SwapSell";
+    const budget =
+      volumeFunc || fullMetrics() ? INDEXER_CURVE_VOLUME_MAX_PAGES : 2;
+    while (pages < budget) {
       const txs = await indexerTradeEventPage(pkg, func, cursor);
       pages += 1;
       if (!txs.length) {
@@ -2087,6 +2120,117 @@ async function scanIndexerCurveVolume(pkg) {
         if (seen.has(txKey)) continue;
         seen.add(txKey);
         added += 1;
+        rows.push(tx);
+      }
+      if (added === 0 || maxH <= cursor) {
+        done = true;
+        break;
+      }
+      cursor = maxH > 0 ? maxH - 1 : maxH;
+    }
+    return { ok: done, pages, rows };
+  })();
+  padTxInflight.set(inflightKey, job);
+  try {
+    const result = await job;
+    cacheSet(cacheKey, result, result.ok ? 180_000 : 15_000);
+    return result;
+  } finally {
+    padTxInflight.delete(inflightKey);
+  }
+}
+
+/**
+ * Lifetime pad curve volume from Buy, Sell, SwapBuy, SwapSell events.
+ * ugnot on those events is the same integer recordTrade stores.
+ * Swap* is the pad CPMM and is not a Gnoswap fill, so it is not in dexTradeStats.
+ * Returns ok:false when a call has no ugnot/id or the page walk does not finish.
+ */
+async function scanIndexerCurveVolume(pkg) {
+  const byId = Object.create(null);
+  const buySide = new Set(["Buy", "SwapBuy"]);
+  for (const func of ["Buy", "Sell", "SwapBuy", "SwapSell"]) {
+    const pack = await cachedIndexerFuncTxs(pkg, func);
+    if (!pack.ok) return { ok: false, byId: {} };
+    for (const tx of pack.rows) {
+      let calls = 0;
+      for (const msg of tx.messages || []) {
+        const v = msg?.value || {};
+        if (v.func === func && v.pkg_path === pkg) calls += 1;
+      }
+      let matched = 0;
+      for (const ev of tx.response?.events || []) {
+        if (!ev || ev.type !== func || ev.pkg_path !== pkg) continue;
+        matched += 1;
+        const id = eventAttr(ev.attrs, "id");
+        const ugnot = parseWholeUgnot(eventAttr(ev.attrs, "ugnot"));
+        if (!id || ugnot == null) return { ok: false, byId: {} };
+        let row = byId[id];
+        if (!row) {
+          row = {
+            volumeUgnot: 0,
+            buyUgnot: 0,
+            sellUgnot: 0,
+            buyCount: 0,
+            sellCount: 0,
+            trades: 0,
+          };
+          byId[id] = row;
+        }
+        row.volumeUgnot += ugnot;
+        row.trades += 1;
+        if (buySide.has(func)) {
+          row.buyUgnot += ugnot;
+          row.buyCount += 1;
+        } else {
+          row.sellUgnot += ugnot;
+          row.sellCount += 1;
+        }
+        if (!Number.isSafeInteger(row.volumeUgnot)) return { ok: false, byId: {} };
+      }
+      if (calls !== matched) return { ok: false, byId: {} };
+    }
+  }
+  return { ok: true, byId };
+}
+
+const HOLDER_G1 = /^g1[a-z0-9]{38,}$/i;
+const ledgerInflight = new Map();
+
+function ledgerBook(byId, id) {
+  let book = byId[id];
+  if (!book) {
+    book = new Map();
+    byId[id] = book;
+  }
+  return book;
+}
+
+function ledgerAdd(book, addr, delta) {
+  if (!HOLDER_G1.test(String(addr || ""))) return false;
+  const next = (book.get(addr) || 0) + delta;
+  if (!Number.isSafeInteger(next)) return false;
+  book.set(addr, next);
+  return true;
+}
+
+/**
+ * Replay mint, burn, and transfer events into per-launch balances.
+ * A launch is usable only when the caller checks the positive sum against RealSold.
+ */
+async function replayPadBalances(pkg) {
+  const cacheKey = `pad-ledger:${pkg}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  const inflight = ledgerInflight.get(pkg);
+  if (inflight) return inflight;
+  const job = (async () => {
+    const byId = Object.create(null);
+    const funcs = ["Buy", "Sell", "SwapBuy", "SwapSell", "Transfer", "TransferFrom", "ReleaseListSeed"];
+    for (const func of funcs) {
+      const pack = await cachedIndexerFuncTxs(pkg, func);
+      if (!pack.ok) return { ok: false, byId };
+      for (const tx of pack.rows) {
         let calls = 0;
         for (const msg of tx.messages || []) {
           const v = msg?.value || {};
@@ -2097,42 +2241,90 @@ async function scanIndexerCurveVolume(pkg) {
           if (!ev || ev.type !== func || ev.pkg_path !== pkg) continue;
           matched += 1;
           const id = eventAttr(ev.attrs, "id");
-          const ugnot = parseWholeUgnot(eventAttr(ev.attrs, "ugnot"));
-          if (!id || ugnot == null) return { ok: false, byId: {} };
-          let row = byId[id];
-          if (!row) {
-            row = {
-              volumeUgnot: 0,
-              buyUgnot: 0,
-              sellUgnot: 0,
-              buyCount: 0,
-              sellCount: 0,
-              trades: 0,
-            };
-            byId[id] = row;
+          if (!id) return { ok: false, byId };
+          const book = ledgerBook(byId, id);
+          let applied = false;
+          if (func === "Buy" || func === "SwapBuy") {
+            const tokens = parseWholeUgnot(eventAttr(ev.attrs, "tokens"));
+            applied = tokens != null && ledgerAdd(book, eventAttr(ev.attrs, "buyer"), tokens);
+          } else if (func === "Sell" || func === "SwapSell") {
+            const tokens = parseWholeUgnot(eventAttr(ev.attrs, "tokens"));
+            applied = tokens != null && ledgerAdd(book, eventAttr(ev.attrs, "seller"), -tokens);
+          } else if (func === "Transfer" || func === "TransferFrom") {
+            const amount = parseWholeUgnot(eventAttr(ev.attrs, "amount"));
+            applied =
+              amount != null &&
+              ledgerAdd(book, eventAttr(ev.attrs, "from"), -amount) &&
+              ledgerAdd(book, eventAttr(ev.attrs, "to"), amount);
+          } else if (func === "ReleaseListSeed") {
+            const tokens = parseWholeUgnot(eventAttr(ev.attrs, "tokens"));
+            applied = tokens != null && ledgerAdd(book, eventAttr(ev.attrs, "to"), tokens);
           }
-          row.volumeUgnot += ugnot;
-          row.trades += 1;
-          if (buySide.has(func)) {
-            row.buyUgnot += ugnot;
-            row.buyCount += 1;
-          } else {
-            row.sellUgnot += ugnot;
-            row.sellCount += 1;
-          }
-          if (!Number.isSafeInteger(row.volumeUgnot)) return { ok: false, byId: {} };
+          if (!applied) return { ok: false, byId };
         }
-        if (calls !== matched) return { ok: false, byId: {} };
+        if (calls !== matched) return { ok: false, byId };
       }
-      if (added === 0 || maxH <= cursor) {
-        done = true;
-        break;
-      }
-      cursor = maxH > 0 ? maxH - 1 : maxH;
     }
-    if (!done) return { ok: false, byId: {} };
+    return { ok: true, byId };
+  })();
+  ledgerInflight.set(pkg, job);
+  try {
+    const result = await job;
+    cacheSet(cacheKey, result, result.ok ? 45_000 : 10_000);
+    return result;
+  } catch {
+    return { ok: false, byId: {} };
+  } finally {
+    ledgerInflight.delete(pkg);
   }
-  return { ok: true, byId };
+}
+
+/** Positive balances from the replay. Null when the sum is not RealSold. */
+async function holdersFromLedger(RPC, PKG, id) {
+  const ledger = await replayPadBalances(PKG);
+  if (!ledger?.ok) return null;
+  let info = "";
+  try {
+    info = String(
+      await qeval(RPC, PKG, `${PKG}.LaunchInfo(${JSON.stringify(id)})`, 20_000),
+    );
+  } catch {
+    return null;
+  }
+  const parts = info.split("|");
+  if (parts[0] !== id) return null;
+  const sold = Number(parts[5]);
+  const buyers = Number(parts[6]);
+  if (!Number.isSafeInteger(sold) || sold < 0) return null;
+  const book = ledger.byId[id] || new Map();
+  let sum = 0;
+  const holders = [];
+  for (const [addr, bal] of book) {
+    if (!Number.isSafeInteger(bal) || bal < 0) return null;
+    if (bal === 0) continue;
+    sum += bal;
+    if (!Number.isSafeInteger(sum)) return null;
+    holders.push({ address: addr, balance: bal });
+  }
+  if (sum !== sold) return null;
+  holders.sort((a, b) => b.balance - a.balance);
+  return {
+    id,
+    pkg: PKG,
+    holders,
+    holdersActive: holders.length,
+    holdersCapped: false,
+    holdersSource: "indexer ledger",
+    fullMetrics: true,
+    holdersNote: null,
+    transferHoldersOmitted: false,
+    holdersStats: {
+      active: holders.length,
+      buyersEver: Number.isFinite(buyers) ? buyers : null,
+      capped: false,
+      source: "indexer ledger",
+    },
+  };
 }
 
 async function indexerPadCurveVolume(pkg) {
@@ -2151,7 +2343,7 @@ async function indexerPadCurveVolume(pkg) {
   curveVolumeInflight.set(pkg, job);
   try {
     const result = await job;
-    cacheSet(cacheKey, result, result.ok ? 60_000 : 15_000);
+    cacheSet(cacheKey, result, result.ok ? 180_000 : 15_000);
     return result;
   } finally {
     curveVolumeInflight.delete(pkg);
@@ -2194,9 +2386,37 @@ async function maybeUpgradeCurveVolume(pkg, id, stats, curvePoints, extraStats) 
   }
 }
 
+/** Transfer, TransferFrom, and ReleaseListSeed parties for one launch. */
+async function indexerTransferParties(pkg, id) {
+  const found = [];
+  const seen = new Set();
+  let capped = false;
+  for (const func of ["Transfer", "TransferFrom", "ReleaseListSeed"]) {
+    const pack = await cachedIndexerFuncTxs(pkg, func);
+    if (!pack?.ok) {
+      capped = true;
+      continue;
+    }
+    for (const tx of pack.rows) {
+      for (const ev of tx.response?.events || []) {
+        if (!ev || ev.type !== func || ev.pkg_path !== pkg) continue;
+        if (eventAttr(ev.attrs, "id") !== id) continue;
+        const keys = func === "ReleaseListSeed" ? ["to"] : ["from", "to"];
+        for (const key of keys) {
+          const addr = String(eventAttr(ev.attrs, key) || "");
+          if (!HOLDER_G1.test(addr) || seen.has(addr)) continue;
+          seen.add(addr);
+          found.push(addr);
+        }
+      }
+    }
+  }
+  return { addrs: found, capped };
+}
+
 /**
  * ListBuyers is capped at 100. Full metrics pages Buy/SwapBuy callers (max 20)
- * and keeps holdersCapped only when that page bound is hit.
+ * and unions Transfer recipients. holdersCapped stays set when a walk does not finish.
  */
 async function resolveHolderAddrs(RPC, pkg, id, opts = {}) {
   const full = fullMetrics();
@@ -2242,17 +2462,47 @@ async function resolveHolderAddrs(RPC, pkg, id, opts = {}) {
       indexerError = String(e.message || e).slice(0, 180);
     }
   }
+  if (full) {
+    try {
+      const xfer = await indexerTransferParties(pkg, id);
+      const seen = new Set(addrs);
+      for (const addr of xfer.addrs) {
+        if (seen.has(addr)) continue;
+        seen.add(addr);
+        addrs.push(addr);
+      }
+      if (xfer.capped) holdersCapped = true;
+      else if (xfer.addrs.length) holdersSource = `${holdersSource}+transfer`;
+    } catch (e) {
+      holdersCapped = true;
+      if (!indexerError) indexerError = String(e.message || e).slice(0, 180);
+    }
+  }
   return { addrs, holdersSource, holdersCapped, indexerError, pages };
 }
 
 async function getMarket(RPC, PKG, id, meta = {}) {
-  const params = await getParams(RPC, PKG);
-  const info = await qeval(
-    RPC,
-    PKG,
-    `${PKG}.LaunchInfo("${id}")`,
-    fullMetrics() ? 20_000 : 0,
-  );
+  const callMs = fullMetrics() ? 20_000 : 0;
+  // Holder replay shares the volume page cache. Start it while the detail qevals run.
+  if (fullMetrics() && meta.holders !== true) {
+    replayPadBalances(PKG).catch(() => {});
+  }
+  const [params, info, padAddrRaw, prefRaw, releasedRaw, histPack] = await Promise.all([
+    getParams(RPC, PKG),
+    qeval(RPC, PKG, `${PKG}.LaunchInfo("${id}")`, callMs),
+    qeval(RPC, PKG, `${PKG}.PadAddress()`)
+      .then((v) => String(v || "").replace(/^"|"$/g, ""))
+      .catch(() => ""),
+    qeval(RPC, PKG, `${PKG}.PreferredVenueOf(${JSON.stringify(id)})`)
+      .then((v) => String(v || "").replace(/^"|"$/g, "").trim().toLowerCase())
+      .catch(() => ""),
+    qeval(RPC, PKG, `${PKG}.ListSeedReleasedOf(${JSON.stringify(id)})`)
+      .then((v) => String(v || "").replace(/^"|"$/g, "").trim().toLowerCase())
+      .catch(() => null),
+    qeval(RPC, PKG, `${PKG}.TradeHistory(${JSON.stringify(id)})`, callMs)
+      .then((hist) => ({ ok: true, hist }))
+      .catch((error) => ({ ok: false, error })),
+  ]);
   const supplyArg = params ? params.totalSupply : null;
   const gradArg = params ? params.graduation : 0;
   const m = parseLaunchInfo(String(info), supplyArg, gradArg);
@@ -2283,56 +2533,26 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   m.padLabel = String(PKG).split("/").pop() || "pad";
   // padv14+: WUGNOT curve collateral (auto-list at graduate)
   m.collateral = /padv1[4-9]\b|padv[2-9]\d\b/i.test(String(PKG)) ? "wugnot" : "ugnot";
-  try {
-    const pa = String(await qeval(RPC, PKG, `${PKG}.PadAddress()`) || "").replace(/^"|"$/g, "");
-    if (/^g1[a-z0-9]+$/i.test(pa)) m.padAddr = pa;
-  } catch {
-    /* optional */
-  }
-  // Dual-DEX SOURCE: PreferredVenueOf + ListSeedReleasedOf (absent on Pearl padv23)
-  try {
-    const pref = String(
-      await qeval(RPC, PKG, `${PKG}.PreferredVenueOf(${JSON.stringify(id)})`),
-    )
-      .replace(/^"|"$/g, "")
-      .trim()
-      .toLowerCase();
-    if (pref) m.preferredVenue = pref;
-  } catch {
-    /* older pad */
-  }
-  try {
-    const released = String(
-      await qeval(RPC, PKG, `${PKG}.ListSeedReleasedOf(${JSON.stringify(id)})`),
-    )
-      .replace(/^"|"$/g, "")
-      .trim()
-      .toLowerCase();
-    m.listSeedReleased =
-      released === "true" || released === "1" || released === "True";
-  } catch {
-    m.listSeedReleased = false;
-  }
+  if (/^g1[a-z0-9]+$/i.test(padAddrRaw)) m.padAddr = padAddrRaw;
+  if (prefRaw) m.preferredVenue = prefRaw;
+  m.listSeedReleased =
+    releasedRaw === "true" || releasedRaw === "1" || releasedRaw === "True";
   let curveHistoryOk = true;
   let curveHistoryPts = [];
-  try {
-    const hist = await qeval(
-      RPC,
-      PKG,
-      `${PKG}.TradeHistory(${JSON.stringify(id)})`,
-      fullMetrics() ? 20_000 : 0,
-    );
-    curveHistoryPts = parseTradeHistory(hist).map((pt) => ({
+  if (histPack.ok) {
+    curveHistoryPts = parseTradeHistory(histPack.hist).map((pt) => ({
       ...pt,
       // pad Price = ugnot_per_token * 1e6 → GNOT/token = price / 1e6 / 1e6
       priceGnot: Number(pt.price) / 1_000_000 / UGNOT_PER_GNOT,
       volumeGnot: (Number(pt.ugnot) || 0) / UGNOT_PER_GNOT,
     }));
     m.chart = curveHistoryPts;
-  } catch (e) {
+  } else {
     curveHistoryOk = false;
     m.chart = [];
-    if (fullMetrics()) m.tradeStatsError = String(e.message || e).slice(0, 180);
+    if (fullMetrics()) {
+      m.tradeStatsError = String(histPack.error?.message || histPack.error || "").slice(0, 180);
+    }
   }
   // Inject Gnoswap list / Add-LP event when listed
   try {
@@ -2521,6 +2741,24 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     m.holdersStats = null;
     return m;
   }
+  if (fullMetrics()) {
+    try {
+      const replayed = await holdersFromLedger(RPC, PKG, id);
+      if (replayed) {
+        m.holders = replayed.holders;
+        m.holdersActive = replayed.holdersActive;
+        m.holdersCapped = false;
+        m.holdersSource = replayed.holdersSource;
+        m.holdersLabel = "Holders";
+        m.holdersNote = null;
+        m.transferHoldersOmitted = false;
+        m.holdersStats = replayed.holdersStats;
+        return m;
+      }
+    } catch {
+      /* BalanceOf fallback */
+    }
+  }
   try {
     const resolved = await resolveHolderAddrs(RPC, PKG, id);
     const { addrs, holdersSource, holdersCapped, indexerError, pages } = resolved;
@@ -2572,8 +2810,8 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     m.holdersSource = holdersSource;
     m.holdersLabel = "Holders";
     if (fullMetrics()) {
-      m.holdersNote = TRANSFER_HOLDERS_OMISSION;
-      m.transferHoldersOmitted = true;
+      m.holdersNote = holdersCapped ? TRANSFER_HOLDERS_OMISSION : null;
+      m.transferHoldersOmitted = !!holdersCapped;
       m.indexerPages = pages;
       if (indexerError) m.holdersIndexerError = indexerError;
       if (holderErrors.length) m.holderErrors = holderErrors;
@@ -2715,12 +2953,30 @@ async function getMetaBatch(RPC, META, items) {
 /** Holder balances only. Does not rebuild the token page. */
 async function loadHolderBalances(RPC, PKG, id) {
   const full = fullMetrics();
-  const { addrs, holdersSource, holdersCapped, indexerError, pages } = await resolveHolderAddrs(
-    RPC,
-    PKG,
-    id,
-    { raceMs: 3000 },
-  );
+  if (full) {
+    try {
+      const replayed = await holdersFromLedger(RPC, PKG, id);
+      if (replayed) return replayed;
+    } catch {
+      /* BalanceOf fallback */
+    }
+  }
+  const [resolved, buyerCount] = await Promise.all([
+    resolveHolderAddrs(RPC, PKG, id, { raceMs: 3000 }),
+    (async () => {
+      try {
+        const info = String(
+          await qeval(RPC, PKG, `${PKG}.LaunchInfo(${JSON.stringify(id)})`, full ? 20_000 : 0),
+        );
+        const parts = info.split("|");
+        const n = Number(parts[6]);
+        return parts[0] === id && Number.isFinite(n) ? n : null;
+      } catch {
+        return null;
+      }
+    })(),
+  ]);
+  const { addrs, holdersSource, holdersCapped, indexerError, pages } = resolved;
   const holders = [];
   const holderErrors = [];
   await mapPool(addrs, full ? 12 : 16, async (addr) => {
@@ -2739,6 +2995,7 @@ async function loadHolderBalances(RPC, PKG, id) {
     }
   });
   holders.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+  const omitTransfers = full && holdersCapped;
   return {
     id,
     pkg: PKG,
@@ -2749,8 +3006,8 @@ async function loadHolderBalances(RPC, PKG, id) {
     ...(full
       ? {
           fullMetrics: true,
-          holdersNote: TRANSFER_HOLDERS_OMISSION,
-          transferHoldersOmitted: true,
+          holdersNote: omitTransfers ? TRANSFER_HOLDERS_OMISSION : null,
+          transferHoldersOmitted: omitTransfers,
           indexerPages: pages,
           ...(indexerError ? { holdersIndexerError: indexerError } : {}),
           ...(holderErrors.length ? { errors: holderErrors } : {}),
@@ -2758,7 +3015,7 @@ async function loadHolderBalances(RPC, PKG, id) {
       : {}),
     holdersStats: {
       active: holders.length,
-      buyersEver: addrs.length,
+      buyersEver: buyerCount != null ? buyerCount : addrs.length,
       capped: holdersCapped,
       source: holdersSource,
     },
@@ -3067,14 +3324,16 @@ function json(statusCode, body, opts = {}) {
  *  - Gnoswap swap history for listed markets (same source as Token Trades tab)
  * limit: max events returned (default 40).
  */
-async function getActivity(RPC, sources, limit = 40) {
+async function getActivity(RPC, sources, limit = 40, preloaded = null) {
   const full = fullMetrics();
   const cap = full
     ? Math.min(200, Math.max(5, Number(limit) || 40))
     : Math.min(80, Math.max(5, Number(limit) || 40));
-  const { markets } = full
-    ? await getMarkets(RPC, sources, { lite: true, tradeStats: false })
-    : await getMarkets(RPC, sources);
+  const { markets } = Array.isArray(preloaded)
+    ? { markets: preloaded }
+    : full
+      ? await getMarkets(RPC, sources, { lite: true, tradeStats: false })
+      : await getMarkets(RPC, sources);
   const events = [];
   const errors = [];
   // Prefer active markets first, then by recency of launch
@@ -3091,13 +3350,20 @@ async function getActivity(RPC, sources, limit = 40) {
   const run = async (m) => {
       // 1) Pad TradeHistory (curve + LP marks while ring still has data)
       try {
-        const hist = await qeval(
-          RPC,
-          m.pkg,
-          `${m.pkg}.TradeHistory(${JSON.stringify(m.id)})`,
-          full ? 20_000 : 0,
-        );
-        const pts = parseTradeHistory(hist);
+        let pts = rememberedCurvePoints(m.pkg, m.id);
+        if (!pts) {
+          const hist = await qeval(
+            RPC,
+            m.pkg,
+            `${m.pkg}.TradeHistory(${JSON.stringify(m.id)})`,
+            full ? 20_000 : 0,
+          );
+          pts = parseTradeHistory(hist).map((pt) => ({
+            ...pt,
+            volumeGnot: (Number(pt.ugnot) || 0) / UGNOT_PER_GNOT,
+          }));
+          rememberCurvePoints(m.pkg, m.id, pts);
+        }
         for (const pt of pts) {
           // Only buy/sell for activity volume (skip open + LP seed ~500 GNOT)
           if (!isVolumeTradeSide(pt.side)) continue;
@@ -4738,7 +5004,14 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         const hit = cacheGet(aKey);
         if (hit) return json(200, { ...hit, cached: true }, { maxAge: 20 });
       }
-      const act = await getActivity(RPC, padSources, limit);
+      let preloaded = null;
+      if (!noCache) {
+        const snap = await readMarketsSnapshot(networkId);
+        if (snapshotUsable(snap) && Array.isArray(snap.data?.markets)) {
+          preloaded = snap.data.markets;
+        }
+      }
+      const act = await getActivity(RPC, padSources, limit, preloaded);
       cacheSet(aKey, act, 20_000);
       return json(200, act, { maxAge: 20, cacheTag: `activity-${networkId}` });
     }
@@ -6466,13 +6739,19 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     if (method === "GET" && p.startsWith("/api/market/")) {
       const id = decodeURIComponent(p.slice("/api/market/".length));
       const pkgQ = (q.get("pkg") || "").trim();
+      const detailKey = `market-detail:${networkId}:${pkgQ || "auto"}:${id}`;
+      if (!noCache) {
+        const hit = cacheGet(detailKey);
+        if (hit) return json(200, hit, { maxAge: 12 });
+      }
       const m = await withUsdPricing(
         await resolveMarketPkg(RPC, id, pkgQ || null, padSources, {
-          holders: fullMetrics(),
+          holders: false,
         }),
       );
       const tip = await tipHeightCached(RPC);
       if (m && !m.error) attachTokenBadges([m], { tipHeight: tip });
+      if (m && !m.error) cacheSet(detailKey, m, 15_000);
       return json(200, m, { maxAge: 12 });
     }
 

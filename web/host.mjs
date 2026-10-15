@@ -51,6 +51,7 @@ if (process.env.FULL_METRICS == null || process.env.FULL_METRICS === "") {
 
 import http from "node:http";
 import fs from "node:fs";
+import zlib from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,7 +88,39 @@ function safeFile(urlPath) {
   return full;
 }
 
-function sendFile(res, filePath) {
+const GZIP_EXT = new Set([".html", ".js", ".css", ".json", ".svg", ".txt", ".webmanifest"]);
+const GZIP_MIN = 860;
+
+function acceptsGzip(req) {
+  return /\bgzip\b/i.test(String(req.headers["accept-encoding"] || ""));
+}
+
+function endMaybeGzip(req, res, status, headers, body) {
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(body ?? "", "utf8");
+  const type = String(headers["Content-Type"] || headers["content-type"] || "");
+  const compressible = /json|javascript|css|text|svg|xml|manifest/i.test(type);
+  if (!compressible || buf.length < GZIP_MIN || !acceptsGzip(req)) {
+    res.writeHead(status, headers);
+    res.end(buf);
+    return;
+  }
+  zlib.gzip(buf, (err, gz) => {
+    if (err || !gz || gz.length >= buf.length) {
+      if (!res.headersSent) res.writeHead(status, headers);
+      res.end(buf);
+      return;
+    }
+    res.writeHead(status, {
+      ...headers,
+      "Content-Encoding": "gzip",
+      Vary: "Accept-Encoding",
+      "Content-Length": gz.length,
+    });
+    res.end(gz);
+  });
+}
+
+function sendFile(req, res, filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const cache =
     ext === ".html"
@@ -95,12 +128,26 @@ function sendFile(res, filePath) {
       : filePath.includes(`${path.sep}assets${path.sep}`)
         ? "public, max-age=31536000, immutable"
         : "public, max-age=3600";
-  res.writeHead(200, {
+  const headers = {
     "Content-Type": MIME[ext] || "application/octet-stream",
     "Cache-Control": cache,
     "X-Content-Type-Options": "nosniff",
+  };
+  if (!GZIP_EXT.has(ext) || !acceptsGzip(req)) {
+    res.writeHead(200, headers);
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+  fs.readFile(filePath, (err, buf) => {
+    if (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      }
+      res.end("read failed");
+      return;
+    }
+    endMaybeGzip(req, res, 200, headers, buf);
   });
-  fs.createReadStream(filePath).pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -123,8 +170,7 @@ const server = http.createServer(async (req, res) => {
       if (out.multiValueHeaders?.["Set-Cookie"]) {
         res.setHeader("Set-Cookie", out.multiValueHeaders["Set-Cookie"]);
       }
-      res.writeHead(out.statusCode || 200, out.headers || {});
-      res.end(out.body ?? "");
+      endMaybeGzip(req, res, out.statusCode || 200, out.headers || {}, out.body ?? "");
       return;
     }
 
@@ -150,7 +196,7 @@ const server = http.createServer(async (req, res) => {
       res.end();
       return;
     }
-    sendFile(res, filePath);
+    sendFile(req, res, filePath);
   } catch (e) {
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
