@@ -32,7 +32,7 @@ export default function NetworkDropdown({
 
   const current =
     networks.find((n) => n.id === networkId) ||
-    networks[0] || { id: "sapphire", label: "Sapphire" };
+    networks[0] || { id: "mainnet", label: "Mainnet" };
 
   return (
     <div className="net-dropdown-wrap" ref={ref}>
@@ -49,10 +49,12 @@ export default function NetworkDropdown({
         <span className="net-trigger-label">
           <span className="net-name-full">{current.label}</span>
           <span className="net-name-short">
-            {current.id === "sapphire"
-              ? "Saph"
+            {current.id === "mainnet"
+              ? "Main"
               : current.id === "pearl"
               ? "Pearl"
+              : current.id === "sapphire"
+              ? "Saph"
               : "Main"}
           </span>
         </span>

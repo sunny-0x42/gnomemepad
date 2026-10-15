@@ -63,7 +63,10 @@ export default function ActivityFeed({ limit = 18 }) {
       }
     }
     load();
-    const tmr = setInterval(load, 18000);
+    const tmr = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      load();
+    }, 45000);
     return () => {
       cancelled = true;
       clearInterval(tmr);

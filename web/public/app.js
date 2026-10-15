@@ -2543,7 +2543,6 @@ function renderHoldersPanel(m) {
       <thead><tr><th>#</th><th>Buyer</th><th>Balance</th><th>Est. value</th></tr></thead>
       <tbody>
         ${holders
-          .slice(0, 15)
           .map(
             (h, i) => `<tr>
             <td class="mono">${i + 1}</td>

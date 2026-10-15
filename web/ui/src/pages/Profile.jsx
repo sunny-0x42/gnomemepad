@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { copyText, fmtGnot, shortAddr } from "../lib/format";
 import { safeImageUrl } from "../lib/avatar";
 import { isRetiredPad } from "../lib/marketHeat";
+import { AchievementBadgeRow } from "../components/AchievementBadge";
 
 export default function Profile() {
   const { wallet, connect, broadcast, showToast, health } = useApp();
@@ -26,6 +27,7 @@ export default function Profile() {
   const [loadedAddr, setLoadedAddr] = useState("");
   const [launches, setLaunches] = useState([]);
   const [loadingLaunches, setLoadingLaunches] = useState(false);
+  const [walletBadges, setWalletBadges] = useState({ creator: [], trader: [] });
   const profilePkg = health?.profile || health?.modules?.profile;
 
   const target = viewAddr || wallet?.address || "";
@@ -60,6 +62,18 @@ export default function Profile() {
       })
       .catch(() => setLaunches([]))
       .finally(() => setLoadingLaunches(false));
+  }, [target]);
+
+  useEffect(() => {
+    if (!target) return;
+    api(`/api/badges?address=${encodeURIComponent(target)}`)
+      .then((d) => {
+        setWalletBadges({
+          creator: Array.isArray(d?.creator?.badges) ? d.creator.badges : [],
+          trader: Array.isArray(d?.trader?.badges) ? d.trader.badges : [],
+        });
+      })
+      .catch(() => setWalletBadges({ creator: [], trader: [] }));
   }, [target]);
 
   const stats = useMemo(() => {
@@ -172,15 +186,26 @@ export default function Profile() {
             />
             <Stat label={t("graduated")} value={stats.graduated} />
           </div>
+          {(walletBadges.creator.length > 0 || walletBadges.trader.length > 0) && (
+            <div className="profile-badge-shelf">
+              {walletBadges.creator.length > 0 && (
+                <div className="profile-badge-group">
+                  <div className="profile-badge-label muted">Creator badges</div>
+                  <AchievementBadgeRow badges={walletBadges.creator} size="md" />
+                </div>
+              )}
+              {walletBadges.trader.length > 0 && (
+                <div className="profile-badge-group">
+                  <div className="profile-badge-label muted">Trader badges</div>
+                  <AchievementBadgeRow badges={walletBadges.trader} size="md" />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {!isViewOnly && (
           <div className="panel" style={{ marginTop: "1rem" }}>
-            {!profilePkg && (
-              <div className="callout warn" style={{ marginBottom: "1rem" }}>
-                Profile realm is not configured on this deployment.
-              </div>
-            )}
             <h2 className="panel-title">Edit profile</h2>
             <form onSubmit={save} className="create-form">
               <label>

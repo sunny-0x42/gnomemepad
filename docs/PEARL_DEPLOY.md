@@ -1,6 +1,26 @@
-# Pearl (pearl-1) deploy — gnomemepad padv23
+# Pearl (pearl-1) deploy — dual-DEX `gnomi/pad` (2026-09-17)
 
 Pearl is Gno.land’s current testnet (Test16). **No Sapphire state carries over.**
+
+**Mainnet (separate):** live pad is `…/gnomi/padv2` (hub SetModule 2026-09-18; raise **300k** GNOT · bond **150** GNOT · default **zdex**). See `docs/MAINNET_STATUS.md` / `docs/MAINNET_DEPLOY.md`.
+
+## Live dual-DEX cut (deployer `g1n4pl5…`)
+
+| Package | Path |
+|---------|------|
+| **pad** | `gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pad` |
+| hubv2 | `…/gnomi/hubv2` → `GetModule("pad")` = above |
+| bond / meta / profile / pointsv2 / ammmath | `…/gnomi/*` |
+| Zdex hub | `…/zdex/v3` (same deployer) |
+| Zdex AMM | `…/zdex/amm/v1` |
+
+Venues: **zdex** (default, list fee 0) + **gnoswap** (enabled, ~100 GNS).  
+Verified on-chain: `CreateWithVenue`, `PreferredVenueOf`, `ReleaseListSeed`, `ConfirmZdexList`, hub modules all wired, bond **100 GNOT**.  
+Legacy `…/gnomemepad/padv23` under `g1mv0052…` remains on chain but UI Pearl now points at **gnomi/pad**.
+
+Deploy script: `scripts/deploy-pearl-dualdex.ps1` (requires `deploykey` = `g1n4pl5…`).  
+Local: `DEFAULT_NETWORK=pearl SHOW_PEARL=1 node web/api-dev.mjs` + UI `5174`.  
+**Local Adena:** UnauthorizedError vs gnodev is a known client mismatch; prefer Adena built-in Local (`http://127.0.0.1:26657`, `chainId=dev`) or verify with **gnokey**.
 
 ## Network
 
@@ -128,7 +148,22 @@ Only **`gnoswap`** has an adapter today (`tryListOnGnoswap`). Unknown/disabled v
 **Add a 2nd DEX later:** new `case` in `tryListVenue` + adapter file → new pad version.  
 **True hot-plug without pad redeploy:** follow-up Approach B (`listrouter` realm).  
 
-Pearl still has **no** alternate DEX packages — ship Gnoswap-only.
+### Pearl vs mainnet (sync — 2026-09-18)
+
+| Surface | Pearl `gnomi/pad` live | Mainnet `gnomi/padv2` live |
+|---------|------------------------|----------------------------|
+| Hub pad module | `…/gnomi/pad` | `…/gnomi/padv2` (+ `ammmathv2`) |
+| `ListVenues` | zdex + gnoswap enabled | zdex + gnoswap enabled |
+| `DefaultListVenue` | **zdex** | **zdex** |
+| PreferredVenue / CreateWithVenue / ReleaseListSeed / ConfirmZdexList | **present** | **present** |
+| Raise | **10_000 GNOT** | **300_000 GNOT** |
+| Bond | **100 GNOT** | **150 GNOT** (platform fee) |
+| List fee | zdex 0 · gnoswap 100 GNS | same pattern |
+| Zdex hub | `…/zdex/v3` | `…/zdex/v1` · ExactIn in-app |
+| Legacy | `padv23` under `g1mv0052…` unused by UI | `…/gnomi/pad` + GNOME 0000001 stuck |
+
+**Works on Pearl today:** dual-DEX Create + Gnoswap `RetryList` + zdex EOA ReleaseListSeed → CreatePool → Confirm.  
+**Mainnet:** same venue model at 300k raise; see `docs/DUAL_DEX_READINESS.md`.
 
 ## Changing params after deploy
 

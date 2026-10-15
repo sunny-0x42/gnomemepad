@@ -22,6 +22,15 @@ import {
 } from "../lib/format";
 import { isRetiredPad } from "../lib/marketHeat";
 import { resolveTokenImage } from "../lib/meta";
+import { AchievementBadgeRow } from "../components/AchievementBadge";
+import {
+  dexTradeUrl,
+  isListed,
+  loadTokenPreferredVenue,
+  preferredOf,
+  venueLabel,
+  venueOf,
+} from "../lib/venues";
 
 const FILTERS = [
   { id: "all", labelKey: "all" },
@@ -41,7 +50,7 @@ function raisedGnotOf(m) {
 }
 
 export default function Creator() {
-  const { wallet, connect, broadcast, showToast } = useApp();
+  const { wallet, connect, broadcast, showToast, networkId } = useApp();
   const { t, lang } = usePrefs();
   const vi = lang === "vi";
   const [data, setData] = useState(null);
@@ -98,7 +107,9 @@ export default function Creator() {
   }, [data, launches]);
 
   const listedCount = useMemo(
-    () => launches.filter((m) => m.gnoswapListed).length,
+    () =>
+      launches.filter((m) => isListed(m))
+        .length,
     [launches],
   );
 
@@ -268,20 +279,18 @@ export default function Creator() {
           </span>
           {listedCount > 0 && (
             <span className="creator-pill gnoswap">
-              <strong>{listedCount}</strong> Gnoswap
+              <strong>{listedCount}</strong> {vi ? "đã list DEX" : "DEX listed"}
             </span>
           )}
         </div>
+        {Array.isArray(data?.badges) && data.badges.length > 0 && (
+          <AchievementBadgeRow
+            className="creator-ach-badges"
+            badges={data.badges}
+            size="md"
+          />
+        )}
       </div>
-
-      {err && (
-        <div className="callout warn" style={{ marginBottom: "1rem" }}>
-          {err}
-          <button type="button" className="btn sm ghost" style={{ marginLeft: 8 }} onClick={load}>
-            {t("retry")}
-          </button>
-        </div>
-      )}
 
       {loading && !data && <SkeletonCards n={4} />}
 
@@ -325,10 +334,10 @@ export default function Creator() {
             <strong className="creator-stat-v mono">{fmtNum(graduatedCount)}</strong>
             <span className="creator-stat-s faint">
               {listedCount > 0
-                ? `${fmtNum(listedCount)} ${vi ? "đã list Gnoswap" : "on Gnoswap"}`
+                ? `${fmtNum(listedCount)} ${vi ? "đã list DEX (zdex/Gnoswap)" : "listed on DEX"}`
                 : vi
-                  ? "sẵn sàng list khi đủ raise"
-                  : "ready to list when raise fills"}
+                  ? "chọn DEX lúc Create · list sau graduate"
+                  : "pick DEX at Create · list after graduate"}
             </span>
           </div>
         </div>
@@ -456,12 +465,40 @@ export default function Creator() {
                   </div>
                 </Link>
                 <div className="creator-card-badges">
-                  {m.gnoswapListed ? (
-                    <Badge kind="gnoswap">{t("gnoswapBadge")}</Badge>
+                  {isListed(m) ? (
+                    <Badge kind={venueOf(m) === "zdex" ? "zdex" : "gnoswap"}>
+                      {venueLabel(venueOf(m)) || t("gnoswapBadge") || "Gnoswap"}
+                    </Badge>
                   ) : (
                     <Badge kind={isGrad ? "graduated" : pct >= 70 ? "promo" : "curve"}>
                       {isGrad ? t("graduated") : t("raising")}
                     </Badge>
+                  )}
+                  {isGrad && !isListed(m) && (
+                    <Link
+                      className="btn sm ghost"
+                      to={`/token/${encodeURIComponent(m.id)}?pkg=${encodeURIComponent(m.pkg || "")}&venue=${encodeURIComponent(
+                        preferredOf(m) ||
+                          loadTokenPreferredVenue(m.pkg, m.id) ||
+                          (networkId === "pearl" || networkId === "sapphire"
+                            ? "gnoswap"
+                            : "zdex"),
+                      )}`}
+                    >
+                      {vi ? "List DEX" : "List DEX"}
+                    </Link>
+                  )}
+                  {isListed(m) && dexTradeUrl(m, networkId) && (
+                    <a
+                      className="btn sm primary"
+                      href={dexTradeUrl(m, networkId)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {(t("swapOnVenue") || "Swap {venue}")
+                        .replace("{venue}", venueLabel(venueOf(m)))
+                        .replace("Swap on ", "Swap ")}
+                    </a>
                   )}
                   {hasFees && (
                     <span className="creator-fee-pill">

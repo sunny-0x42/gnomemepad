@@ -14,7 +14,8 @@
     "netlify:dev": "npx netlify-cli dev",
     "netlify:deploy": "npx netlify-cli deploy --prod",
     "token-resource:plan": "node scripts/sync-token-resource.mjs --dry",
-    "token-resource:sync": "node scripts/sync-token-resource.mjs"
+    "token-resource:sync": "node scripts/sync-token-resource.mjs",
+    "audit:onchain": "node scripts/audit-onchain-sync.mjs"
   },
   "engines": {
     "node": ">=18"

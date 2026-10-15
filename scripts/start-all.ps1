@@ -36,10 +36,16 @@ if (-not (Test-Rpc)) {
     "-web-home", "/r/gnomemepad/pad",
     "./gno.land/p/gnomemepad/ammmath",
     "./gno.land/r/gnomemepad/pad",
+    "./gno.land/r/gnomemepad/bond",
+    "./gno.land/r/gnomemepad/pointsv2",
     "./gno.land/p/nt/avl/v0",
     "./gno.land/p/nt/seqid/v0",
     "./gno.land/p/nt/ufmt/v0",
-    "./gno.land/p/nt/cford32/v0"
+    "./gno.land/p/nt/cford32/v0",
+    "./gno.land/p/demo/tokens/grc20",
+    "./gno.land/r/demo/defi/grc20reg",
+    "./gno.land/r/gnoland/wugnot",
+    "./gno.land/r/gnoswap/gns"
   ) -WorkingDirectory $chainRoot -WindowStyle Minimized
 
   for ($i = 0; $i -lt 40; $i++) {

@@ -1,0 +1,243 @@
+{
+  "snapshot_utc": "2026-09-27T03:01:27Z",
+  "chain_id": "gnoland-1",
+  "height": 362938,
+  "pad": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv3",
+  "launch_id": "0000001",
+  "symbol": "GNOMI",
+  "token_id": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv3.GNOMI.0000001",
+  "decimals": 0,
+  "threshold_gnomi": 500000,
+  "threshold_raw": 500000,
+  "candidates_queried": 137,
+  "balances_ok": 137,
+  "holders_gt_threshold": 45,
+  "note": "Balances via padv3.BalanceOf(launch_id, addr) as whole GNOMI (decimals 0). Launch still StatusCurve: RealSold 425836405, BuyerCount 126, Gnoswap not listed. Indexer returned 517 successful padv3 txs (Buy 364, Sell 27, claims/create); zero Transfer or TransferFrom. Unique buy/sell callers 126 matches BuyerCount, so every buyer was queried. These 45 wallets hold 422842712 GNOMI (99.3% of RealSold). Pad and creator balances are 0. No transfer-only holder exists on this launch.",
+  "holders": [
+    {
+      "address": "g1em0c9yzglk5n3jpaphfwnkmq0djx5xw92s957l",
+      "raw": 67670067,
+      "gnomi": 67670067.0
+    },
+    {
+      "address": "g1a7yx5k57ee7vpa3ut7gus66ak26q3mgcg62xkv",
+      "raw": 63317712,
+      "gnomi": 63317712.0
+    },
+    {
+      "address": "g1uvf7xv3qnl0ray3zuddmrtpn3wumafranhplts",
+      "raw": 47357382,
+      "gnomi": 47357382.0
+    },
+    {
+      "address": "g1czl7cxq2j74tuaj56zvwyqupdf4rr6tjdza9as",
+      "raw": 23490404,
+      "gnomi": 23490404.0
+    },
+    {
+      "address": "g1ezr0cxsyt4qtsm2dd4ce50kdlps8w7wa7v8x5t",
+      "raw": 20965150,
+      "gnomi": 20965150.0
+    },
+    {
+      "address": "g10exwzfuysdzy6trzv3s084rq6nxtyrnfmwu8z0",
+      "raw": 20000000,
+      "gnomi": 20000000.0
+    },
+    {
+      "address": "g1lxy56wzzs4zx6lnlqenahlcps6jc4nsz5ffngt",
+      "raw": 19621889,
+      "gnomi": 19621889.0
+    },
+    {
+      "address": "g19zt6saj0aq4aqtwp3dvxp6apzhtsvur44xvxk7",
+      "raw": 16639847,
+      "gnomi": 16639847.0
+    },
+    {
+      "address": "g1c78d8wwp6stq2cpfpw9u8aq6qwmswpp2kcwhqg",
+      "raw": 13155711,
+      "gnomi": 13155711.0
+    },
+    {
+      "address": "g10lrjej73xhej38yzccps245x4h4lqd2jrf3sfv",
+      "raw": 12182075,
+      "gnomi": 12182075.0
+    },
+    {
+      "address": "g1akk04ze0gfrjtlq7vwx30jzp78u4f6asnvwgus",
+      "raw": 11993696,
+      "gnomi": 11993696.0
+    },
+    {
+      "address": "g17sagj4ep2xxqr267dfycry30cyljujafqvcdw0",
+      "raw": 11733203,
+      "gnomi": 11733203.0
+    },
+    {
+      "address": "g1nhh5ylfew99tj60zkus8qqrulxu8fgwe8afls7",
+      "raw": 10900933,
+      "gnomi": 10900933.0
+    },
+    {
+      "address": "g18nf84jgwkqypaplz45xyf3yegpu4vvhzw49vyf",
+      "raw": 10265787,
+      "gnomi": 10265787.0
+    },
+    {
+      "address": "g12l0ns2c834uuq4q7wh4yh748sel8fgamsvnhv5",
+      "raw": 9647805,
+      "gnomi": 9647805.0
+    },
+    {
+      "address": "g1h0gnlq6ac6jlsgyysx5shwvhju5jeyz9x4yld0",
+      "raw": 7457903,
+      "gnomi": 7457903.0
+    },
+    {
+      "address": "g1zt45ajz77s2kjqj56wltpn3nqtz5jnl5gp0e2v",
+      "raw": 7442202,
+      "gnomi": 7442202.0
+    },
+    {
+      "address": "g1fcydngj7zedcggs7psfejx42yz525ajp4aw7xa",
+      "raw": 5729344,
+      "gnomi": 5729344.0
+    },
+    {
+      "address": "g12t2q70l6vqf7r44uu9rtg83l6r5z8fdaxepmvd",
+      "raw": 5010757,
+      "gnomi": 5010757.0
+    },
+    {
+      "address": "g1c3wqq0ldvh5qt4tznwdyn0jzpzx26gfmc3l34s",
+      "raw": 5000095,
+      "gnomi": 5000095.0
+    },
+    {
+      "address": "g1ccp9kusu0us5a8ksfp23yqzxth5mz653rggj23",
+      "raw": 3398355,
+      "gnomi": 3398355.0
+    },
+    {
+      "address": "g155ve6tzr2umyp3pm776ulwhg2auztx8js098sg",
+      "raw": 3311363,
+      "gnomi": 3311363.0
+    },
+    {
+      "address": "g17uthmft50mycnx9ry0eecyl9mad34q8ruhphhx",
+      "raw": 3286502,
+      "gnomi": 3286502.0
+    },
+    {
+      "address": "g1l0tdzdyxsayestm8lu95xehgtc0s825pxu583g",
+      "raw": 2580411,
+      "gnomi": 2580411.0
+    },
+    {
+      "address": "g1ayy8knfdhepp2rws2m8kq5jzjm67fsyl363kch",
+      "raw": 1914778,
+      "gnomi": 1914778.0
+    },
+    {
+      "address": "g1g6w99rghqc426fpel6k2gwxxypa4eq75wj70n4",
+      "raw": 1907090,
+      "gnomi": 1907090.0
+    },
+    {
+      "address": "g1nf5f04rk9t56pzdwve6rhe5gvneq6gvk2vc2pz",
+      "raw": 1751851,
+      "gnomi": 1751851.0
+    },
+    {
+      "address": "g1uxt8cmudzhej4y8kz0ptav5t8jqresku70xaqp",
+      "raw": 1611955,
+      "gnomi": 1611955.0
+    },
+    {
+      "address": "g1558yc50c7qcdnpnp20cepdzl8sh650cpz3a9f3",
+      "raw": 1548519,
+      "gnomi": 1548519.0
+    },
+    {
+      "address": "g1elclpa4cpu3tshp9sd2r5v5gjnm6sn58098cys",
+      "raw": 1317734,
+      "gnomi": 1317734.0
+    },
+    {
+      "address": "g10vv229snx8v68uccvsfkkj7xzwdhucs9d7mxml",
+      "raw": 1112787,
+      "gnomi": 1112787.0
+    },
+    {
+      "address": "g1s93amgu3hca63ljv0wsyjmf5ny5lgf2cx7jh6h",
+      "raw": 1079067,
+      "gnomi": 1079067.0
+    },
+    {
+      "address": "g19tzvks2dcluj762d3qgz0jqlg9w64f58h5r25w",
+      "raw": 924761,
+      "gnomi": 924761.0
+    },
+    {
+      "address": "g1aq4j6gz0tcj039nn74pdfefgksnqlld0znr4kd",
+      "raw": 918861,
+      "gnomi": 918861.0
+    },
+    {
+      "address": "g1p824ept88e349z7tak2nwznjdyn6wpckug77kl",
+      "raw": 761220,
+      "gnomi": 761220.0
+    },
+    {
+      "address": "g1cyhtq6e9x7f2haf6rn5l08svmhsrcqlvz2xx7x",
+      "raw": 647164,
+      "gnomi": 647164.0
+    },
+    {
+      "address": "g147n6a8pnxw23zyufwc2scmff25u7avsyx2d3c7",
+      "raw": 606126,
+      "gnomi": 606126.0
+    },
+    {
+      "address": "g16tfjyefrgekf0l8zzccjy2c72nh2mscj3h893q",
+      "raw": 605170,
+      "gnomi": 605170.0
+    },
+    {
+      "address": "g16yzm6qjjheafnyvlcjxnkmhj3hullgpl6q8s3w",
+      "raw": 604880,
+      "gnomi": 604880.0
+    },
+    {
+      "address": "g12v736nuytn9rjl5dpqtfxzdg40vtlwqqnyxwqm",
+      "raw": 604590,
+      "gnomi": 604590.0
+    },
+    {
+      "address": "g12dz0vh9gk50wsjc7jvefs7l8fafraalcrvtypr",
+      "raw": 604300,
+      "gnomi": 604300.0
+    },
+    {
+      "address": "g1ycwf4ncrxzj8vynv8ejqvfx4mfy962phhsqq82",
+      "raw": 571806,
+      "gnomi": 571806.0
+    },
+    {
+      "address": "g1xlfgkjdgrmwdpfmrd6u023tljxt6lzu0ehu8z3",
+      "raw": 570582,
+      "gnomi": 570582.0
+    },
+    {
+      "address": "g19m8a2seg7t7a7tyngya27f29e8j72f4kvqqxn0",
+      "raw": 512252,
+      "gnomi": 512252.0
+    },
+    {
+      "address": "g14zentw7uw8x6tsq2srxc5h8pyv3wf0lsd2t7lj",
+      "raw": 508626,
+      "gnomi": 508626.0
+    }
+  ]
+}

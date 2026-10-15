@@ -1,13 +1,10 @@
-# Gnomi.fun — React (Vite) UI + serverless API → Gno Sapphire (sapphire-1)
+# Gnomi.fun — React (Vite) UI + serverless API
+# Production: mainnet-only (gnoland-1 / gnomi/pad dual-DEX). Pearl/Sapphire hidden.
 #
 # Auto-deploy: GitHub Actions (.github/workflows/netlify-deploy.yml) on push to master.
 # Manual:
 #   npm run build --prefix web/ui
 #   npx netlify-cli deploy --prod
-#
-# Env (Netlify Dashboard or below):
-#   RPC_URL, CHAIN_ID, PKG, HUB, PROFILE, META, POINTS, BOND, SIGNER_ADDR
-# Pearl: web/.env.pearl.example (padv23 live on-chain; site can switch later)
 
 [build]
   command = "npm run build --prefix web/ui"
@@ -16,15 +13,41 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  RPC_URL = "https://rpc.sapphire.testnets.gno.land:443"
-  CHAIN_ID = "sapphire-1"
-  PKG = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/padv22"
-  HUB = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/hubv2"
-  PROFILE = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/profile"
-  META = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/meta"
-  POINTS = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/pointsv2"
-  BOND = "gno.land/r/g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr/gnomemepad/bond"
-  SIGNER_ADDR = "g1mv0052e7r6s09f5t9xsqf00nj3tqsgt9dg52jr"
+  # ── Mainnet only (gnoland-1 dual-DEX pad live 2026-09-17) ──
+  DEFAULT_NETWORK = "mainnet"
+  VITE_DEFAULT_NETWORK = "mainnet"
+  VITE_SHOW_PEARL = "0"
+  SHOW_PEARL = "0"
+  SHOW_TESTNETS = "0"
+  VITE_SHOW_TESTNETS = "0"
+  SNAPSHOT_NETWORKS = "mainnet"
+  RPC_URL = "https://rpc.onbloc.xyz:443"
+  CHAIN_ID = "gnoland-1"
+  PKG = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv3"
+  HUB = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/hubv2"
+  PROFILE = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/profile"
+  META = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/meta"
+  POINTS = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pointsv2"
+  BOND = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/bond"
+  SIGNER_ADDR = "g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt"
+  MAINNET_CHAIN_ID = "gnoland-1"
+  MAINNET_RPC_URL = "https://rpc.onbloc.xyz:443"
+  MAINNET_GNOWEB = "https://gno.land"
+  MAINNET_PKG = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv3"
+  MAINNET_HUB = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/hubv2"
+  MAINNET_PROFILE = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/profile"
+  MAINNET_META = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/meta"
+  MAINNET_POINTS = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pointsv2"
+  MAINNET_BOND = "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/bond"
+  MAINNET_SIGNER = "g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt"
+  MAINNET_PAD_READY = "1"
+  VITE_MAINNET_PAD_READY = "1"
+  # Public users see maintenance; protocol admin wallet bypasses after Connect
+  SITE_UPGRADE = "1"
+  VITE_SITE_UPGRADE = "1"
+  # Dismissible Gnomi Labs raise notice. Off when this is not 1.
+  VITE_RAISE_NOTICE = "0"
+  GNOSWAP_PRICES_URL = "https://api.gnoswap.io/v1/tokens/prices"
 
 [[redirects]]
   from = "/api/*"
@@ -46,6 +69,16 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
 
 [[headers]]
-  for = "/api/*"
+  for = "/assets/*"
   [headers.values]
-    Cache-Control = "no-store"
+    Cache-Control = "public, max-age=31536000, immutable"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# API cache is set per-response in chain-api (json maxAge + Netlify-CDN-Cache-Control).
+# Do NOT blanket no-store here — that forced every /api hit to burn Function compute.
+
+# Warm markets snapshot every minute (Netlify cron min = 1m). Local uses 20s worker in api-dev.
+[functions."markets-snapshot"]
+  schedule = "*/1 * * * *"

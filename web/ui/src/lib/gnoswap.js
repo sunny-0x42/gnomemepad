@@ -17,10 +17,55 @@
  *     e.g. .../padv20.GNOMIES:gno.land/r/gnoland/wugnot.wugnot:3000
  */
 
+import { api, getApiNetworkId } from "./api";
+
 export const GNOSWAP_APP = "https://beta.gnoswap.io";
 export const WUGNOT_PKG = "gno.land/r/gnoland/wugnot";
 export const WUGNOT_KEY = "gno.land/r/gnoland/wugnot.wugnot";
 export const DEFAULT_FEE = 3000;
+
+function isHttpOrIpfsImage(s) {
+  const t = String(s || "").trim();
+  return /^https?:\/\//i.test(t) || t.toLowerCase().startsWith("ipfs://");
+}
+
+/**
+ * Ask Gnoswap (via gno-token-resource PR) to show a token logo.
+ * Only when an image URL is set, and only if this tab has not already
+ * queued the same pkg|id|url (avoids spam on repeat save/list).
+ * Uses `api()` so selected network (mainnet → gnoland-1.json) is attached.
+ */
+export function queueGnoswapLogoRequest(market, extra = {}) {
+  if (!market?.id) return false;
+  const imageUrl = [
+    extra.imageURI,
+    extra.imageUrl,
+    extra.uri,
+    market.imageURI,
+    market.uri,
+    market.image,
+    market.logoURI,
+  ].find((c) => isHttpOrIpfsImage(c));
+  if (!imageUrl) return false;
+  const net = getApiNetworkId();
+  const fp = `${net}|${market.pkg || ""}|${market.id}|${String(imageUrl).trim()}`;
+  try {
+    const k = `gnoswap-logo-req:${net}:${market.id}`;
+    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(k) === fp) {
+      return false;
+    }
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem(k, fp);
+  } catch {
+    /* private mode */
+  }
+  const qs = new URLSearchParams({
+    id: market.id,
+    pkg: market.pkg || "",
+  });
+  // Fire-and-forget; server skips no-image / unchanged vs upstream (anti-spam)
+  api(`/api/token-resource/register?${qs}`, { method: "POST" }).catch(() => {});
+  return true;
+}
 
 const WUGNOT_MARKERS = [
   "gno.land/r/gnoland/wugnot.wugnot",

@@ -1,18 +1,16 @@
 // Package pad is gnomemepad: a self-contained meme launchpad for gno.land.
 //
-//	Create (ugnot bond + GNS list-fee escrow) -> GRC20 + WUGNOT curve -> Graduate
-//	  -> internal CPMM first; RetryListGnoswap when WUGNOT+escrowed GNS ready
-//	  -> CreatePool fee paid from Create-time GNS escrow (no mid-tx WUGNOT->GNS)
+//	CreateWithVenue (bond + venue-aware GNS escrow) -> GRC20 + WUGNOT curve -> Graduate
+//	  -> internal CPMM; then either:
+//	     gnoswap: RetryList / RetryListGnoswap (escrowed GNS + WUGNOT inventory)
+//	     zdex:    ReleaseListSeed -> EOA CreatePool -> ConfirmZdexList
 //
 // Production: Buy/Sell/Swap* use WUGNOT (push-pay + prepaid credits).
 // Payment: user wugnot.Transfer(pad, amount) then Buy.
-//   - Free float on pad is auto-locked into caller's prepaid credit.
-//   - Buy may over-pay; unused WUGNOT stays as claimable credit (ClaimWugnot).
-//   - Never Approve/TransferFrom (GRC20 spender bugs with Adena).
-// Create: Transfer GNS (>= ListFeeGns free) then Create with ugnot bond.
-// List: escrowed GNS + raised WUGNOT on pad; RetryListGnoswap (no user TransferFrom).
-// Unit tests (testSkipBanker): still use OriginSend ugnot as collateral units.
-// Tokens are real GRC20 (mint on buy, burn on sell). Hybrid of Pump.fun + permanent LP lock.
+// Create fee: gnoswap preference locks ListFeeGns; zdex preference locks 0.
+// DefaultListVenue source = zdex; Pearl may SetDefaultListVenue(gnoswap) after deploy.
+// Unit tests (testSkipBanker): OriginSend ugnot as collateral units.
+// Tokens are real GRC20 (mint on buy, burn on sell).
 package pad
 
 import (
@@ -47,8 +45,10 @@ var (
 	padAddr address
 	// protocolAddr: treasury set by Init (first EOA). Receives protocol fee share.
 	protocolAddr address
-	// protocolFees: ugnot still on pad, claimable / pushable to protocolAddr.
+	// protocolFees: WUGNOT-backed trade fees on pad, claimable / pushable to protocolAddr.
 	protocolFees int64
+	// protocolBondFees: bank ugnot from create BondFee (not WUGNOT; realms cannot Deposit).
+	protocolBondFees int64
 	// protocolFeesPaid: lifetime ugnot already sent to protocolAddr (stats only).
 	protocolFeesPaid int64
 	inited           bool
@@ -58,11 +58,15 @@ var (
 	// testForceGnoswapList: unit tests only - stub tryListOnGnoswap succeeds without Sapphire deps.
 	// Always false in production (gnoswap_list_full ignores it).
 	testForceGnoswapList bool
+	// testForceZdexList: unit tests only - stub tryListOnZdex succeeds.
+	testForceZdexList bool
 	// pointsEnabled: when true, notify pointsv2 after Create / Buy / Sell / Swap*.
 	// Admin must also AllowPad(this package) on pointsv2.
 	pointsEnabled bool
 	// Live mutable economics (protocol-gated). Seeded from consts in Init.
-	// Changing graduation mid-flight affects open curve launches' ready/remaining.
+	// Changing graduation mid-flight affects ALL StatusCurve launches
+	// (readyToGraduate / Buy raise cap). Graduated+listed launches are unaffected
+	// (PoolUgnot/PoolToken already fixed at Graduate).
 	graduationUgnot int64
 	listFeeGnsLive  int64
 	// wugnotCredit: EOA address string -> int64 prepaid WUGNOT claimable by user.
@@ -141,8 +145,12 @@ type Launch struct {
 	ListFeeGns      int64
 	ListFeeConsumed bool // true after list paid CreatePool fee from escrow
 
-	// ListVenue: which DEX adapter succeeded (e.g. "gnoswap"). Empty if unlisted.
+	// ListVenue: which DEX adapter succeeded (e.g. "zdex" / "gnoswap"). Empty if unlisted.
 	ListVenue string
+	// PreferredVenue: chosen at Create (or SetPreferredVenue). Used when RetryList venueId == "".
+	PreferredVenue string
+	// ListSeedReleased: PoolUgnot (WUGNOT) + PoolToken (minted GRC20) sent to creator for EOA zdex CreatePool.
+	ListSeedReleased bool
 
 	// Chart history (ordered AVL keys)
 	Trades    avl.Tree // tradeKey -> *Trade
@@ -240,6 +248,14 @@ func creditProtocol(amt int64) {
 		return
 	}
 	protocolFees += amt
+}
+
+// creditBondFee books create-bond bank ugnot as platform fee (not WUGNOT-reserved).
+func creditBondFee(amt int64) {
+	if amt <= 0 {
+		return
+	}
+	protocolBondFees += amt
 }
 
 func requireInit() {
@@ -378,8 +394,8 @@ func reservedWugnot() int64 {
 		if l.Status == StatusCurve {
 			reserved += l.RaisedUgnot
 		}
-		// Internal CPMM holds WUGNOT when not listed on Gnoswap.
-		if l.Status == StatusGraduated && !l.GnoswapListed {
+		// Internal CPMM holds WUGNOT when not listed and seed not released to EOA.
+		if l.Status == StatusGraduated && !l.GnoswapListed && !l.ListSeedReleased {
 			reserved += l.PoolUgnot
 		}
 		return false
@@ -537,6 +553,7 @@ func creditRefund(buyer address, amount int64) {
 }
 
 // payWugnotOut sends WUGNOT from pad to user (production).
+// Fail-closed: never silent-clip; never spend reserved raise/pool/prepaid/fees.
 // Tests: pay ugnot via banker when testSkipBanker.
 func payWugnotOut(cur realm, to address, amount int64) {
 	if amount <= 0 {
@@ -546,13 +563,11 @@ func payWugnotOut(cur realm, to address, amount int64) {
 		sendUgnot(cur, to, amount)
 		return
 	}
-	have := wugnot.BalanceOf(cur.Address())
-	if have < amount {
-		amount = have
+	free := freeWugnotOnPad()
+	if free < amount {
+		panic("pad: insufficient free WUGNOT")
 	}
-	if amount > 0 {
-		wugnot.Transfer(cross(cur), to, amount)
-	}
+	wugnot.Transfer(cross(cur), to, amount)
 }
 
 func noteBuyer(l *Launch, buyer address) {
@@ -610,26 +625,9 @@ func recordTrade(l *Launch, side int, ugnot, tokens int64) {
 	}
 }
 
-func maybeRefundBond(cur realm, l *Launch) {
-	if l.BondRefunded || l.BondUgnot <= 0 {
-		return
-	}
-	if l.BuyerCount < BondRefundBuyers {
-		return
-	}
-	// Quality gate: pure sybil micro-buys cannot refund bond.
-	if l.RaisedUgnot < BondRefundMinRaised {
-		return
-	}
-	if runtime.ChainHeight()-l.Created > BondRefundMaxHeights {
-		return
-	}
-	amt := l.BondUgnot
-	l.BondUgnot = 0
-	l.BondRefunded = true
-	sendUgnot(cur, l.Creator, amt)
-	chain.Emit("BondRefund", "id", l.ID, "amount", strconv.FormatInt(amt, 10))
-}
+// maybeRefundBond is a no-op: create bond is a platform fee (credited to
+// protocol at Create). Kept so Buy call sites stay stable across cuts.
+func maybeRefundBond(_ realm, _ *Launch) {}
 
 // requiredCreateBond returns ugnot the creator must send.
 // Production: createbond.CurrentBondUgnot() (promo or normal).
@@ -709,6 +707,62 @@ func lockListFeeEscrow(l *Launch, amt int64) {
 	l.ListFeeConsumed = false
 }
 
+// listFeeForVenue: gnoswap → ListFeeRequired; zdex / other → 0.
+func listFeeForVenue(venueId string) int64 {
+	if normalizeVenueID(venueId) == VenueGnoswap {
+		return requiredListFeeGns()
+	}
+	return 0
+}
+
+// ListFeeRequiredFor is venue-aware Create fee for UI preflight.
+func ListFeeRequiredFor(venueId string) int64 {
+	ensureListVenuesSeeded()
+	return listFeeForVenue(venueId)
+}
+
+// unlockListFeeEscrow clears launch GNS escrow; refund sends GNS back to creator.
+func unlockListFeeEscrow(cur realm, l *Launch, refund bool) {
+	if l == nil || l.ListFeeGns <= 0 || l.ListFeeConsumed {
+		return
+	}
+	amt := l.ListFeeGns
+	l.ListFeeGns = 0
+	totalListFeeGns -= amt
+	if totalListFeeGns < 0 {
+		totalListFeeGns = 0
+	}
+	if refund && !testSkipBanker && amt > 0 {
+		have := gns.BalanceOf(padAddr)
+		if have < amt {
+			amt = have
+		}
+		if amt > 0 {
+			gns.Transfer(cross(cur), l.Creator, amt)
+		}
+	}
+	chain.Emit("ListFeeUnlocked",
+		"id", l.ID,
+		"amount", strconv.FormatInt(amt, 10),
+		"refund", strconv.FormatBool(refund),
+	)
+}
+
+// syncListFeeForVenue adjusts escrow after PreferredVenue change (pre-list only).
+func syncListFeeForVenue(cur realm, l *Launch, vid string) {
+	if l == nil || l.ListFeeConsumed || l.GnoswapListed || l.ListVenue != "" {
+		return
+	}
+	want := listFeeForVenue(vid)
+	if l.ListFeeGns == want {
+		return
+	}
+	if l.ListFeeGns > 0 {
+		unlockListFeeEscrow(cur, l, true)
+	}
+	lockListFeeEscrow(l, want)
+}
+
 // consumeListFeeEscrow clears launch escrow after successful Gnoswap list
 // (CreatePool spent feeNeed GNS from pad balance).
 func consumeListFeeEscrow(l *Launch) {
@@ -769,8 +823,9 @@ func ClaimListFee(cur realm, id string) int64 {
 	return amt
 }
 
-// Create deploys a fair-launch meme. Bond amount from bond realm (or fallback const).
-// Also locks ListFeeGns free GNS (creator must Transfer GNS to pad first).
+// Create deploys a fair-launch meme. Create bond (bond realm / fallback const) is a
+// platform fee credited to protocol immediately (not refundable escrow).
+// Also locks ListFeeGns free GNS when venue requires it (creator Transfer GNS first).
 // No pre-mint; all tradeable float starts on the bonding curve.
 func Create(cur realm, name, symbol, uri string) string {
 	requireInit()
@@ -791,12 +846,13 @@ func Create(cur realm, name, symbol, uri string) string {
 	if bySymbol.Has(symbol) {
 		panic("pad: symbol taken")
 	}
+	creator := cur.Previous().Address()
 	extra := sent - bondNeed
+	// Bank ugnot overpay must never book into WUGNOT protocolFees (phantom liability).
 	if extra > 0 {
-		creditProtocol(extra)
+		sendUgnot(cur, creator, extra)
 	}
 
-	creator := cur.Previous().Address()
 	id := nextID.Next().String()
 
 	// Real GRC20 bound to this pad realm (mint/burn only via pad ledger).
@@ -812,27 +868,96 @@ func Create(cur realm, name, symbol, uri string) string {
 		regKey = grc20reg.Register(cross(cur), token, symbol)
 	}
 
-	l := &Launch{
-		ID:           id,
-		Name:         name,
-		Symbol:       symbol,
-		URI:          uri,
-		Creator:      creator,
-		Status:       StatusCurve,
-		Created:      runtime.ChainHeight(),
-		token:        token,
-		ledger:       ledger,
-		TokenID:      token.ID(),
-		VirtualUgnot: VirtualUgnot0,
-		VirtualToken: VirtualToken0,
-		UniqueBuyers: avl.Tree{},
-		snipeBought:  avl.Tree{},
-		BondUgnot:    bondNeed,
-		Trades:       avl.Tree{},
+	ensureListVenuesSeeded()
+	pref := DefaultListVenue()
+	return finishCreate(cur, id, name, symbol, uri, creator, token, ledger, regKey, bondNeed, pref)
+}
+
+// CreateWithVenue is Create + PreferredVenue in one MsgCall (fee escrow follows venue).
+// venueId: "zdex" → no GNS list escrow; "gnoswap" → ListFeeRequired GNS.
+func CreateWithVenue(cur realm, name, symbol, uri, venueId string) string {
+	requireInit()
+	sent := requireUserPayment(cur)
+	bondNeed := requiredCreateBond()
+	if bondNeed <= 0 {
+		panic("pad: create bond misconfigured")
 	}
-	// Lock free GNS for future CreatePool (UI: gns.Transfer then Create).
-	lockListFeeEscrow(l, requiredListFeeGns())
-	// Open mark for charts (initial virtual spot).
+	if sent < bondNeed {
+		panic("pad: create bond underpaid")
+	}
+	name = strings.TrimSpace(name)
+	symbol = strings.TrimSpace(symbol)
+	uri = strings.TrimSpace(uri)
+	if name == "" || symbol == "" {
+		panic("pad: name and symbol required")
+	}
+	if len(symbol) > 12 {
+		panic("pad: symbol too long")
+	}
+	if bySymbol.Has(symbol) {
+		panic("pad: symbol taken")
+	}
+	creator := cur.Previous().Address()
+	extra := sent - bondNeed
+	// Bank ugnot overpay must never book into WUGNOT protocolFees (phantom liability).
+	if extra > 0 {
+		sendUgnot(cur, creator, extra)
+	}
+	id := nextID.Next().String()
+	token, ledger := grc20.NewToken(name, symbol, 0, nextTokenID.Next(), cur)
+	regKey := ""
+	if !testSkipBanker {
+		regKey = grc20reg.Register(cross(cur), token, symbol)
+	}
+	ensureListVenuesSeeded()
+	vid := normalizeVenueID(venueId)
+	if !venueEnabled(vid) {
+		panic("pad: venue disabled or unknown")
+	}
+	return finishCreate(cur, id, name, symbol, uri, creator, token, ledger, regKey, bondNeed, vid)
+}
+
+func finishCreate(
+	cur realm,
+	id, name, symbol, uri string,
+	creator address,
+	token *grc20.Token,
+	ledger *grc20.PrivateLedger,
+	regKey string,
+	bondNeed int64,
+	pref string,
+) string {
+	l := &Launch{
+		ID:             id,
+		Name:           name,
+		Symbol:         symbol,
+		URI:            uri,
+		Creator:        creator,
+		Status:         StatusCurve,
+		Created:        runtime.ChainHeight(),
+		token:          token,
+		ledger:         ledger,
+		TokenID:        token.ID(),
+		VirtualUgnot:   VirtualUgnot0,
+		VirtualToken:   VirtualToken0,
+		UniqueBuyers:   avl.Tree{},
+		snipeBought:    avl.Tree{},
+		BondUgnot:      0,    // create fee already credited to protocol below
+		BondRefunded:   true, // no creator refund path
+		Trades:         avl.Tree{},
+		PreferredVenue: pref,
+	}
+	// Create bond = platform fee (bank ugnot, not WUGNOT escrow). Claim via ClaimProtocolFees.
+	if bondNeed > 0 {
+		creditBondFee(bondNeed)
+		chain.Emit("BondFee",
+			"id", id,
+			"amount", strconv.FormatInt(bondNeed, 10),
+			"creator", creator.String(),
+		)
+	}
+	// Venue-aware list fee: zdex → 0 GNS; gnoswap → ListFeeRequired.
+	lockListFeeEscrow(l, listFeeForVenue(pref))
 	recordTrade(l, TradeSideOpen, 0, 0)
 	launches.Set(id, l)
 	bySymbol.Set(symbol, id)
@@ -844,6 +969,8 @@ func Create(cur realm, name, symbol, uri string) string {
 		"token", l.TokenID,
 		"reg", regKey,
 		"listFeeGns", strconv.FormatInt(l.ListFeeGns, 10),
+		"preferredVenue", pref,
+		"bondFee", strconv.FormatInt(bondNeed, 10),
 	)
 	notifyCreate(cur, creator, id)
 	return id
@@ -1176,10 +1303,11 @@ func graduate(cur realm, l *Launch) {
 	if remaining <= 0 {
 		panic("pad: no remaining tokens for liquidity")
 	}
-	// tokensForLP = raised * VirtualToken / VirtualUgnot  (same units as reserves)
+	// tokensForLP = raised * VirtualToken / VirtualUgnot  (same units as reserves).
+	// Use MulDiv: poolU * VT can overflow int64 at mainnet VU0 (~102k GNOT) scale.
 	poolT := remaining
-	if l.VirtualUgnot > 0 && l.VirtualToken > 0 {
-		needed := poolU * l.VirtualToken / l.VirtualUgnot
+	if l.VirtualUgnot > 0 && l.VirtualToken > 0 && poolU > 0 {
+		needed := ammmath.MulDiv(poolU, l.VirtualToken, l.VirtualUgnot)
 		if needed > 0 && needed < remaining {
 			poolT = needed
 		}
@@ -1193,9 +1321,9 @@ func graduate(cur realm, l *Launch) {
 	l.VirtualToken = 0
 	l.Status = StatusGraduated
 
-	// Forfeit unrefunded bond to protocol at graduation if still locked.
+	// Legacy: any residual BondUgnot (pre-fee-cut launches) → bank bond fee at graduate.
 	if !l.BondRefunded && l.BondUgnot > 0 {
-		creditProtocol(l.BondUgnot)
+		creditBondFee(l.BondUgnot)
 		l.BondUgnot = 0
 		l.BondRefunded = true
 	}
@@ -1217,9 +1345,12 @@ func graduate(cur realm, l *Launch) {
 	if !listed {
 		// Internal CPMM: PoolToken is pad-accounting reserve (not minted GRC20).
 		// Circulating = user balances; pool side is virtual reserve PoolToken.
-		// Ops/UI: Transfer WUGNOT/GNS to pad then RetryListGnoswap (no user TF).
 		if l.GnoswapNote == "" {
-			l.GnoswapNote = "internal CPMM; Transfer WUGNOT+GNS to pad then RetryListGnoswap"
+			if l.PreferredVenue == VenueZdex {
+				l.GnoswapNote = "internal CPMM; ReleaseListSeed → EOA zdex CreatePool → ConfirmZdexList"
+			} else {
+				l.GnoswapNote = "internal CPMM; Transfer WUGNOT+GNS to pad then RetryListGnoswap"
+			}
 		}
 		chain.Emit("Graduated",
 			"id", l.ID,
@@ -1243,9 +1374,155 @@ func graduate(cur realm, l *Launch) {
 	)
 }
 
-// RetryList lists a graduated launch on the chosen venue (default: gnoswap).
+// SetPreferredVenue sets the DEX target used when RetryList(id, "") is called.
+// Creator or protocol only; locked once listed. Syncs Create-time GNS escrow
+// (gnoswap locks ListFeeRequired; zdex unlocks/refunds escrow).
+func SetPreferredVenue(cur realm, id, venueId string) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	l := mustLaunch(id)
+	caller := cur.Previous().Address()
+	if caller != l.Creator && caller != protocolAddr {
+		panic("pad: creator or protocol only")
+	}
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: already listed")
+	}
+	ensureListVenuesSeeded()
+	vid := normalizeVenueID(venueId)
+	if !venueEnabled(vid) {
+		panic("pad: venue disabled or unknown")
+	}
+	l.PreferredVenue = vid
+	syncListFeeForVenue(cur, l, vid)
+	chain.Emit("SetPreferredVenue",
+		"id", id,
+		"venue", vid,
+		"listFeeGns", strconv.FormatInt(l.ListFeeGns, 10),
+	)
+}
+
+// PreferredVenueOf returns the Create-time / SetPreferredVenue target.
+func PreferredVenueOf(id string) string {
+	return mustLaunch(id).PreferredVenue
+}
+
+// ListSeedReleasedOf reports whether ReleaseListSeed already ran.
+func ListSeedReleasedOf(id string) bool {
+	return mustLaunch(id).ListSeedReleased
+}
+
+// ReleaseListSeed sends graduated internal-CPMM seed to the creator for EOA zdex CreatePool:
+//   - PoolUgnot as WUGNOT Transfer to creator (EOA may wugnot.Withdraw → ugnot OriginSend)
+//   - PoolToken minted as GRC20 to creator (was pad-accounting only)
+// PoolUgnot/PoolToken kept as listing-size record; reservedWugnot skips via ListSeedReleased.
+// Disables internal SwapBuy/Sell. Creator or protocol may call; assets always go to creator.
+func ReleaseListSeed(cur realm, id string) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	l := mustLaunch(id)
+	caller := cur.Previous().Address()
+	if caller != l.Creator && caller != protocolAddr {
+		panic("pad: creator or protocol only")
+	}
+	if l.Status != StatusGraduated {
+		panic("pad: not graduated")
+	}
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: already listed")
+	}
+	if l.ListSeedReleased {
+		panic("pad: list seed already released")
+	}
+	poolU := l.PoolUgnot
+	poolT := l.PoolToken
+	if poolU <= 0 || poolT <= 0 {
+		panic("pad: empty internal pool")
+	}
+	// Fail-closed: must fully fund creator before killing internal CPMM.
+	if !testSkipBanker {
+		have := wugnot.BalanceOf(padAddr)
+		if have < poolU {
+			panic("pad: underfunded WUGNOT for list seed release")
+		}
+	}
+	// Mark released before Transfer so reservedWugnot drops in same tx.
+	// Keep PoolUgnot/PoolToken as listing-size record (reservedWugnot skips via ListSeedReleased).
+	l.ListSeedReleased = true
+	l.LiqWugnotUsed = poolU
+	l.GnoswapNote = "list seed released to creator for zdex CreatePool; then ConfirmZdexList"
+	if !testSkipBanker {
+		wugnot.Transfer(cross(cur), l.Creator, poolU)
+	} else {
+		payWugnotOut(cur, l.Creator, poolU)
+	}
+	addBal(l, l.Creator, poolT)
+	chain.Emit("ReleaseListSeed",
+		"id", id,
+		"to", l.Creator.String(),
+		"wugnot", strconv.FormatInt(poolU, 10),
+		"tokens", strconv.FormatInt(poolT, 10),
+	)
+}
+
+// ConfirmZdexList marks a launch listed on zdex after EOA CreatePool succeeded.
+// poolId e.g. "ugnot|SYMBOL" (must be non-empty; no on-chain pool verify).
+// Creator or protocol. Prefer ReleaseListSeed first when pad still holds LP seed.
+func ConfirmZdexList(cur realm, id, poolId string) {
+	requireInit()
+	if !cur.Previous().IsUserCall() {
+		panic("pad: must be EOA MsgCall")
+	}
+	l := mustLaunch(id)
+	caller := cur.Previous().Address()
+	if caller != l.Creator && caller != protocolAddr {
+		panic("pad: creator or protocol only")
+	}
+	if l.Status != StatusGraduated {
+		panic("pad: not graduated")
+	}
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: already listed")
+	}
+	// Avoid marking listed while pad still holds unreleased LP capital.
+	if !l.ListSeedReleased && (l.PoolUgnot > 0 || l.PoolToken > 0) {
+		panic("pad: ReleaseListSeed first (or empty pool)")
+	}
+	poolId = strings.TrimSpace(poolId)
+	if poolId == "" {
+		panic("pad: empty poolId")
+	}
+	l.ListVenue = VenueZdex
+	l.GnoswapListed = true // UI/compat: "listed on DEX"
+	l.GnoswapPoolPath = poolId
+	l.GnoswapPositionID = 0
+	if l.LiqWugnotUsed == 0 {
+		l.LiqWugnotUsed = l.PoolUgnot
+	}
+	l.GnoswapNote = "confirmed zdex list; pool=" + poolId
+	chain.Emit("ConfirmZdexList",
+		"id", id,
+		"poolPath", poolId,
+		"symbol", l.Symbol,
+		"venue", VenueZdex,
+	)
+	chain.Emit("ListedRetry",
+		"id", id,
+		"venue", VenueZdex,
+		"poolPath", poolId,
+		"positionId", "0",
+		"poolUgnot", strconv.FormatInt(l.PoolUgnot, 10),
+		"poolToken", strconv.FormatInt(l.PoolToken, 10),
+	)
+}
+
+// RetryList lists a graduated launch on the chosen venue.
 // Permissionless EOA MsgCall. Uses PoolUgnot / PoolToken (curve-spot sized).
-// venueId: empty → DefaultListVenue(); unknown/disabled → soft-fail note.
+// venueId: empty → PreferredVenue → DefaultListVenue(); unknown/disabled → soft-fail note.
 func RetryList(cur realm, id, venueId string) bool {
 	requireInit()
 	if !cur.Previous().IsUserCall() {
@@ -1258,12 +1535,19 @@ func RetryList(cur realm, id, venueId string) bool {
 	if l.GnoswapListed || l.ListVenue != "" {
 		panic("pad: already listed")
 	}
+	if l.ListSeedReleased {
+		panic("pad: list seed released - use ConfirmZdexList after EOA CreatePool")
+	}
 	poolU := l.PoolUgnot
 	poolT := l.PoolToken
 	if poolU <= 0 || poolT <= 0 {
 		panic("pad: empty internal pool")
 	}
-	vid := normalizeVenueID(venueId)
+	raw := strings.TrimSpace(venueId)
+	if raw == "" && l.PreferredVenue != "" {
+		raw = l.PreferredVenue
+	}
+	vid := normalizeVenueID(raw)
 	ok := tryListVenue(cur, l, vid, poolU, poolT)
 	if ok {
 		chain.Emit("ListedRetry",
@@ -1320,8 +1604,11 @@ func SwapBuy(cur realm, id string, amountWugnot, minTokensOut int64) int64 {
 	if l.Status != StatusGraduated {
 		panic("pad: not graduated (use Buy)")
 	}
-	if l.GnoswapListed {
-		panic("pad: listed on Gnoswap - trade via router, not pad SwapBuy")
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: listed on DEX - trade via router, not pad SwapBuy")
+	}
+	if l.ListSeedReleased {
+		panic("pad: list seed released - finish zdex CreatePool + ConfirmZdexList")
 	}
 	buyer := cur.Previous().Address()
 
@@ -1366,8 +1653,11 @@ func SwapSell(cur realm, id string, tokensIn, minWugnotOut int64) int64 {
 	if l.Status != StatusGraduated {
 		panic("pad: not graduated (use Sell)")
 	}
-	if l.GnoswapListed {
-		panic("pad: listed on Gnoswap - trade via router, not pad SwapSell")
+	if l.GnoswapListed || l.ListVenue != "" {
+		panic("pad: listed on DEX - trade via router, not pad SwapSell")
+	}
+	if l.ListSeedReleased {
+		panic("pad: list seed released - finish zdex CreatePool + ConfirmZdexList")
 	}
 	seller := cur.Previous().Address()
 	if balOf(l, seller) < tokensIn {
@@ -1498,22 +1788,47 @@ func ClaimCreatorFees(cur realm, id string) int64 {
 	return amt
 }
 
-// payoutProtocolFees sends all pending protocolFees to protocolAddr.
-// Shared by ClaimProtocolFees and PushProtocolFees.
+// payoutProtocolFees sends all pending protocol fees to protocolAddr.
+// Trade fees (WUGNOT) + create BondFee (bank ugnot). Shared by Claim/Push.
+// Fail-closed: check free WUGNOT before clearing protocolFees (no silent clip).
 func payoutProtocolFees(cur realm) int64 {
-	amt := protocolFees
+	wAmt := protocolFees
+	bAmt := protocolBondFees
+	amt := wAmt + bAmt
 	if amt <= 0 {
 		return 0
 	}
 	if !protocolAddr.IsValid() {
 		panic("pad: protocol address unset")
 	}
+	// protocolFees is included in reservedWugnot(); temporarily treat as payable free.
+	if wAmt > 0 && !testSkipBanker {
+		have := wugnot.BalanceOf(padAddr)
+		// Free excluding this protocolFees slice: have - (reserved - wAmt)
+		res := reservedWugnot()
+		avail := have - (res - wAmt)
+		if avail < wAmt {
+			panic("pad: insufficient free WUGNOT for protocol fees")
+		}
+	}
 	protocolFees = 0
+	protocolBondFees = 0
 	protocolFeesPaid += amt
-	payWugnotOut(cur, protocolAddr, amt)
+	if wAmt > 0 {
+		if testSkipBanker {
+			sendUgnot(cur, protocolAddr, wAmt)
+		} else {
+			wugnot.Transfer(cross(cur), protocolAddr, wAmt)
+		}
+	}
+	if bAmt > 0 {
+		sendUgnot(cur, protocolAddr, bAmt)
+	}
 	chain.Emit("ClaimProtocol",
 		"to", protocolAddr.String(),
 		"amount", strconv.FormatInt(amt, 10),
+		"wugnot", strconv.FormatInt(wAmt, 10),
+		"bondUgnot", strconv.FormatInt(bAmt, 10),
 	)
 	return amt
 }
@@ -1577,7 +1892,7 @@ func ProtocolFeesPaid() int64 {
 // FeeInfo returns protocolAddr|pendingUgnot|paidUgnot for UIs.
 func FeeInfo() string {
 	return protocolAddr.String() + "|" +
-		strconv.FormatInt(protocolFees, 10) + "|" +
+		strconv.FormatInt(protocolFees+protocolBondFees, 10) + "|" +
 		strconv.FormatInt(protocolFeesPaid, 10)
 }
 
@@ -1601,7 +1916,7 @@ func AdminInfo() string {
 		ini = "1"
 	}
 	return protocolAddr.String() + "|" +
-		strconv.FormatInt(protocolFees, 10) + "|" +
+		strconv.FormatInt(protocolFees+protocolBondFees, 10) + "|" +
 		strconv.FormatInt(protocolFeesPaid, 10) + "|" +
 		strconv.FormatInt(reservedUgnot(), 10) + "|" +
 		strconv.Itoa(launches.Size()) + "|" +
@@ -1618,22 +1933,14 @@ func IsProtocol(addr string) bool {
 	return protocolAddr.String() == addr
 }
 
-// reservedUgnot is ugnot the pad must keep to honor user/creator liabilities
-// and active markets (curve raised, internal CPMM, bonds, pending fees).
+// reservedUgnot is bank ugnot the pad must keep (create BondFee + legacy BondUgnot).
+// Curve / CPMM / trade protocolFees are WUGNOT — see reservedWugnot.
 func reservedUgnot() int64 {
-	reserved := protocolFees
+	reserved := protocolBondFees
 	launches.Iterate("", "", func(_ string, value any) bool {
 		l := value.(*Launch)
-		reserved += l.CreatorFees
 		if !l.BondRefunded {
 			reserved += l.BondUgnot
-		}
-		if l.Status == StatusCurve {
-			reserved += l.RaisedUgnot
-		}
-		// Internal CPMM (fallback when not Gnoswap-listed) holds real ugnot.
-		if l.Status == StatusGraduated && !l.GnoswapListed {
-			reserved += l.PoolUgnot
 		}
 		return false
 	})
@@ -1692,6 +1999,19 @@ func BalanceOf(id string, owner address) int64 {
 	return balOf(mustLaunch(id), owner)
 }
 
+// Allowance returns how many tokens `spender` may TransferFrom from `owner`
+// (same GRC20 semantics as wugnot/gns.Allowance, keyed by launch id).
+func Allowance(id string, owner, spender address) int64 {
+	l := mustLaunch(id)
+	if l.token == nil {
+		return 0
+	}
+	if !owner.IsValid() || !spender.IsValid() {
+		return 0
+	}
+	return l.token.Allowance(owner, spender)
+}
+
 // ListBuyers returns unique buyer addresses (one per line), capped for query size.
 // Only addresses that bought at least once on this pad (UniqueBuyers). Not full GRC20 holders
 // who received tokens via transfer.
@@ -1732,7 +2052,12 @@ func GetCreatorFees(id string) int64 {
 }
 
 func ProtocolFees() int64 {
-	return protocolFees
+	return protocolFees + protocolBondFees
+}
+
+// ProtocolBondFees returns pending create-bond bank ugnot (subset of ProtocolFees).
+func ProtocolBondFees() int64 {
+	return protocolBondFees
 }
 
 func LaunchCount() int {
@@ -1855,6 +2180,7 @@ func resetForTest() {
 	protocolAddr = zero
 	// padAddr is set in package init - do not clear (realm address is fixed).
 	protocolFees = 0
+	protocolBondFees = 0
 	protocolFeesPaid = 0
 	inited = false
 	pointsEnabled = false
@@ -1862,5 +2188,9 @@ func resetForTest() {
 	listFeeGnsLive = 0
 	testSkipBanker = true // unit tests skip banker; integration/chain tests leave false
 	testForceGnoswapList = false
+	testForceZdexList = false
+	totalListFeeGns = 0
+	totalWugnotCredit = 0
+	wugnotCredit = avl.Tree{}
 	resetListVenuesForTest()
 }

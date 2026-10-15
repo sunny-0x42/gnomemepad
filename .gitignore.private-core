@@ -1,0 +1,77 @@
+# ── Secrets & local env ──
+.env
+.env.*
+!.env*.example
+!.env.deploy.example
+*.pem
+*.key
+*.mnemonic
+*.seed
+
+# ── Build / deps / tooling ──
+node_modules/
+web/node_modules/
+web/ui/node_modules/
+web/ui/dist/
+.netlify/
+web/.netlify/
+.gno/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# ── Logs & OS ──
+*.log
+server.log
+server.err.log
+web/server.log
+web/server.err.log
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.bak
+
+# ── Historical / redundant deploy snapshots (keep latest + modules only) ──
+deploy/sapphire/
+deploy/sapphire-v2/
+deploy/sapphire-v3/
+deploy/sapphire-v4/
+deploy/sapphire-v5/
+deploy/sapphire-v6/
+deploy/sapphire-v7/
+deploy/sapphire-v8/
+deploy/sapphire-v9/
+deploy/sapphire-v10/
+deploy/sapphire-v11/
+deploy/sapphire-v12/
+deploy/sapphire-v13/
+deploy/sapphire-v14/
+deploy/sapphire-v15/
+deploy/sapphire-v16/
+deploy/sapphire-v17/
+deploy/sapphire-v18/
+deploy/sapphire-v19/
+deploy/sapphire-v20/
+deploy/sapphire-v21/
+deploy/topaz/
+deploy/topaz/**
+
+# ── Legacy UI / temp / generated noise ──
+web/public-legacy-vanilla/
+web/public/
+tmp-*.gno
+tmp-*
+docs/token-resource/images/*.jpg
+docs/token-resource/sapphire-1.base.json
+docs/token-resource/sapphire-1.json
+
+# ── Optional bulky vendored test noise ──
+gno.land/p/nt/avl/v0/pager/filetests/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

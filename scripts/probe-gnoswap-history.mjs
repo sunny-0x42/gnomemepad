@@ -5,7 +5,7 @@
  * Usage: node scripts/probe-gnoswap-history.mjs
  */
 const API = process.env.GNOMI_API || "https://gnomi.fun";
-const GNOSWAP = process.env.GNOSWAP_API_BASE || "https://beta.api.gnoswap.io/v1";
+const GNOSWAP = process.env.GNOSWAP_API_BASE || "https://api.gnoswap.io/v1";
 const WUGNOT = "gno.land/r/gnoland/wugnot.wugnot";
 
 function marketTokenKey(m) {

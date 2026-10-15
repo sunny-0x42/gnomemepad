@@ -13,6 +13,7 @@ import (
 // dynamically import by path string.
 const (
 	VenueGnoswap = "gnoswap"
+	VenueZdex    = "zdex"
 )
 
 // listVenueMeta is registry metadata (not a callable adapter).
@@ -32,9 +33,12 @@ func ensureListVenuesSeeded() {
 	if listVenues.Size() > 0 {
 		return
 	}
-	registerListVenue(VenueGnoswap, "Gnoswap", true, "GNS")
+	// Mainnet-first: zdex default (hub listable when adapter + realm live).
+	// Gnoswap registered but disabled until mainnet router/pool exist — enable via SetListVenue.
+	registerListVenue(VenueZdex, "zdex", true, "ugnot")
+	registerListVenue(VenueGnoswap, "Gnoswap", false, "GNS")
 	if defaultListVenue == "" {
-		defaultListVenue = VenueGnoswap
+		defaultListVenue = VenueZdex
 	}
 }
 
@@ -62,7 +66,7 @@ func normalizeVenueID(venueId string) string {
 		if defaultListVenue != "" {
 			return defaultListVenue
 		}
-		return VenueGnoswap
+		return VenueZdex
 	}
 	return v
 }
@@ -82,7 +86,7 @@ func venueEnabled(venueId string) bool {
 func DefaultListVenue() string {
 	ensureListVenuesSeeded()
 	if defaultListVenue == "" {
-		return VenueGnoswap
+		return VenueZdex
 	}
 	return defaultListVenue
 }
@@ -172,6 +176,12 @@ func tryListVenue(cur realm, l *Launch, venueId string, raisedUgnot, liqTokens i
 		return false
 	}
 	switch id {
+	case VenueZdex:
+		ok := tryListOnZdex(cur, l, raisedUgnot, liqTokens)
+		if ok && l != nil {
+			l.ListVenue = VenueZdex
+		}
+		return ok
 	case VenueGnoswap:
 		ok := listOnGnoswapWithFunding(cur, l, raisedUgnot, liqTokens)
 		if ok && l != nil {

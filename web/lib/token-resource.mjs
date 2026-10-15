@@ -7,12 +7,26 @@
  * This module:
  *  - Builds the canonical GRC20 registry entry (decimals=0, Adena path)
  *  - Generates circular SVG logos from https image or initials
- *  - Diffs our markets vs upstream sapphire-1.json
+ *  - Diffs our markets vs upstream grc20/{chainId}.json (sapphire-1 or gnoland-1)
+ *  - Auto-PR only tokens with an http(s)/ipfs image URL, and only when
+ *    the registry row or SVG actually changed (no spam / no initials-only).
  *  - Optionally opens a PR via GitHub API (TOKEN_RESOURCE_GITHUB_TOKEN)
  */
 
 const UGNOT_PER_GNOT = 1_000_000;
 const DEFAULT_CHAIN = "sapphire-1";
+
+/** Map pad/network chain-id → gno-token-resource file name (grc20/{id}.json). */
+export function tokenResourceChainId(raw) {
+  const s = String(raw || "").trim().toLowerCase();
+  if (!s) return DEFAULT_CHAIN;
+  if (s === "gnoland-1" || s === "gnoland1" || s === "mainnet" || s.includes("gnoland")) {
+    return "gnoland-1";
+  }
+  if (s === "pearl-1" || s === "pearl") return "pearl-1";
+  if (s === "sapphire-1" || s === "sapphire") return "sapphire-1";
+  return String(raw).trim() || DEFAULT_CHAIN;
+}
 const UPSTREAM_RAW =
   process.env.TOKEN_RESOURCE_UPSTREAM_RAW ||
   "https://raw.githubusercontent.com/onbloc/gno-token-resource/main";
@@ -81,6 +95,41 @@ export function imageFileName(m) {
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
   return `${slug || "token"}.svg`;
+}
+
+export function hasHttpImageUrl(m, meta = null) {
+  return !!resolveImageUrl(m, meta);
+}
+
+function registryRowChanged(up, entry) {
+  if (!up) return true;
+  const keys = ["name", "symbol", "decimals", "chain_id", "image", "website_url"];
+  for (const k of keys) {
+    if (String(up[k] ?? "") !== String(entry[k] ?? "")) return true;
+  }
+  return false;
+}
+
+function normalizeSvg(s) {
+  return String(s || "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+}
+
+async function fetchUpstreamSvg(imageFile) {
+  const name = String(imageFile || "").replace(/^\/+/, "");
+  if (!name) return "";
+  const url = `${UPSTREAM_RAW}/grc20/images/${name}`;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return "";
+    return await res.text();
+  } catch {
+    return "";
+  }
 }
 
 export function resolveImageUrl(m, meta = null) {
@@ -253,14 +302,15 @@ export function upstreamPathSet(rows) {
  * @param {Record<string, object|null>} metaByKey key = pkg|id
  */
 export async function buildRegistrationPlan(markets, metaByKey = {}, opts = {}) {
-  const chainId = opts.chainId || process.env.CHAIN_ID || DEFAULT_CHAIN;
+  const chainId = tokenResourceChainId(
+    opts.chainId || process.env.CHAIN_ID || DEFAULT_CHAIN,
+  );
   const upstream = opts.upstream || (await fetchUpstreamRegistry(chainId));
   const registered = upstreamPathSet(upstream);
   const items = [];
 
   for (const m of markets || []) {
     if (!m || m.error || !m.id || !m.symbol) continue;
-    // Register all launches (not only listed) so Adena/Gnoswap can resolve logos early
     const meta = metaByKey[`${m.pkg}|${m.id}`] || null;
     const entry = buildRegistryEntry(m, meta, { chainId });
     if (!entry.token_path) continue;
@@ -270,6 +320,41 @@ export async function buildRegistrationPlan(markets, metaByKey = {}, opts = {}) 
       ? (upstream || []).find((r) => r.token_path === entry.token_path)
       : null;
     const hasLogo = !!(upRow && String(upRow.image || "").trim());
+    const imgFile = imageFileName(m);
+
+    let status = "no_image";
+    let needsPr = false;
+    let reason = "no_image_url";
+    if (imageUrl) {
+      if (!onUpstream) {
+        status = "missing";
+        needsPr = true;
+        reason = "missing";
+      } else if (!hasLogo || registryRowChanged(upRow, entry)) {
+        status = hasLogo ? "metadata_changed" : "registered_no_image";
+        needsPr = true;
+        reason = hasLogo ? "metadata_changed" : "no_upstream_image";
+      } else {
+        const { svg, source } = await svgForMarket(m, meta);
+        if (source !== "image") {
+          status = "registered";
+          needsPr = false;
+          reason = "image_unreadable";
+        } else {
+          const upSvg = await fetchUpstreamSvg(imgFile);
+          if (upSvg && normalizeSvg(upSvg) === normalizeSvg(svg)) {
+            status = "registered";
+            needsPr = false;
+            reason = "unchanged";
+          } else {
+            status = "image_changed";
+            needsPr = true;
+            reason = upSvg ? "image_changed" : "missing_upstream_svg";
+          }
+        }
+      }
+    }
+
     items.push({
       id: m.id,
       pkg: m.pkg,
@@ -278,10 +363,11 @@ export async function buildRegistrationPlan(markets, metaByKey = {}, opts = {}) 
       token_path: entry.token_path,
       entry,
       imageUrl,
-      imageFile: imageFileName(m),
+      imageFile: imgFile,
       gnoswapListed: !!m.gnoswapListed,
-      status: onUpstream ? (hasLogo ? "registered" : "registered_no_image") : "missing",
-      needsPr: !onUpstream || !hasLogo,
+      status,
+      reason,
+      needsPr,
     });
   }
 
@@ -293,6 +379,8 @@ export async function buildRegistrationPlan(markets, metaByKey = {}, opts = {}) 
     total: items.length,
     missing: missing.length,
     registered: items.filter((x) => x.status === "registered").length,
+    skippedNoImage: items.filter((x) => x.status === "no_image").length,
+    unchanged: items.filter((x) => x.reason === "unchanged").length,
     items,
     missingItems: missing,
   };
@@ -332,7 +420,12 @@ export async function syncTokenResourcePr(plan, opts = {}) {
   const chainId = plan.chainId || DEFAULT_CHAIN;
   const missing = plan.missingItems || plan.items?.filter((x) => x.needsPr) || [];
   if (!missing.length) {
-    return { ok: true, skipped: true, message: "All tokens already registered with logos", planSummary: summarizePlan(plan) };
+    return {
+      ok: true,
+      skipped: true,
+      message: "No new image/metadata changes to send to Gnoswap",
+      planSummary: summarizePlan(plan),
+    };
   }
 
   const headers = {
@@ -341,6 +434,31 @@ export async function syncTokenResourcePr(plan, opts = {}) {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "gnomemepad-token-resource-sync",
   };
+
+  try {
+    const open = await fetch(
+      `https://api.github.com/repos/${UPSTREAM_REPO}/pulls?state=open&per_page=30`,
+      { headers },
+    );
+    if (open.ok) {
+      const prs = await open.json();
+      const mine = (Array.isArray(prs) ? prs : []).find((p) =>
+        String(p.title || "").includes("register gnomemepad tokens"),
+      );
+      if (mine?.html_url) {
+        return {
+          ok: true,
+          skipped: true,
+          message: "Open Gnoswap logo PR already exists — not opening another",
+          prUrl: mine.html_url,
+          prNumber: mine.number,
+          planSummary: summarizePlan(plan),
+        };
+      }
+    }
+  } catch {
+    /* continue to open a PR */
+  }
 
   // Ensure fork exists
   let forkFull = fork;
@@ -445,7 +563,9 @@ export async function syncTokenResourcePr(plan, opts = {}) {
   const body = [
     `## gnomemepad auto-register`,
     ``,
-    `Adds GRC20 metadata + SVG logos for tokens launched on [gnomemepad](https://gnomemepad-sapphire.netlify.app) so Gnoswap/Adena can display icons.`,
+    `Adds **new or changed** GRC20 metadata + SVG logos for gnomemepad tokens that have an http(s)/ipfs image URL, so Gnoswap/Adena can display icons.`,
+    `Skipped tokens with no image URL, and tokens already matching upstream (anti-spam).`,
+    `chain_id: \`${chainId}\` (\`grc20/${chainId}.json\`).`,
     ``,
     `### Tokens`,
     ...committed.map((p) => `- \`${p}\``),
@@ -528,6 +648,8 @@ function summarizePlan(plan) {
     total: plan?.total ?? 0,
     missing: plan?.missing ?? 0,
     registered: plan?.registered ?? 0,
+    skippedNoImage: plan?.skippedNoImage ?? 0,
+    unchanged: plan?.unchanged ?? 0,
     chainId: plan?.chainId,
   };
 }
@@ -572,5 +694,5 @@ export const TOKEN_RESOURCE_SPEC = {
   chainFile: `grc20/{chainId}.json`,
   tokenPath: "packagePath.SYMBOL (Adena / grc20reg key, never Token.ID .seq)",
   upstream: UPSTREAM_REPO,
-  note: "Gnoswap/Adena logos load only after merge into gno-token-resource",
+  note: "Gnoswap/Adena logos load only after merge into gno-token-resource. Auto-PR: http(s)/ipfs image only; skip unchanged vs upstream. Mainnet file: grc20/gnoland-1.json when CHAIN_ID=gnoland-1.",
 };

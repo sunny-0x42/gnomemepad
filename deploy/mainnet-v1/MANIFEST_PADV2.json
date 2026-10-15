@@ -1,0 +1,26 @@
+{
+  "at": "2026-09-18T01:53:14.599Z",
+  "cut": "padv2-ammmathv2",
+  "deployer": "g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt",
+  "namespace": "gnomi",
+  "chainId": "gnoland-1",
+  "rpc": "https://rpc.onbloc.xyz:443",
+  "economics": {
+    "virtualUgnot0": "102_375_071_625",
+    "graduationUgnot": "300_000_000_000",
+    "createBondFallbackUgnot": "150_000_000",
+    "listFeeGns": "100_000_000",
+    "defaultVenue": "zdex"
+  },
+  "packages": [
+    {
+      "rel": "p/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/ammmathv2",
+      "pkgpath": "gno.land/p/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/ammmathv2"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv2",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/padv2"
+    }
+  ],
+  "note": "Upgrade cut only. Old …/gnomi/ammmath + …/gnomi/pad stay live but broken for large k. GNOME 0000001 on old pad stays stuck. After addpkg: hub SetModule(\"pad\", padv2) with human yes. No MAINNET_PAD_READY / no broadcast from this script."
+}

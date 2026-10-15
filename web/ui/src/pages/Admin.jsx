@@ -3,17 +3,18 @@ import { Navigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { SkeletonPanel } from "../components/ui";
 import { api } from "../lib/api";
-import { copyText, fmtGnot, shortAddr } from "../lib/format";
+import { copyText, fmtGnot, fmtUsd, shortAddr, usdBesideGnot } from "../lib/format";
 
 /**
  * Deploy-wallet only. Route is also gated; this is a second line of defense.
  */
 export default function Admin() {
-  const { isAdmin, wallet, connect, broadcast, showToast, pkg } = useApp();
+  const { isAdmin, wallet, connect, broadcast, showToast, pkg, networkId, network, health } =
+    useApp();
   const [d, setD] = useState(null);
   const [bond, setBond] = useState(null);
-  const [ops, setOps] = useState(null);
   const [log, setLog] = useState("");
+  const [loadErr, setLoadErr] = useState("");
   const [withdraw, setWithdraw] = useState("");
   const [newTreasury, setNewTreasury] = useState("");
   const [promoUgnot, setPromoUgnot] = useState("100000000");
@@ -24,18 +25,28 @@ export default function Admin() {
   const [loading, setLoading] = useState(true);
   const [ambApps, setAmbApps] = useState([]);
   const [ambBusy, setAmbBusy] = useState(false);
+  const [venuesApi, setVenuesApi] = useState(null);
+  const [gnotUsd, setGnotUsd] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     setLoading(true);
+    setLoadErr("");
     try {
-      const [data, b, o] = await Promise.all([
-        api("/api/admin?refresh=1"),
-        api("/api/bond").catch(() => null),
-        api("/api/ops?refresh=1").catch(() => null),
-      ]);
+      const adminPath = force ? "/api/admin?refresh=1" : "/api/admin";
+      const data = await api(adminPath);
+      if (data && data.ok === false) {
+        throw new Error(data.error || "Admin data unavailable");
+      }
       setD(data);
+      setLoading(false);
+      const [b, venues, fx] = await Promise.all([
+        api("/api/bond").catch(() => null),
+        api("/api/list-venues").catch(() => null),
+        api("/api/fx").catch(() => null),
+      ]);
       setBond(b);
-      setOps(o);
+      setVenuesApi(venues);
+      setGnotUsd(Number(fx?.gnotUsd) || 0);
       if (wallet?.address) {
         try {
           const amb = await api(
@@ -46,6 +57,8 @@ export default function Admin() {
           setAmbApps([]);
         }
       }
+    } catch (e) {
+      setLoadErr(e.message || String(e));
     } finally {
       setLoading(false);
     }
@@ -103,8 +116,13 @@ export default function Admin() {
   const protoShareBps = Number(f.protocolShareBps) || 4000;
   const byPad = Array.isArray(f.byPad) ? f.byPad : [];
   const claimablePads = byPad.filter((row) => Number(row.pending) > 0);
-  const inv = ops?.inventory;
+  const inv = d?.ops?.inventory;
   const raiseGnot = Number(p.graduationGnot) || inv?.raiseNeedGnot || 10000;
+
+  function usdMark(gnot) {
+    const label = usdBesideGnot(gnot, gnotUsd);
+    return label ? <span className="admin-usd">{label}</span> : null;
+  }
 
   async function run(label, fn, args = [], send = "", pkgPath = null) {
     setLog(`${label}...`);
@@ -176,11 +194,12 @@ export default function Admin() {
               <code className="mono">{(d?.pkg || pkg || "").split("/").pop()}</code>
             </p>
           </div>
-          <button type="button" className="btn sm" onClick={() => load()} disabled={loading}>
+          <button type="button" className="btn sm" onClick={() => load(true)} disabled={loading}>
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
 
+        {loadErr && !d ? <p className="callout err">{loadErr}</p> : null}
         {loading && !d && <SkeletonPanel height={200} />}
 
         {d && (
@@ -195,11 +214,20 @@ export default function Admin() {
                   {fmtGnot(f.pendingAllGnot ?? pendingAllUgnot / 1e6, { alreadyGnot: true })}
                   <span className="admin-claimable-unit">GNOT</span>
                 </div>
+                {usdBesideGnot(f.pendingAllGnot ?? pendingAllUgnot / 1e6, gnotUsd) ? (
+                  <div className="admin-claimable-usd">
+                    {usdBesideGnot(f.pendingAllGnot ?? pendingAllUgnot / 1e6, gnotUsd)}
+                  </div>
+                ) : null}
                 <p className="muted admin-hint" style={{ margin: "0.35rem 0 0" }}>
                   {pendingAllUgnot > 0
                     ? `${claimablePads.length} pad package(s) with pending fees · active pad ${(
                         f.pendingGnot ?? pendingUgnot / 1e6
-                      ).toFixed(4)} GNOT`
+                      ).toFixed(4)} GNOT${
+                        usdBesideGnot(f.pendingGnot ?? pendingUgnot / 1e6, gnotUsd)
+                          ? ` (${usdBesideGnot(f.pendingGnot ?? pendingUgnot / 1e6, gnotUsd)})`
+                          : ""
+                      }`
                     : "No pending protocol fees right now. Fees accrue as users trade (1.2% x 40% protocol)."}
                 </p>
                 <div className="mono faint" style={{ fontSize: "0.75rem", marginTop: "0.35rem" }}>
@@ -207,6 +235,10 @@ export default function Admin() {
                   {" · "}
                   lifetime paid{" "}
                   {fmtGnot(f.paidAllGnot ?? paidAllUgnot / 1e6, { alreadyGnot: true })} GNOT
+                  {usdBesideGnot(f.paidAllGnot ?? paidAllUgnot / 1e6, gnotUsd)
+                    ? ` (${usdBesideGnot(f.paidAllGnot ?? paidAllUgnot / 1e6, gnotUsd)})`
+                    : ""}
+                  {gnotUsd > 0 ? ` · GNOT ${fmtUsd(gnotUsd)}` : ""}
                 </div>
               </div>
               <div className="admin-claimable-actions">
@@ -239,6 +271,129 @@ export default function Admin() {
               </div>
             </article>
 
+            {/* List venues — zdex + Gnoswap */}
+            <article className="admin-card admin-card-wide">
+              <h2 className="panel-title" style={{ marginTop: 0 }}>
+                List venues (DEX)
+              </h2>
+              <p className="muted" style={{ fontSize: "0.85rem" }}>
+                Metadata on pad · default{" "}
+                <strong>{venuesApi?.defaultVenue || "zdex"}</strong>
+                {venuesApi?.offline ? " · offline fallback (pad pending)" : ""}
+                {venuesApi?.dualDexPad || health?.dualDexPad
+                  ? " · dualDexPad"
+                  : ""}
+                {venuesApi?.hasReleaseListSeed ? " · ReleaseListSeed" : ""}
+                {venuesApi?.hasConfirmZdexList ? " · ConfirmZdexList" : ""}
+                . Adapter must exist in pad bytecode to actually list.
+              </p>
+              <div className="admin-venue-table">
+                {(venuesApi?.venues || []).map((v) => (
+                  <div key={v.id} className="admin-venue-row">
+                    <div>
+                      <strong>{v.label || v.id}</strong>
+                      <code className="mono faint" style={{ marginLeft: 8 }}>
+                        {v.id}
+                      </code>
+                      <div className="faint" style={{ fontSize: "0.75rem" }}>
+                        fee hint:{" "}
+                        {String(v.id).toLowerCase() === "zdex"
+                          ? venuesApi?.dualDexPad || health?.dualDexPad
+                            ? "feeGns=0 at Create (dualDexPad) · EOA LP seed at List"
+                            : "Pearl padv23 vẫn ~100 GNS lúc Create · EOA LP seed lúc List"
+                          : v.feeAssetHint || "—"}
+                        {v.uiGap || v.eoaList ? " · uiGap/EOA list" : ""}
+                        {v.note ? ` · ${v.note}` : ""}
+                      </div>
+                    </div>
+                    <div className="admin-venue-actions">
+                      <span
+                        className={`badge ${v.enabled ? "promo" : v.uiGap || v.eoaList ? "zdex" : "curve"}`}
+                      >
+                        {v.enabled
+                          ? "enabled"
+                          : v.uiGap || v.eoaList
+                            ? "EOA"
+                            : "disabled"}
+                      </span>
+                      {d?.pkg && !venuesApi?.offline && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn sm"
+                            onClick={() =>
+                              run(
+                                `SetListVenue ${v.id}`,
+                                "SetListVenue",
+                                [v.id, v.label || v.id, v.enabled ? "false" : "true", v.feeAssetHint || ""],
+                              )
+                            }
+                          >
+                            Toggle
+                          </button>
+                          <button
+                            type="button"
+                            className="btn sm ghost"
+                            onClick={() =>
+                              run(`SetDefaultListVenue ${v.id}`, "SetDefaultListVenue", [v.id])
+                            }
+                          >
+                            Set default
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {!venuesApi?.venues?.length && (
+                  <p className="muted">No venues loaded.</p>
+                )}
+              </div>
+              <p className="muted" style={{ fontSize: "0.78rem", marginBottom: 0 }}>
+                {networkId === "pearl" || networkId === "sapphire" ? (
+                  <>
+                    Live pad ({network?.label || networkId}): Gnoswap = pad RetryList + ~100 GNS
+                    escrow. zdex = EOA CreatePool on hub
+                    {venuesApi?.dualDexPad
+                      ? " · dualDexPad (PreferredVenue / ReleaseListSeed / ConfirmZdexList) · Create zdex feeGns=0"
+                      : " · uiGap until PreferredVenue cut — Create vẫn escrow ~100 GNS dù prefer zdex"}
+                    .
+                    {venuesApi?.zdexHub ? (
+                      <>
+                        {" "}
+                        Hub{" "}
+                        <code className="mono">
+                          {String(venuesApi.zdexHub).split("/").slice(-3).join("/")}
+                        </code>
+                        {venuesApi?.zdexAmm ? (
+                          <>
+                            {" "}
+                            · AMM{" "}
+                            <code className="mono">
+                              {String(venuesApi.zdexAmm).split("/").slice(-3).join("/")}
+                            </code>
+                          </>
+                        ) : null}
+                        {venuesApi?.zdexRealmAddr ? (
+                          <>
+                            {" "}
+                            · realm{" "}
+                            <code className="mono">{venuesApi.zdexRealmAddr}</code>
+                          </>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    Zdex AMM live:{" "}
+                    <code className="mono">…/zdex/amm/v1</code> · hub{" "}
+                    <code className="mono">…/zdex/v1</code> pending · Gnoswap mainnet not live
+                  </>
+                )}
+              </p>
+            </article>
+
             {/* Protocol fees breakdown */}
             <article className="admin-card admin-card-wide admin-fees-hero">
               <div className="admin-fees-head">
@@ -258,6 +413,7 @@ export default function Admin() {
                   <span className="admin-stat-k">Pending (active pad)</span>
                   <span className="admin-stat-v">
                     {fmtGnot(f.pendingGnot ?? pendingUgnot / 1e6, { alreadyGnot: true })}
+                    {usdMark(f.pendingGnot ?? pendingUgnot / 1e6)}
                   </span>
                   <span className="admin-stat-s mono">
                     {pendingUgnot.toLocaleString()} ugnot
@@ -267,6 +423,7 @@ export default function Admin() {
                   <span className="admin-stat-k">Paid lifetime (active)</span>
                   <span className="admin-stat-v">
                     {fmtGnot(f.paidGnot ?? paidUgnot / 1e6, { alreadyGnot: true })}
+                    {usdMark(f.paidGnot ?? paidUgnot / 1e6)}
                   </span>
                   <span className="admin-stat-s mono">
                     {paidUgnot.toLocaleString()} ugnot
@@ -278,6 +435,7 @@ export default function Admin() {
                     {fmtGnot(f.pendingAllGnot ?? pendingAllUgnot / 1e6, {
                       alreadyGnot: true,
                     })}
+                    {usdMark(f.pendingAllGnot ?? pendingAllUgnot / 1e6)}
                   </span>
                   <span className="admin-stat-s mono">
                     {pendingAllUgnot.toLocaleString()} ugnot
@@ -289,6 +447,7 @@ export default function Admin() {
                     {fmtGnot(f.totalEarnedAllGnot ?? earnedAllUgnot / 1e6, {
                       alreadyGnot: true,
                     })}
+                    {usdMark(f.totalEarnedAllGnot ?? earnedAllUgnot / 1e6)}
                   </span>
                   <span className="admin-stat-s mono">
                     {earnedAllUgnot.toLocaleString()} ugnot
@@ -342,6 +501,7 @@ export default function Admin() {
                               <strong>
                                 {fmtGnot(row.pendingGnot, { alreadyGnot: true })}
                               </strong>
+                              {usdMark(row.pendingGnot)}
                               {pend > 0 && (
                                 <span className="badge heat-hot" style={{ marginLeft: 6 }}>
                                   claim
@@ -350,9 +510,11 @@ export default function Admin() {
                             </td>
                             <td className="mono">
                               {fmtGnot(row.paidGnot, { alreadyGnot: true })}
+                              {usdMark(row.paidGnot)}
                             </td>
                             <td className="mono">
                               {fmtGnot(row.totalGnot, { alreadyGnot: true })}
+                              {usdMark(row.totalGnot)}
                             </td>
                             <td>
                               {pend > 0 && (
@@ -401,9 +563,13 @@ export default function Admin() {
                       <span className="admin-stat-k">WUGNOT on pad</span>
                       <span className="admin-stat-v">
                         {fmtGnot(inv.wugnotGnot, { alreadyGnot: true })}
+                        {usdMark(inv.wugnotGnot)}
                       </span>
                       <span className="admin-stat-s">
                         need {fmtGnot(inv.raiseNeedGnot ?? raiseGnot, { alreadyGnot: true })} for LP
+                        {usdBesideGnot(inv.raiseNeedGnot ?? raiseGnot, gnotUsd)
+                          ? ` (${usdBesideGnot(inv.raiseNeedGnot ?? raiseGnot, gnotUsd)})`
+                          : ""}
                       </span>
                     </div>
                     <div className={`admin-stat ${inv.feeReady ? "good" : ""}`}>
@@ -455,6 +621,7 @@ export default function Admin() {
                 <span className="admin-stat-k">Free ugnot</span>
                 <span className="admin-stat-v">
                   {fmtGnot(c.freeGnot ?? c.freeUgnot, { alreadyGnot: c.freeGnot != null })}
+                  {usdMark(c.freeGnot != null ? c.freeGnot : Number(c.freeUgnot) / 1e6)}
                 </span>
               </div>
               <div className="admin-stat">
@@ -463,6 +630,7 @@ export default function Admin() {
                   {fmtGnot(c.padBankGnot ?? c.padBankUgnot, {
                     alreadyGnot: c.padBankGnot != null,
                   })}
+                  {usdMark(c.padBankGnot != null ? c.padBankGnot : Number(c.padBankUgnot) / 1e6)}
                 </span>
               </div>
               <div className="admin-stat">
@@ -471,6 +639,9 @@ export default function Admin() {
                   {fmtGnot(c.reservedGnot ?? c.reservedUgnot, {
                     alreadyGnot: c.reservedGnot != null,
                   })}
+                  {usdMark(
+                    c.reservedGnot != null ? c.reservedGnot : Number(c.reservedUgnot) / 1e6,
+                  )}
                 </span>
               </div>
               <div className="admin-stat">
@@ -479,6 +650,11 @@ export default function Admin() {
                   {fmtGnot(m.totalCreatorFeesGnot ?? m.totalCreatorFees, {
                     alreadyGnot: m.totalCreatorFeesGnot != null,
                   })}
+                  {usdMark(
+                    m.totalCreatorFeesGnot != null
+                      ? m.totalCreatorFeesGnot
+                      : Number(m.totalCreatorFees) / 1e6,
+                  )}
                 </span>
               </div>
             </div>
@@ -785,7 +961,7 @@ export default function Admin() {
                     <p className="muted admin-hint" style={{ margin: "0.35rem 0 0" }}>
                       Season 1 Signal Builders · {ambApps.length} apply
                       {" · "}
-                      <a href="/ambassadors">Open Ambassadors page</a>
+                      <span className="muted">Ambassadors page retired — use API admin tools below</span>
                       {" (Grade content)"}
                     </p>
                   </div>

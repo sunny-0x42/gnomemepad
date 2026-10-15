@@ -16,17 +16,17 @@ Gnoswap **does not** read memepad `uri` / meta. Logos load only from:
 | `token_path` | Adena key `packagePath.SYMBOL` (e.g. `…/padv22.JAE`) — **never** `.0000001` seq |
 | `pkg_path` | Pad package path |
 | `decimals` | **0** (pad GRC20 whole tokens) |
-| `chain_id` | `sapphire-1` |
+| `chain_id` | `CHAIN_ID` env (`sapphire-1` testnet, `gnoland-1` mainnet) |
 | `image` | `/grc20/images/<path_slug>.svg` (relative, SVG only) |
 | Memepad icon | https/ipfs on `Create.uri` + `SetMeta.imageURI` (source art for SVG) |
 
 ## Pipeline
 
 ```
-Create / SetMeta / ListGnoswap
-        │
+Create / SetMeta / ListGnoswap  (only if http(s)/ipfs image URL is set)
+        │  client de-dupes same pkg|id|url in this tab
         ▼
-POST /api/token-resource/register   (queue one token)
+POST /api/token-resource/register   (queue one token; server skips unchanged vs upstream)
         │
         ▼
 GET  /api/token-resource            (plan: missing vs upstream)

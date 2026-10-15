@@ -21,6 +21,7 @@ import {
 } from "../lib/format";
 import {
   buildFeaturedRails,
+  cardVolumeOf,
   heatLabel,
   isAlmostList,
   isRaising,
@@ -28,14 +29,20 @@ import {
   isVisiblePadMarket,
   marketHeatScore,
   marketKey,
+  mergeVolumeMaps,
   raisedGnotOf,
   volumeMapFromActivity,
+  volumeMapFromMarkets,
 } from "../lib/marketHeat";
 import { fetchMetaBatch, metaKey, resolveTokenImage, twitterUrl, telegramUrl, websiteUrl } from "../lib/meta";
 import { isWatched } from "../lib/watchlist";
 import { gnoswapSwapUrl, isGnoswapListed } from "../lib/gnoswap";
+import { AchievementBadgeRow } from "../components/AchievementBadge";
+import { wearFromMarket } from "../lib/badges";
+import { useFlipGrid } from "../lib/useFlipGrid";
+import { dexTradeUrl, isListed, venueLabel, venueOf } from "../lib/venues";
 
-/** Estimate creation wall-clock from launch height (Sapphire ~2s blocks). */
+/** Estimate creation wall-clock from launch height (Gno ~2s blocks). */
 function tokenCreatedMs(m, tipHeight) {
   if (Number(m?.createdMs) > 0) return Number(m.createdMs);
   if (m?.createdAt) {
@@ -161,31 +168,52 @@ export default function Markets() {
     try {
       if (!soft) setErr("");
       if (soft) setRefreshing(true);
-      // Speedup #1: lite first (no Gnoswap enrich); soft poll uses cache (no refresh=1)
+      // Credit/speed: always paint markets-lite first (CDN + snapshot). Hard = refresh=1.
+      // Volume: markets-lite now includes tradeStats from TradeHistory (same as Token page).
       const marketsQs = hard ? "/api/markets?refresh=1" : "/api/markets-lite";
       const m = await api(marketsQs);
       setData(m);
       setUpdatedAt(Date.now());
-      // Progressive: bond + activity after first paint
-      Promise.all([
-        api("/api/bond").catch(() => null),
-        api("/api/activity?limit=120").catch(() => ({ events: [] })),
-      ]).then(([b, act]) => {
-        setBond(b);
-        setVolMap(volumeMapFromActivity(act?.events || []));
-      });
-      // Optional full enrich in background (live Gnoswap spots) — don't block list
-      if (!soft && !hard) {
-        api("/api/markets")
-          .then((full) => {
-            if (full?.markets?.length) setData(full);
+      // Seed volMap immediately from tradeStats so cards don't wait on activity sample.
+      const fromMarkets = volumeMapFromMarkets(m?.markets || []);
+      setVolMap((prev) => mergeVolumeMaps(prev, fromMarkets));
+
+      if (soft) {
+        // Live ranking fuel: refresh activity (CDN ~20s); merge — never shrink tradeStats totals
+        api("/api/activity?limit=80")
+          .then((act) => {
+            const fromAct = volumeMapFromActivity(act?.events || []);
+            setVolMap((prev) => mergeVolumeMaps(prev, fromAct, fromMarkets));
           })
           .catch(() => {});
+      } else {
+        // Eager activity + bond (parallel with paint) — volume already seeded from markets
+        Promise.all([
+          api("/api/bond").catch(() => null),
+          api("/api/activity?limit=80").catch(() => ({ events: [] })),
+        ]).then(([b, act]) => {
+          setBond(b);
+          const fromAct = volumeMapFromActivity(act?.events || []);
+          setVolMap((prev) => mergeVolumeMaps(prev, fromAct, fromMarkets));
+        });
+        if (hard) {
+          api("/api/markets")
+            .then((full) => {
+              if (full?.markets?.length) {
+                setData(full);
+                setVolMap((prev) =>
+                  mergeVolumeMaps(prev, volumeMapFromMarkets(full.markets)),
+                );
+              }
+            })
+            .catch(() => {});
+        }
       }
+
       const items = (m?.markets || [])
         .filter((x) => !x.error && x.id && x.pkg)
         .map((x) => ({ pkg: x.pkg, id: x.id }));
-      if (items.length) {
+      if (items.length && !soft) {
         fetchMetaBatch(items).then(setMetaMap).catch(() => {});
       }
     } catch (e) {
@@ -197,8 +225,11 @@ export default function Markets() {
 
   useEffect(() => {
     load({ soft: false });
-    // Soft refresh: keep list, show subtle indicator
-    const t = setInterval(() => load({ soft: true }), 20000);
+    // Soft: markets + activity for live re-rank (~20–35s CDN window)
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      load({ soft: true });
+    }, 22000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -292,7 +323,7 @@ export default function Markets() {
           const vb = safeNum(volMap[marketKey(b.id, b.pkg || "")]?.volumeGnot);
           cmp = vb - va || marketHeatScore(b, volMap) - marketHeatScore(a, volMap);
         } else {
-          // hot (default)
+          // hot (default): live interaction — volume/trades bubble up, quiet sinks
           cmp =
             marketHeatScore(b, volMap) - marketHeatScore(a, volMap) ||
             (!!a.legacy === !!b.legacy ? 0 : a.legacy ? 1 : -1) ||
@@ -328,6 +359,13 @@ export default function Markets() {
       : params?.graduation != null
         ? Number(params.graduation) / 1e6
         : 100;
+
+  // Stable order signature for FLIP when live heat reorders cards
+  const orderSig = useMemo(
+    () => markets.map((m) => `${m.pkg}:${m.id}`).join("|"),
+    [markets],
+  );
+  const flipRef = useFlipGrid([orderSig]);
 
   return (
     <section className="view markets-page markets-full">
@@ -449,7 +487,7 @@ export default function Markets() {
             onChange={(val) => onSortSelect(val)}
             ariaLabel="Sort"
             options={[
-              { value: "hot", label: t("hot") },
+              { value: "hot", label: t("liveRank") || "Live · volume" },
               { value: "volume", label: t("volume") },
               { value: "almost", label: t("progress") || "Progress" },
               { value: "mcap", label: (t("mcap") || "MCAP").toUpperCase() },
@@ -577,29 +615,35 @@ export default function Markets() {
                 load({ soft: true });
               }}
             >
-              <div className="market-grid market-grid-hero">
-                {markets.map((m) => (
-                  <MarketCard
+              <div className="market-grid market-grid-hero market-grid-live" ref={flipRef}>
+                {markets.map((m, idx) => (
+                  <div
                     key={`${m.pkg}:${m.id}`}
-                    m={m}
-                    volMap={volMap}
-                    meta={metaMap[metaKey(m.pkg, m.id)]}
-                    gradTarget={gradTarget}
-                    tier={tierOf(featured.tiers, m.id, m.pkg)}
-                    watched={isWatched(watchlist, m.id, m.pkg)}
-                    tipHeight={health?.height}
-                    tick={tick}
-                    gnotUsd={gnotUsd}
-                    t={t}
-                    onToggleWatch={() =>
-                      toggleWatch({
-                        id: m.id,
-                        pkg: m.pkg,
-                        name: m.name,
-                        symbol: m.symbol,
-                      })
-                    }
-                  />
+                    className="market-flip-item"
+                    data-flip-key={`${m.pkg}:${m.id}`}
+                    data-rank={idx + 1}
+                  >
+                    <MarketCard
+                      m={m}
+                      volMap={volMap}
+                      meta={metaMap[metaKey(m.pkg, m.id)]}
+                      gradTarget={gradTarget}
+                      tier={tierOf(featured.tiers, m.id, m.pkg)}
+                      watched={isWatched(watchlist, m.id, m.pkg)}
+                      tipHeight={health?.height}
+                      tick={tick}
+                      gnotUsd={gnotUsd}
+                      t={t}
+                      onToggleWatch={() =>
+                        toggleWatch({
+                          id: m.id,
+                          pkg: m.pkg,
+                          name: m.name,
+                          symbol: m.symbol,
+                        })
+                      }
+                    />
+                  </div>
                 ))}
               </div>
             </MarketsErrorBoundary>
@@ -611,7 +655,7 @@ export default function Markets() {
         <p className="markets-footer-meta faint">
           <code className="mono">{health.pkg.split("/").pop()}</code>
           {updatedAt ? ` · ${relativeTime(updatedAt)}` : ""}
-          {" · ring volume"}
+          {" · live rank by volume / interaction"}
         </p>
       )}
     </section>
@@ -632,12 +676,16 @@ function MarketCard({
   gnotUsd = 0,
   t = (k) => k,
 }) {
+  const { networkId } = useApp();
+  const listedVenue = venueOf(m);
+  const listed = isListed(m);
+  const tradeUrl = listed ? dexTradeUrl(m, networkId) : null;
   const pct = Math.min(100, m.progressPct || 0);
   const isGrad = m.status === 1;
   const almost = isAlmostList(m, 70);
   const ready = isReadyToGraduate(m);
-  const k = marketKey(m.id, m.pkg || "");
-  const rv = volMap[k] || {};
+  // Prefer tradeStats (full TradeHistory) over truncated activity sample
+  const rv = cardVolumeOf(m, volMap);
   const vol = rv.volumeGnot || 0;
   const trades = rv.trades || 0;
   const buyVol = rv.buyVol || 0;
@@ -684,8 +732,16 @@ function MarketCard({
         <div className="mc-body">
           <div className="mc-header-row">
             <div className="mc-badges-left">
-              {isGnoswapListed(m) ? (
-                <Badge kind="gnoswap" title={t("listedOnGnoswap") || "Listed on Gnoswap"}>Gnoswap</Badge>
+              {listed && listedVenue ? (
+                <Badge
+                  kind={listedVenue === "zdex" ? "zdex" : "gnoswap"}
+                  title={(t("listedOnVenue") || "Listed on {venue}").replace(
+                    "{venue}",
+                    venueLabel(listedVenue),
+                  )}
+                >
+                  {venueLabel(listedVenue)}
+                </Badge>
               ) : (
                 <Badge kind={isGrad ? "graduated" : "curve"}>{isGrad ? (t("grad") || "Grad") : (t("curve") || "Curve")}</Badge>
               )}
@@ -712,6 +768,11 @@ function MarketCard({
             <div className="mc-subtitle">
               ${m.symbol}{creatorDisplay ? ` · ${creatorDisplay}` : ""}
             </div>
+            <AchievementBadgeRow
+              className="mc-ach-badges"
+              badges={wearFromMarket(m, 2)}
+              size="sm"
+            />
             {(tw || tg || web) && (
               <div className="mc-socials" style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem', marginTop: '0.5rem' }}>
                 {tw && <span className="social-chip" onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open(tw, '_blank'); }}>X</span>}
@@ -721,13 +782,19 @@ function MarketCard({
             )}
           </div>
 
-          {isGnoswapListed(m) ? (
+          {listed ? (
             <div className="mc-progress-sec">
               <div className="mc-progress-track">
                 <div className="mc-progress-fill" style={{ width: "100%" }} />
               </div>
               <div className="mc-progress-foot" style={{ justifyContent: "center" }}>
-                <span>{t("listedOnGnoswap") || "Listed on Gnoswap"} · {t("tradeViaDex") || "trade via DEX"}</span>
+                <span>
+                  {(t("listedOnVenue") || "Listed on {venue}").replace(
+                    "{venue}",
+                    venueLabel(listedVenue),
+                  )}{" "}
+                  · {t("tradeViaDex") || "trade via DEX"}
+                </span>
               </div>
             </div>
           ) : !isGrad ? (
@@ -803,14 +870,17 @@ function MarketCard({
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" /></svg>
             )}
           </button>
-          {isGnoswapListed(m) ? (
+          {listed && tradeUrl ? (
             <a
-              href={gnoswapSwapUrl(m)}
+              href={tradeUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="mc-btn-view"
             >
-              Swap on Gnoswap
+              {(t("swapOnVenue") || "Swap on {venue}").replace(
+                "{venue}",
+                venueLabel(listedVenue),
+              )}
             </a>
           ) : (
             <Link

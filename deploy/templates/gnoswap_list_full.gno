@@ -47,6 +47,14 @@ func tryListOnGnoswap(cur realm, l *Launch, raisedUgnot, remainingTokens int64) 
 	}
 	padAddr := cur.Address()
 	wBal := wugnot.BalanceOf(padAddr)
+	// Full reservation backing: prevent launch A from Minting with launch B's PoolUgnot.
+	// reservedWugnot includes this launch's PoolUgnot (graduated, seed not released).
+	needReserve := reservedWugnot()
+	if wBal < needReserve {
+		l.GnoswapNote = "list skip: WUGNOT under-backed vs reserved; have " +
+			strconv.FormatInt(wBal, 10) + " reserved " + strconv.FormatInt(needReserve, 10)
+		return false
+	}
 	if wBal < raisedUgnot {
 		l.GnoswapNote = "list skip: need WUGNOT inventory >= raised for LP; have " +
 			strconv.FormatInt(wBal, 10) + " need " + strconv.FormatInt(raisedUgnot, 10)
@@ -241,12 +249,18 @@ func prepareCallerListFunding(cur realm, l *Launch, raisedUgnot int64) listFund 
 	}
 
 	wBal := wugnot.BalanceOf(padA)
-	if wBal < raisedUgnot {
-		short := raisedUgnot - wBal
+	// Pull up to full reservation backing (and raised LP), so tryList does not
+	// soft-fail under-backed / steal other launches' PoolUgnot.
+	needW := raisedUgnot
+	if res := reservedWugnot(); res > needW {
+		needW = res
+	}
+	if wBal < needW {
+		short := needW - wBal
 		if !pullWugnotFrom(cur, caller, padA, short) {
 			l.GnoswapNote = "list skip: need temp WUGNOT wrap " +
 				strconv.FormatInt(short, 10) +
-				" ugnot units (Deposit+Approve pad). LP reimbursed from pad ugnot after list. " +
+				" ugnot units (Deposit+Approve pad) for reserved backing / LP. " +
 				"Fee: " + strconv.FormatInt(feeNeed, 10) + " GNS or WUGNOT ExactOut budget."
 			out.ok = false
 			return out

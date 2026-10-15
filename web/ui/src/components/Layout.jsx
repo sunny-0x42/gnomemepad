@@ -12,6 +12,7 @@ import Confetti from "./Confetti";
 import SettingsModal from "./SettingsModal";
 import WatchAlerts from "./WatchAlerts";
 import NetworkDropdown from "./NetworkDropdown";
+import { RaiseHomeBanner, useRaiseNoticeLive } from "./RaiseNotice";
 
 const PRIMARY_NAV = [
   { to: "/", key: "markets", end: true, icon: "markets" },
@@ -20,13 +21,13 @@ const PRIMARY_NAV = [
   { to: "/portfolio", key: "portfolio", icon: "portfolio" },
 ];
 
+const ZDEX_APP_URL = "https://zdex.gnomi.fun";
+
 const MORE_NAV = [
   { to: "/creator", key: "creator" },
   { to: "/profile", key: "profile" },
-  { to: "/rewards", key: "rewards" },
-  { to: "/ambassadors", key: "ambassadors" },
-  { to: "/ops", key: "ops" },
   { to: "/docs", key: "guide" },
+  { href: ZDEX_APP_URL, key: "zdex", external: true },
 ];
 
 const ALL_NAV = [...PRIMARY_NAV, ...MORE_NAV];
@@ -41,22 +42,40 @@ const MOBILE_DOCK = [
 function NavItems({ items, onNavigate, isAdmin, showAdmin, t }) {
   return (
     <>
-      {items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          className={({ isActive }) => `nav-btn${isActive ? " active" : ""}`}
-          onClick={onNavigate}
-        >
-          {item.icon ? (
-            <span className="nav-btn-icon">
-              <NavIcon name={item.icon} size={16} />
+      {items.map((item) =>
+        item.external && item.href ? (
+          <a
+            key={item.href}
+            href={item.href}
+            className="nav-btn"
+            target="_blank"
+            rel="noopener noreferrer"
+            role="menuitem"
+            onClick={onNavigate}
+            title="zDex · Gno.land DEX"
+          >
+            {t(item.key)}
+            <span className="nav-ext" aria-hidden>
+              ↗
             </span>
-          ) : null}
-          {t(item.key)}
-        </NavLink>
-      ))}
+          </a>
+        ) : (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={({ isActive }) => `nav-btn${isActive ? " active" : ""}`}
+            onClick={onNavigate}
+          >
+            {item.icon ? (
+              <span className="nav-btn-icon">
+                <NavIcon name={item.icon} size={16} />
+              </span>
+            ) : null}
+            {t(item.key)}
+          </NavLink>
+        ),
+      )}
       {showAdmin && isAdmin && (
         <NavLink
           to="/admin"
@@ -88,6 +107,7 @@ export default function Layout() {
   const { t } = usePrefs();
   const nav = useNavigate();
   const location = useLocation();
+  const raiseLive = useRaiseNoticeLive();
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -177,7 +197,10 @@ export default function Layout() {
 
   const moreActive =
     MORE_NAV.some(
-      (i) => location.pathname === i.to || (i.to !== "/" && location.pathname.startsWith(i.to)),
+      (i) =>
+        i.to &&
+        (location.pathname === i.to ||
+          (i.to !== "/" && location.pathname.startsWith(i.to))),
     ) || (isAdmin && location.pathname.startsWith("/admin"));
 
   return (
@@ -342,6 +365,10 @@ export default function Layout() {
         </nav>
       </header>
 
+      {String(import.meta.env.VITE_RAISE_NOTICE || "").trim() === "1" && raiseLive && location.pathname === "/" ? (
+        <RaiseHomeBanner />
+      ) : null}
+
       <main className="app-main">
         <StatusBanners />
         <Outlet />
@@ -349,9 +376,22 @@ export default function Layout() {
 
       <footer className="app-footer">
         <span>
-          gnomi · Gno Sapphire ·{" "}
+          gnomi · Gno {network?.label || "Mainnet"} ·{" "}
           <a href="https://adena.app/" target="_blank" rel="noreferrer">
             Adena
+          </a>
+          {" · "}
+          <a
+            href={
+              networkId === "pearl"
+                ? `${String(import.meta.env?.VITE_ZDEX_APP_PEARL || "http://127.0.0.1:5173").replace(/\/$/, "")}/?net=pearl`
+                : `${ZDEX_APP_URL}/?net=mainnet`
+            }
+            target="_blank"
+            rel="noopener noreferrer"
+            title="zDex · Gno.land DEX"
+          >
+            zDex
           </a>
           {" · "}
           <NavLink to="/docs">{t("guide")}</NavLink>

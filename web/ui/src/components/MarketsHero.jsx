@@ -6,6 +6,13 @@ import { relativeTime } from "../lib/format";
 import { resolveTokenImage, metaKey } from "../lib/meta";
 import TokenAvatar from "./TokenAvatar";
 
+function marketVolumeGnot(m) {
+  const curve = Number(m?.tradeStats?.volumeGnot) || 0;
+  const dex = Number(m?.dexTradeStats?.volumeGnot) || 0;
+  if (curve > 0 && dex > 0) return curve + dex;
+  return Math.max(curve, dex);
+}
+
 function formatCompact(num) {
   const n = Number(num) || 0;
   if (!Number.isFinite(n) || n === 0) return "0";
@@ -15,9 +22,15 @@ function formatCompact(num) {
   return n >= 1 ? n.toFixed(2) : n.toFixed(4);
 }
 
-function formatPrice(val) {
+function formatPrice(val, { usd = true } = {}) {
   const n = Number(val) || 0;
-  if (!Number.isFinite(n) || n <= 0) return "$0.00";
+  if (!Number.isFinite(n) || n <= 0) return usd ? "—" : "—";
+  if (!usd) {
+    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (n >= 1) return n.toFixed(4);
+    if (n >= 0.01) return n.toFixed(6);
+    return n.toFixed(8);
+  }
   if (n >= 1000) return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n >= 0.01) return `$${n.toFixed(4)}`;
@@ -51,15 +64,17 @@ function generateSmoothPath(points) {
 function SpotlightRealtimeChart({ points = [], spotlight, gnotUsd = 0 }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const svgRef = useRef(null);
+  const showUsd = Number(gnotUsd) > 0;
 
   // Map points to clean series
   const data = useMemo(() => {
     const raw = (points || [])
       .map((pt) => {
         const pg = Number(pt.priceGnot) || 0;
-        const pu = Number(pt.priceUsd) || (gnotUsd > 0 && pg > 0 ? pg * gnotUsd : pg);
+        const pu = Number(pt.priceUsd) || (showUsd && pg > 0 ? pg * gnotUsd : 0);
         const t = pt.timeMs ?? (pt.time ? new Date(pt.time).getTime() : 0);
-        return { price: pu > 0 ? pu : pg, time: t };
+        const price = showUsd && pu > 0 ? pu : pg;
+        return { price, time: t };
       })
       .filter((x) => Number.isFinite(x.price) && x.price > 0);
 
@@ -70,10 +85,10 @@ function SpotlightRealtimeChart({ points = [], spotlight, gnotUsd = 0 }) {
     const spotPu =
       Number(spotlight?.priceUsd) > 0
         ? Number(spotlight.priceUsd)
-        : gnotUsd > 0 && spotPg > 0
+        : showUsd && spotPg > 0
           ? spotPg * gnotUsd
           : 0;
-    const base = spotPu > 0 ? spotPu : spotPg > 0 ? spotPg : 0.00025;
+    const base = showUsd && spotPu > 0 ? spotPu : spotPg > 0 ? spotPg : 0.00025;
     const now = Date.now();
     return [
       { price: base * 0.92, time: now - 3600000 * 5 },
@@ -84,7 +99,7 @@ function SpotlightRealtimeChart({ points = [], spotlight, gnotUsd = 0 }) {
       { price: base * 1.04, time: now - 1800000 },
       { price: base, time: now },
     ];
-  }, [points, spotlight, gnotUsd]);
+  }, [points, spotlight, gnotUsd, showUsd]);
 
   const width = 380;
   const height = 95;
@@ -146,14 +161,18 @@ function SpotlightRealtimeChart({ points = [], spotlight, gnotUsd = 0 }) {
         <div className="spot-chart-price-display">
           {activePt ? (
             <span className="spot-chart-hover-val">
-              {formatPrice(activePt.price)}
+              {formatPrice(activePt.price, { usd: showUsd })}
+              {!showUsd && activePt.price > 0 ? (
+                <small className="spot-chart-hover-time"> GNOT</small>
+              ) : null}
               <small className="spot-chart-hover-time">
                 {activePt.time ? ` · ${relativeTime(activePt.time)}` : ""}
               </small>
             </span>
           ) : (
             <span className="spot-chart-cur-val">
-              {formatPrice(lastPt?.price || 0)}
+              {formatPrice(lastPt?.price || 0, { usd: showUsd })}
+              {!showUsd && lastPt?.price > 0 ? " GNOT" : ""}
             </span>
           )}
         </div>
@@ -283,7 +302,10 @@ export default function MarketsHero({
       }
     }
     load();
-    const t = setInterval(load, 12000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      load();
+    }, 40000);
     return () => {
       cancelled = true;
       clearInterval(t);
@@ -346,7 +368,10 @@ export default function MarketsHero({
       }
     }
     loadSpotlightData();
-    const t = setInterval(loadSpotlightData, 10000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      loadSpotlightData();
+    }, 30000);
     return () => {
       cancelled = true;
       clearInterval(t);
@@ -413,7 +438,7 @@ export default function MarketsHero({
             symbol: m.symbol,
             name: m.name,
             side: 0,
-            volumeGnot: Number(m.dexTradeStats?.volumeGnot || m.raisedGnot || 0),
+            volumeGnot: marketVolumeGnot(m),
             timeMs: m.createdMs || null,
           });
           if (uniqueList.length >= 6) break;
@@ -428,7 +453,8 @@ export default function MarketsHero({
         : "";
       const side = Number(e.side);
       const isBuy = side === 0;
-      const volGnot = Number(e.volumeGnot) || 0;
+      const fromMarket = m ? marketVolumeGnot(m) : 0;
+      const volGnot = fromMarket > 0 ? fromMarket : Number(e.volumeGnot) || 0;
       const volUsd = volGnot > 0 && gnotUsd > 0 ? volGnot * gnotUsd : 0;
       const spotPg = Number(m?.spotGnot ?? m?.priceGnot) || 0;
       const mcapGnot = Number(m?.mcapGnot) || 0;
@@ -485,9 +511,9 @@ export default function MarketsHero({
 
   // Spotlight metrics
   const spotMcapUsd = Number(spotlight?.mcapUsd) || (spotlight?.mcapGnot && gnotUsd ? spotlight.mcapGnot * gnotUsd : 0);
-  const spotVolGnot = Number(spotlight?.dexTradeStats?.volumeGnot || spotlight?.raisedGnot || 0);
-  const spotVolUsd = spotVolGnot > 0 && gnotUsd > 0 ? spotVolGnot * gnotUsd : spotVolGnot * 235;
-  const spotHolders = spotlight?.buyers || (spotlight?.status === 1 ? 32 : 12);
+  const spotVolGnot = marketVolumeGnot(spotlight);
+  const spotVolUsd = spotVolGnot > 0 && gnotUsd > 0 ? spotVolGnot * gnotUsd : 0;
+  const spotHolders = Number.isFinite(Number(spotlight?.buyers)) ? Number(spotlight.buyers) : null;
   const spotPriceDelta = spotlight?.priceDelta ?? (spotlight?.status === 1 ? "+14.2%" : "+2.5%");
 
   // Dynamic LP lock info (not hardcoded)
@@ -512,7 +538,7 @@ export default function MarketsHero({
         {/* Left Column: Heading, Description & CTAs */}
         <div className="hero-content-col">
           <h1 className="hero-title">
-            {t("heroTitle1") || "Launch tokens on Gno Sapphire,"}{" "}
+            {t("heroTitle1") || "Launch tokens on Gno Mainnet,"}{" "}
             <span className="hero-title-highlight">{t("heroTitle2") || "with ease."}</span>
           </h1>
           <p className="hero-description">
@@ -632,7 +658,7 @@ export default function MarketsHero({
                       <div className="spotlight-name-sec">
                         <div className="spotlight-token-name">{spotlight.name}</div>
                         <div className="spotlight-token-sub">
-                          ${spotlight.symbol} · {spotlight.gnoswapListed ? "Gnoswap" : "Sapphire"}
+                          ${spotlight.symbol} · {spotlight.gnoswapListed ? "Gnoswap" : "Mainnet"}
                         </div>
                       </div>
                       <div className="spotlight-val-sec">
@@ -662,7 +688,7 @@ export default function MarketsHero({
                     {isSpotlightLoading ? (
                       <span className="hero-skel-line" style={{ width: "46px", height: "14px", display: "inline-block" }} />
                     ) : (
-                      spotVolUsd > 0 ? `$${formatCompact(spotVolUsd)}` : `${spotVolGnot.toFixed(1)} GNOT`
+                      spotVolUsd > 0 ? `$${formatCompact(spotVolUsd)}` : spotVolGnot > 0 ? `${spotVolGnot.toFixed(1)} GNOT` : "—"
                     )}
                   </strong>
                 </div>
@@ -672,7 +698,7 @@ export default function MarketsHero({
                     {isSpotlightLoading ? (
                       <span className="hero-skel-line" style={{ width: "28px", height: "14px", display: "inline-block" }} />
                     ) : (
-                      spotHolders.toLocaleString()
+                      spotHolders == null ? "—" : spotHolders.toLocaleString()
                     )}
                   </strong>
                 </div>
@@ -753,7 +779,7 @@ export default function MarketsHero({
                     </Link>
                   ))
                 ) : (
-                  <div className="act-empty-hint">{t("waitingActivity") || "Waiting for trade activity on Sapphire…"}</div>
+                  <div className="act-empty-hint">{t("waitingActivity") || "Waiting for trade activity on Mainnet…"}</div>
                 )}
               </div>
             </div>

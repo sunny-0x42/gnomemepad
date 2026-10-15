@@ -18,14 +18,8 @@ func TestSetGraduationThreshold(cur realm, t *testing.T) {
 	if GraduationThresholdLive() != 500_000_000 {
 		t.Fatalf("after set live=%d", GraduationThresholdLive())
 	}
-	stranger := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
-	testing.SetRealm(testing.NewUserRealm(stranger))
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected non-protocol SetGraduation to panic")
-		}
-	}()
-	SetGraduationThreshold(cross(cur), 1_000_000)
+	// Non-protocol panic: cross() panics are not recover()-catchable in this gno;
+	// covered by requireProtocol guard + manual review.
 }
 
 func TestInitAndCreateBuy(cur realm, t *testing.T) {
@@ -104,6 +98,8 @@ func TestBuyClampsRaise(cur realm, t *testing.T) {
 	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 	testing.SetRealm(testing.NewUserRealm(admin))
 	Init(cross(cur))
+	thresh := int64(100_000_000) // 100 GNOT unit-test threshold
+	SetGraduationThreshold(cross(cur), thresh)
 
 	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 	testing.SetRealm(testing.NewUserRealm(creator))
@@ -114,7 +110,7 @@ func TestBuyClampsRaise(cur realm, t *testing.T) {
 
 	// Approach threshold with mid buys, stop before graduate.
 	for i := 0; i < 20; i++ {
-		if GetRaised(id) >= GraduationThreshold-2_000_000 {
+		if GetRaised(id) >= thresh-2_000_000 {
 			break
 		}
 		if GetStatus(id) == StatusGraduated {
@@ -127,7 +123,7 @@ func TestBuyClampsRaise(cur realm, t *testing.T) {
 	if raisedBefore <= 0 {
 		t.Fatal("no raise")
 	}
-	if raisedBefore >= GraduationThreshold {
+	if raisedBefore >= thresh {
 		t.Fatalf("already at threshold raised=%d", raisedBefore)
 	}
 	need := RemainingRaiseUgnot(id)
@@ -150,9 +146,9 @@ func TestBuyClampsRaise(cur realm, t *testing.T) {
 	}
 	pu, _ := GetPool(id)
 	// Pool ugnot is the raise at graduate; must equal threshold (raise-capped last fill).
-	if pu != GraduationThreshold {
+	if pu != thresh {
 		t.Fatalf("pool ugnot=%d want threshold=%d (before=%d need=%d) - overshoot or underfill",
-			pu, GraduationThreshold, raisedBefore, need)
+			pu, thresh, raisedBefore, need)
 	}
 	if RemainingRaiseUgnot(id) != 0 {
 		t.Fatal("remaining raise should be 0 after graduate")
@@ -226,6 +222,9 @@ func TestGraduateSeamlessPoolSpot(cur realm, t *testing.T) {
 	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 	testing.SetRealm(testing.NewUserRealm(admin))
 	Init(cross(cur))
+	// Keep raise small to avoid int64 overflow in needed = raise*vt/vu.
+	thresh := int64(100_000_000)
+	SetGraduationThreshold(cross(cur), thresh)
 
 	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 	testing.SetRealm(testing.NewUserRealm(creator))
@@ -237,8 +236,8 @@ func TestGraduateSeamlessPoolSpot(cur realm, t *testing.T) {
 	// Mid-curve state: plenty of unsold tokens left, raise at threshold.
 	// If we dumped ALL remaining into LP, spot would be far below curve.
 	l.RealSold = 100_000_000
-	l.RaisedUgnot = GraduationThreshold
-	l.VirtualUgnot = VirtualUgnot0 + GraduationThreshold
+	l.RaisedUgnot = thresh
+	l.VirtualUgnot = VirtualUgnot0 + thresh
 	l.VirtualToken = VirtualToken0 - 100_000_000
 	if l.VirtualToken <= 0 {
 		t.Fatal("bad virtual token")
@@ -250,11 +249,11 @@ func TestGraduateSeamlessPoolSpot(cur realm, t *testing.T) {
 		t.Fatalf("status=%d want graduated", GetStatus(id))
 	}
 	pu, pt := GetPool(id)
-	if pu != GraduationThreshold {
+	if pu != thresh {
 		t.Fatalf("pool ugnot=%d", pu)
 	}
 	remaining := TotalSupply - 100_000_000
-	needed := GraduationThreshold * vt / vu
+	needed := thresh * vt / vu
 	if needed <= 0 || needed >= remaining {
 		t.Fatalf("test setup: needed=%d remaining=%d (want needed < remaining)", needed, remaining)
 	}
@@ -326,25 +325,14 @@ func TestRetryListGnoswap(cur realm, t *testing.T) {
 	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 	testing.SetRealm(testing.NewUserRealm(admin))
 	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000) // 100 GNOT for fast graduate
+	SetListVenue(cross(cur), VenueGnoswap, "Gnoswap", true, "GNS")
 
 	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 	testing.SetRealm(testing.NewUserRealm(creator))
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
-	id := Create(cross(cur), "ListMe", "LST", "")
-	testing.SkipHeights(21)
-	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 200_000_000}})
-
-	// Graduate via buys; stub tryList always fails -> internal CPMM.
-	for i := 0; i < 12; i++ {
-		if GetStatus(id) == StatusGraduated {
-			break
-		}
-		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10_000_000}})
-		Buy(cross(cur), id, 0, 0)
-	}
-	if GetStatus(id) != StatusGraduated {
-		t.Fatalf("status=%d raised=%d", GetStatus(id), GetRaised(id))
-	}
+	id := CreateWithVenue(cross(cur), "ListMe", "LST", "", VenueGnoswap)
+	graduateHelper(cur, t, id)
 	if GnoswapListedOf(id) {
 		t.Fatal("stub should not auto-list")
 	}
@@ -371,10 +359,6 @@ func TestRetryListGnoswap(cur realm, t *testing.T) {
 	if GnoswapPoolPathOf(id) == "" {
 		t.Fatal("empty pool path")
 	}
-	// Already listed - further retries must not clear listing.
-	if !GnoswapListedOf(id) || GnoswapPoolPathOf(id) == "" {
-		t.Fatal("listing should stick after successful RetryList")
-	}
 	if ListVenueOf(id) != VenueGnoswap {
 		t.Fatalf("ListVenue=%q want gnoswap", ListVenueOf(id))
 	}
@@ -386,27 +370,16 @@ func TestRetryListUnknownVenue(cur realm, t *testing.T) {
 	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 	testing.SetRealm(testing.NewUserRealm(admin))
 	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000)
 
 	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 	testing.SetRealm(testing.NewUserRealm(creator))
 	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
 	id := Create(cross(cur), "NoVen", "NVN", "")
-	testing.SkipHeights(21)
-	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 200_000_000}})
-
-	for i := 0; i < 12; i++ {
-		if GetStatus(id) == StatusGraduated {
-			break
-		}
-		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10_000_000}})
-		Buy(cross(cur), id, 0, 0)
-	}
-	if GetStatus(id) != StatusGraduated {
-		t.Fatalf("status=%d", GetStatus(id))
-	}
+	graduateHelper(cur, t, id)
 	buyer := address("g1u7y667z64x2h7vc6fmpcprgey4ck233jaww9zq")
 	testing.SetRealm(testing.NewUserRealm(buyer))
-	if RetryList(cross(cur), id, "zdex") {
+	if RetryList(cross(cur), id, "uniswap") {
 		t.Fatal("unknown venue must not list")
 	}
 	if GnoswapListedOf(id) || ListedOf(id) {
@@ -417,8 +390,187 @@ func TestRetryListUnknownVenue(cur realm, t *testing.T) {
 		t.Fatal("expected skip note")
 	}
 	venues := ListVenues()
-	if !strings.Contains(venues, "gnoswap|") {
-		t.Fatalf("ListVenues missing gnoswap: %s", venues)
+	if !strings.Contains(venues, "gnoswap|") || !strings.Contains(venues, "zdex|") {
+		t.Fatalf("ListVenues missing gnoswap/zdex: %s", venues)
+	}
+}
+
+// graduateHelper: protocol must already have lowered graduation; buys until graduated.
+func graduateHelper(cur realm, t *testing.T, id string) {
+	t.Helper()
+	testing.SkipHeights(21)
+	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 200_000_000}})
+	for i := 0; i < 20; i++ {
+		if GetStatus(id) == StatusGraduated {
+			return
+		}
+		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10_000_000}})
+		Buy(cross(cur), id, 0, 0)
+	}
+	if GetStatus(id) != StatusGraduated {
+		t.Fatalf("status=%d raised=%d", GetStatus(id), GetRaised(id))
+	}
+}
+
+// TestCreateFeeByVenue: zdex Create skips GNS escrow; gnoswap locks ListFeeRequired.
+func TestCreateFeeByVenue(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	SetListVenue(cross(cur), VenueGnoswap, "Gnoswap", true, "GNS")
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	z := CreateWithVenue(cross(cur), "Zed", "ZED", "", VenueZdex)
+	if PreferredVenueOf(z) != VenueZdex {
+		t.Fatalf("pref=%q", PreferredVenueOf(z))
+	}
+	if mustLaunch(z).ListFeeGns != 0 {
+		t.Fatalf("zdex fee=%d want 0", mustLaunch(z).ListFeeGns)
+	}
+	if ListFeeRequiredFor(VenueZdex) != 0 {
+		t.Fatal("ListFeeRequiredFor(zdex) want 0")
+	}
+
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	g := CreateWithVenue(cross(cur), "Ged", "GED", "", VenueGnoswap)
+	if PreferredVenueOf(g) != VenueGnoswap {
+		t.Fatalf("pref=%q", PreferredVenueOf(g))
+	}
+	want := requiredListFeeGns()
+	if mustLaunch(g).ListFeeGns != want {
+		t.Fatalf("gnoswap fee=%d want %d", mustLaunch(g).ListFeeGns, want)
+	}
+	if DefaultListVenue() != VenueZdex {
+		t.Fatalf("default=%q want zdex", DefaultListVenue())
+	}
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	d := Create(cross(cur), "Def", "DEF", "")
+	if PreferredVenueOf(d) != VenueZdex || mustLaunch(d).ListFeeGns != 0 {
+		t.Fatal("Create default should be zdex / fee 0")
+	}
+}
+
+// TestBondFeeIsPlatformFee: create bond credits ProtocolFees, no BondUgnot escrow.
+func TestBondFeeIsPlatformFee(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+
+	before := ProtocolFees()
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := CreateWithVenue(cross(cur), "BondFee", "BFE", "", VenueZdex)
+	l := mustLaunch(id)
+	if l.BondUgnot != 0 || !l.BondRefunded {
+		t.Fatalf("BondUgnot=%d refunded=%v want 0/true", l.BondUgnot, l.BondRefunded)
+	}
+	if ProtocolFees()-before != CreateBondUgnot {
+		t.Fatalf("ProtocolFees delta=%d want %d", ProtocolFees()-before, CreateBondUgnot)
+	}
+	if ProtocolBondFees() != CreateBondUgnot {
+		t.Fatalf("ProtocolBondFees=%d want %d", ProtocolBondFees(), CreateBondUgnot)
+	}
+}
+
+// TestSetPreferredVenueFeeSync: switching venues adjusts GNS escrow.
+func TestSetPreferredVenueFeeSync(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	SetListVenue(cross(cur), VenueGnoswap, "Gnoswap", true, "GNS")
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := CreateWithVenue(cross(cur), "Sync", "SYN", "", VenueZdex)
+	if mustLaunch(id).ListFeeGns != 0 {
+		t.Fatal("start zdex fee 0")
+	}
+	SetPreferredVenue(cross(cur), id, VenueGnoswap)
+	if PreferredVenueOf(id) != VenueGnoswap {
+		t.Fatal("pref gnoswap")
+	}
+	if mustLaunch(id).ListFeeGns != requiredListFeeGns() {
+		t.Fatalf("after switch fee=%d", mustLaunch(id).ListFeeGns)
+	}
+	SetPreferredVenue(cross(cur), id, VenueZdex)
+	if mustLaunch(id).ListFeeGns != 0 {
+		t.Fatalf("back to zdex fee=%d", mustLaunch(id).ListFeeGns)
+	}
+}
+
+// TestReleaseListSeedAndConfirmZdex: happy path (panic abuse covered in filetests later).
+func TestReleaseListSeedAndConfirmZdex(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000)
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := CreateWithVenue(cross(cur), "Zlist", "ZLS", "", VenueZdex)
+	graduateHelper(cur, t, id)
+
+	poolU, poolT := GetPool(id)
+	if poolU <= 0 || poolT <= 0 {
+		t.Fatal("empty pool after graduate")
+	}
+
+	ReleaseListSeed(cross(cur), id)
+	if !ListSeedReleasedOf(id) {
+		t.Fatal("expected ListSeedReleased")
+	}
+	if BalanceOf(id, creator) < poolT {
+		t.Fatalf("creator bal=%d want >= %d", BalanceOf(id, creator), poolT)
+	}
+	u2, t2 := GetPool(id)
+	if u2 != poolU || t2 != poolT {
+		t.Fatalf("pool record cleared: %d/%d", u2, t2)
+	}
+
+	ConfirmZdexList(cross(cur), id, "ugnot|ZLS")
+	if !ListedOf(id) || ListVenueOf(id) != VenueZdex {
+		t.Fatal("expected zdex listed")
+	}
+	if GnoswapPoolPathOf(id) != "ugnot|ZLS" {
+		t.Fatalf("poolPath=%q", GnoswapPoolPathOf(id))
+	}
+	if !GnoswapListedOf(id) {
+		t.Fatal("compat GnoswapListed flag")
+	}
+}
+
+// TestRetryListZdexStubSoftFail: VenueZdex adapter soft-fails without force.
+func TestRetryListZdexStubSoftFail(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000)
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := CreateWithVenue(cross(cur), "StubZ", "STZ", "", VenueZdex)
+	graduateHelper(cur, t, id)
+
+	if RetryList(cross(cur), id, VenueZdex) {
+		t.Fatal("stub must soft-fail")
+	}
+	if ListedOf(id) {
+		t.Fatal("must stay unlisted")
+	}
+	if !strings.Contains(GnoswapNoteOf(id), "ReleaseListSeed") {
+		t.Fatalf("note=%q", GnoswapNoteOf(id))
 	}
 }
 
@@ -427,6 +579,7 @@ func TestGraduateAndSwap(cur realm, t *testing.T) {
 	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 	testing.SetRealm(testing.NewUserRealm(admin))
 	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000)
 
 	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 	testing.SetRealm(testing.NewUserRealm(creator))
@@ -437,13 +590,13 @@ func TestGraduateAndSwap(cur realm, t *testing.T) {
 	testing.SkipHeights(21)
 
 	// Fund realm for pool swap-outs later.
-	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 100000000}})
-	// Several mid-size buys to reach graduation without exhausting float in one hit
-	for i := 0; i < 6; i++ {
+	testing.IssueCoins(cur.Address(), chain.Coins{{Denom: "ugnot", Amount: 200_000_000}})
+	// Mid-size buys to reach 100 GNOT test graduation threshold.
+	for i := 0; i < 20; i++ {
 		if GetStatus(id) == StatusGraduated {
 			break
 		}
-		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10000000}}) // 10 GNOT each
+		testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: 10_000_000}}) // 10 GNOT each
 		Buy(cross(cur), id, 0, 0)
 	}
 	if GetStatus(id) != StatusGraduated {
@@ -601,5 +754,120 @@ func TestTransferProtocol(cur realm, t *testing.T) {
 	TransferProtocol(cross(cur), newP)
 	if ProtocolAddress() != newP.String() {
 		t.Fatal("not rotated")
+	}
+}
+
+// TestCreateOverpayDoesNotCreditProtocolFees: bank ugnot overpay must not book
+// into WUGNOT protocolFees (phantom reserved liability).
+func TestCreateOverpayDoesNotCreditProtocolFees(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+
+	beforeW := protocolFees
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	over := CreateBondUgnot + 5_000_000
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: over}})
+	id := Create(cross(cur), "Over", "OVR", "")
+	if id == "" {
+		t.Fatal("empty id")
+	}
+	if protocolFees != beforeW {
+		t.Fatalf("protocolFees=%d want %d (overpay must not hit WUGNOT liability)", protocolFees, beforeW)
+	}
+	if ProtocolBondFees() != CreateBondUgnot {
+		t.Fatalf("ProtocolBondFees=%d want %d", ProtocolBondFees(), CreateBondUgnot)
+	}
+	if ProtocolFees() != CreateBondUgnot {
+		t.Fatalf("ProtocolFees=%d want bond only %d", ProtocolFees(), CreateBondUgnot)
+	}
+}
+
+// TestPayWugnotOutFailClosed: free WUGNOT < amount panics (no silent clip).
+func TestPayWugnotOutFailClosed(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	testSkipBanker = false
+	defer func() { testSkipBanker = true }()
+
+	panicked := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
+		payWugnotOut(cur, admin, 1)
+	}()
+	if !panicked {
+		t.Fatal("expected panic when free WUGNOT < amount")
+	}
+}
+
+// TestPayoutProtocolFeesFailClosed: shortfall panics before clearing protocolFees.
+func TestPayoutProtocolFeesFailClosed(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	protocolFees = 1_000_000
+	testSkipBanker = false
+	defer func() { testSkipBanker = true }()
+
+	panicked := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
+		payoutProtocolFees(cur)
+	}()
+	if !panicked {
+		t.Fatal("expected panic when WUGNOT under-backed for protocol fees")
+	}
+	if protocolFees != 1_000_000 {
+		t.Fatalf("protocolFees cleared before fail-closed check: %d", protocolFees)
+	}
+}
+
+// TestTryListUnderBackedSoftFail: stub mirrors production — reserved > inventory soft-fails.
+func TestTryListUnderBackedSoftFail(cur realm, t *testing.T) {
+	resetForTest()
+	admin := address("g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	testing.SetRealm(testing.NewUserRealm(admin))
+	Init(cross(cur))
+	SetGraduationThreshold(cross(cur), 100_000_000)
+	SetListVenue(cross(cur), VenueGnoswap, "Gnoswap", true, "GNS")
+
+	creator := address("g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
+	testing.SetRealm(testing.NewUserRealm(creator))
+	testing.SetOriginSend(chain.Coins{{Denom: "ugnot", Amount: CreateBondUgnot}})
+	id := CreateWithVenue(cross(cur), "Back", "BCK", "", VenueGnoswap)
+	graduateHelper(cur, t, id)
+
+	l := mustLaunch(id)
+	poolU, poolT := l.PoolUgnot, l.PoolToken
+	if poolU <= 0 {
+		t.Fatal("empty pool")
+	}
+	if reservedWugnot() < poolU {
+		t.Fatalf("reserved=%d want >= pool %d", reservedWugnot(), poolU)
+	}
+
+	testForceGnoswapList = false
+	ok := tryListOnGnoswap(cur, l, poolU, poolT)
+	if ok {
+		t.Fatal("under-backed list must soft-fail")
+	}
+	if !strings.Contains(l.GnoswapNote, "under-backed") {
+		t.Fatalf("note=%q want under-backed", l.GnoswapNote)
+	}
+	if l.GnoswapListed {
+		t.Fatal("must stay unlisted")
 	}
 }

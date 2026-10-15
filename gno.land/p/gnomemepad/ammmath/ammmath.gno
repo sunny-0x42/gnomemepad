@@ -2,7 +2,10 @@
 // helpers for the gnomemepad factory (Pump-style virtual CPMM + real CPMM pool).
 package ammmath
 
-import "math/overflow"
+import (
+	"math/bits"
+	"math/overflow"
+)
 
 // FeeResult is the split of a gross trade fee.
 type FeeResult struct {
@@ -12,6 +15,34 @@ type FeeResult struct {
 	Creator   int64
 	Protocol  int64
 	Remainder int64
+}
+
+// maxInt64 is 2^63-1; MulDiv results must fit here.
+const maxInt64 = int64(^uint64(0) >> 1)
+
+// MulDiv returns floor((x * y) / d) for x,y >= 0 and d > 0.
+// Uses a 128-bit intermediate so mainnet-scale k (VU*VT ≈ 1.1e20) does not overflow.
+// Panics on bad domain or if the quotient does not fit in int64.
+func MulDiv(x, y, d int64) int64 {
+	if x < 0 || y < 0 {
+		panic("ammmath: MulDiv negative operand")
+	}
+	if d <= 0 {
+		panic("ammmath: MulDiv non-positive divisor")
+	}
+	if x == 0 || y == 0 {
+		return 0
+	}
+	if prod, ok := overflow.Mul64(x, y); ok {
+		return prod / d
+	}
+	hi, lo := bits.Mul64(uint64(x), uint64(y))
+	// bits.Div64 panics if d == 0 or uint64(d) <= hi (quotient ≥ 2^64).
+	quo, _ := bits.Div64(hi, lo, uint64(d))
+	if quo > uint64(maxInt64) {
+		panic("ammmath: MulDiv result overflow")
+	}
+	return int64(quo)
 }
 
 // ApplyFee takes gross quote paid by the user and feeBPS (e.g. 120 = 1.20%).
@@ -81,11 +112,8 @@ func BuyTokens(virtualUgnot, virtualToken, ugnotIn int64) (tokensOut, newVU, new
 	if !ok {
 		panic("ammmath: virtual ugnot overflow")
 	}
-	k, ok := overflow.Mul64(virtualUgnot, virtualToken)
-	if !ok {
-		panic("ammmath: k overflow")
-	}
-	newVT = k / newVU
+	// newVT = floor((VU*VT)/newVU) without materializing k in int64
+	newVT = MulDiv(virtualUgnot, virtualToken, newVU)
 	if newVT <= 0 {
 		panic("ammmath: empty virtual token reserve")
 	}
@@ -107,12 +135,8 @@ func MaxNetInForTokenOut(virtualUgnot, virtualToken, maxTokensOut int64) int64 {
 		return 0
 	}
 	targetNewVT := virtualToken - maxTokensOut
-	k, ok := overflow.Mul64(virtualUgnot, virtualToken)
-	if !ok {
-		panic("ammmath: k overflow")
-	}
-	// tokensOut ≤ max  ⇔  k/(vu+net) ≥ targetNewVT  ⇔  vu+net ≤ k/targetNewVT (floor)
-	maxNewVU := k / targetNewVT
+	// maxNewVU = floor((VU*VT)/targetNewVT)
+	maxNewVU := MulDiv(virtualUgnot, virtualToken, targetNewVT)
 	if maxNewVU <= virtualUgnot {
 		return 0
 	}
@@ -131,11 +155,7 @@ func SellTokens(virtualUgnot, virtualToken, tokensIn int64) (ugnotOut, newVU, ne
 	if !ok {
 		panic("ammmath: virtual token overflow")
 	}
-	k, ok := overflow.Mul64(virtualUgnot, virtualToken)
-	if !ok {
-		panic("ammmath: k overflow")
-	}
-	newVU = k / newVT
+	newVU = MulDiv(virtualUgnot, virtualToken, newVT)
 	if newVU <= 0 {
 		panic("ammmath: empty virtual ugnot reserve")
 	}
@@ -165,7 +185,11 @@ func PoolSwapUgnotForToken(poolUgnot, poolToken, ugnotIn, remainderToPool int64)
 	if !ok {
 		panic("ammmath: pool ugnot overflow")
 	}
-	tokensOut = poolToken * ugnotIn / (poolUgnot + ugnotIn)
+	den, ok := overflow.Add64(poolUgnot, ugnotIn)
+	if !ok {
+		panic("ammmath: pool denom overflow")
+	}
+	tokensOut = MulDiv(poolToken, ugnotIn, den)
 	if tokensOut <= 0 {
 		panic("ammmath: zero tokens out of pool")
 	}
@@ -188,7 +212,7 @@ func PoolSwapTokenForUgnot(poolUgnot, poolToken, tokensIn int64) (ugnotOut, newP
 	if !ok {
 		panic("ammmath: pool token overflow")
 	}
-	ugnotOut = poolUgnot * tokensIn / (poolToken + tokensIn)
+	ugnotOut = MulDiv(poolUgnot, tokensIn, newPT)
 	if ugnotOut <= 0 {
 		panic("ammmath: zero ugnot out of pool")
 	}
@@ -209,5 +233,8 @@ func SpotPriceUgnotPerToken(ugnotReserve, tokenReserve int64) int64 {
 	if tokenReserve <= 0 {
 		return 0
 	}
-	return ugnotReserve * 1000000 / tokenReserve
+	if ugnotReserve <= 0 {
+		return 0
+	}
+	return MulDiv(ugnotReserve, 1_000_000, tokenReserve)
 }

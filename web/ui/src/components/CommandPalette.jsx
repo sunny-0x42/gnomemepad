@@ -10,16 +10,14 @@ const STATIC = [
   { id: "nav-portfolio", label: "Portfolio", hint: "Your holdings", to: "/portfolio", group: "Navigate" },
   { id: "nav-leaderboard", label: "Leaderboard", hint: "Top traders, PnL, volume", to: "/leaderboard", group: "Navigate" },
   { id: "nav-creator", label: "Creator hub", hint: "Claim fees", to: "/creator", group: "Navigate" },
-  { id: "nav-rewards", label: "Rewards", hint: "Points & check-in", to: "/rewards", group: "Navigate" },
+  { id: "nav-docs", label: "Guide", hint: "How it works", to: "/docs", group: "Navigate" },
   {
-    id: "nav-ambassadors",
-    label: "Ambassadors",
-    hint: "Season 1 apply & submit",
-    to: "/ambassadors",
+    id: "nav-zdex",
+    label: "zDex",
+    hint: "Open zdex.gnomi.fun",
+    href: "https://zdex.gnomi.fun",
     group: "Navigate",
   },
-  { id: "nav-ops", label: "Ops", hint: "Module health", to: "/ops", group: "Navigate" },
-  { id: "nav-docs", label: "Guide", hint: "How it works", to: "/docs", group: "Navigate" },
 ];
 
 export default function CommandPalette({ open, onClose }) {
@@ -65,7 +63,8 @@ export default function CommandPalette({ open, onClose }) {
         (it) =>
           it.label.toLowerCase().includes(s) ||
           (it.hint || "").toLowerCase().includes(s) ||
-          (it.to || "").toLowerCase().includes(s),
+          (it.to || "").toLowerCase().includes(s) ||
+          (it.href || "").toLowerCase().includes(s),
       )
       .slice(0, 24);
   }, [q, markets, isAdmin, wallet]);
@@ -98,6 +97,7 @@ export default function CommandPalette({ open, onClose }) {
 
   function run(it) {
     if (it.action === "connect") connect();
+    else if (it.href) window.open(it.href, "_blank", "noopener,noreferrer");
     else if (it.to) nav(it.to);
     onClose();
   }

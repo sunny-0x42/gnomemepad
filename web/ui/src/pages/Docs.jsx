@@ -78,7 +78,7 @@ export default function Docs() {
 
   useEffect(() => {
     let cancelled = false;
-    const nets = listClientNetworks().filter((n) => n.enabled && n.pkg);
+    const nets = listClientNetworks().filter((n) => n.enabled && n.padReady && n.pkg);
     Promise.all(
       nets.map(async (n) => {
         try {
@@ -121,7 +121,7 @@ export default function Docs() {
     return `${fmtGrouped(raiseGnot, { maxFrac: 0 })} GNOT`;
   }, [raiseGnot]);
 
-  const enabledNets = listClientNetworks().filter((n) => n.enabled && n.pkg);
+  const enabledNets = listClientNetworks().filter((n) => n.enabled && n.padReady && n.pkg);
 
   return (
     <section className="view">
@@ -169,8 +169,8 @@ export default function Docs() {
             </li>
             <li>
               {t(
-                "Testnets only (Sapphire / Pearl). Tokens have no guaranteed value. Not investment advice.",
-                "Chỉ testnet (Sapphire / Pearl). Token không đảm bảo giá trị. Không phải lời khuyên đầu tư.",
+                "Mainnet gnoland-1 (OnBloc). Tokens have no guaranteed value. Not investment advice.",
+                "Mainnet gnoland-1 (OnBloc). Token không đảm bảo giá trị. Không phải lời khuyên đầu tư.",
               )}
             </li>
             <li>
@@ -333,14 +333,14 @@ export default function Docs() {
             <div className="flow-arrow">→</div>
             <div className="flow-step">
               <strong>4. List</strong>
-              <span>{t("Gnoswap LP", "LP Gnoswap")}</span>
+              <span>{t("DEX LP (zdex / Gnoswap)", "LP DEX (zdex / Gnoswap)")}</span>
             </div>
           </div>
           <ol className="docs-steps docs-tight">
             <li>
               {t(
-                "Creator pays a creation bond and (when required) escrows GNS for CreatePool, then opens a fair curve.",
-                "Creator trả bond và (khi cần) khóa GNS cho CreatePool, rồi mở curve công bằng.",
+                "Creator pays a creation bond. Preferring Gnoswap escrows ~100 GNS at Create. Preferring zdex skips GNS only when the pad dualDex cut is live (PreferredVenue); Pearl padv23 still escrows ~100 GNS.",
+                "Creator trả bond. Chọn Gnoswap thì escrow ~100 GNS lúc Create. Chọn zdex chỉ bỏ GNS khi pad dualDex (PreferredVenue) live; Pearl padv23 vẫn escrow ~100 GNS.",
               )}
             </li>
             <li>
@@ -357,8 +357,8 @@ export default function Docs() {
             </li>
             <li>
               {t(
-                "A separate List tx creates the Gnoswap pool when GNS/WUGNOT checklist is ready. Curve trading then closes.",
-                "Tx List riêng tạo pool Gnoswap khi checklist GNS/WUGNOT sẵn. Trade curve sau đó đóng.",
+                "List is venue-aware: Gnoswap uses RetryList + GNS; zdex uses ReleaseListSeed → Withdraw → Approve → CreatePool on zdex hub → ConfirmZdexList (stubs toast if pad APIs missing). Trade CTA opens the matching DEX.",
+                "List theo venue: Gnoswap dùng RetryList + GNS; zdex: ReleaseListSeed → Withdraw → Approve → CreatePool hub → ConfirmZdexList (toast nếu pad chưa có API). CTA trade mở đúng DEX.",
               )}
             </li>
           </ol>
@@ -395,8 +395,15 @@ export default function Docs() {
             </div>
             <div className="docs-stat">
               <span className="docs-stat-k">{t("List fee", "Phí list")}</span>
-              <span className="docs-stat-v">~{fmtGrouped(listFee, { maxFrac: 0 })} GNS</span>
-              <span className="docs-stat-s">Gnoswap CreatePool</span>
+              <span className="docs-stat-v">
+                {t("Gnoswap", "Gnoswap")} ~{fmtGrouped(listFee, { maxFrac: 0 })} GNS
+              </span>
+              <span className="docs-stat-s">
+                {t(
+                  "zdex: feeGns=0 only on dualDex pad · else Pearl still ~100 GNS at Create · seed LP at List",
+                  "zdex: feeGns=0 chỉ khi pad dualDex · Pearl vẫn ~100 GNS lúc Create · seed LP lúc List",
+                )}
+              </span>
             </div>
             <div className="docs-stat">
               <span className="docs-stat-k">Tokenomics</span>
@@ -457,7 +464,7 @@ export default function Docs() {
             </li>
             <li>
               {t("In the Gnomi header, select", "Trên header Gnomi, chọn")}{" "}
-              <strong>Sapphire</strong> {t("or", "hoặc")} <strong>Pearl</strong>
+              <strong>Mainnet</strong> (<code className="mono">gnoland-1</code>)
               {t(", then match that chain in Adena.", ", rồi khớp chain đó trong Adena.")}
             </li>
             <li>
@@ -492,8 +499,8 @@ export default function Docs() {
             <li>
               <strong>GNS:</strong>{" "}
               {t(
-                "when the pad requires it, transfer free GNS to the pad first (UI guides this); Create locks it per launch for CreatePool.",
-                "khi pad yêu cầu, Transfer GNS free vào pad trước (UI hướng dẫn); Create khóa theo launch cho CreatePool.",
+                "when preferred DEX is Gnoswap (or Pearl before dualDex cut), transfer free GNS to the pad first (UI guides this); Create locks it per launch. Preferring zdex skips GNS only on dualDex pads.",
+                "khi DEX ưu tiên là Gnoswap (hoặc Pearl trước dualDex), Transfer GNS free vào pad trước (UI hướng dẫn); Create khóa theo launch. Chọn zdex chỉ bỏ GNS trên pad dualDex.",
               )}
             </li>
             <li>
@@ -571,15 +578,15 @@ export default function Docs() {
               )}
             </li>
             <li>
-              <strong>{t("List on Gnoswap", "List Gnoswap")}</strong> —{" "}
+              <strong>{t("List on DEX", "List DEX")}</strong> —{" "}
               {t(
-                "EOA List / Retry when the token-page checklist is green (~",
-                "EOA List / Retry khi checklist trang token xanh (~",
+                "Gnoswap: EOA RetryList when checklist is green (~",
+                "Gnoswap: EOA RetryList khi checklist xanh (~",
               )}
               {fmtGrouped(listFee, { maxFrac: 0 })} GNS
               {t(
-                "). The UI may prompt list when ready — it is not an on-chain auto inside Buy/Graduate.",
-                "). UI có thể gợi ý list khi sẵn — không phải auto on-chain bên trong Buy/Graduate.",
+                "). zdex: ReleaseListSeed → Withdraw → Approve → CreatePool on hub → ConfirmZdexList (toast if pad APIs missing). SetPreferredVenue when pad exposes it.",
+                "). zdex: ReleaseListSeed → Withdraw → Approve → CreatePool hub → ConfirmZdexList (toast nếu pad thiếu API). SetPreferredVenue khi pad có.",
               )}
             </li>
             <li>
@@ -680,23 +687,14 @@ export default function Docs() {
                 </tr>
                 <tr>
                   <td>
-                    <Link to="/rewards">{t("Rewards", "Điểm")}</Link>
+                    <a href="https://zdex.gnomi.fun" target="_blank" rel="noopener noreferrer">
+                      zDex
+                    </a>
                   </td>
                   <td>
                     {t(
-                      "Check-in, referral, points — points are not withdrawable value or APR.",
-                      "Check-in, referral, điểm — điểm không phải giá trị rút được hay APR.",
-                    )}
-                  </td>
-                </tr>
-                <tr>
-                  <td>
-                    <Link to="/ops">Ops</Link>
-                  </td>
-                  <td>
-                    {t(
-                      "Read-only RPC / module health — not admin actions.",
-                      "Sức khỏe RPC / module chỉ đọc — không phải thao tác admin.",
+                      "Sister DEX for post-list trading (zdex.gnomi.fun) — same Gno wallet.",
+                      "DEX chị em để trade sau list (zdex.gnomi.fun) — cùng ví Gno.",
                     )}
                   </td>
                 </tr>
@@ -733,8 +731,8 @@ export default function Docs() {
             <li>
               <strong>~{fmtGrouped(listFee, { maxFrac: 0 })} GNS</strong> —{" "}
               {t(
-                "CreatePool list fee (escrow at Create when required).",
-                "phí CreatePool khi list (escrow lúc Create khi pad yêu cầu).",
+                "Gnoswap CreatePool fee (~100 GNS escrow at Create when required). zdex: feeGns=0 only on dualDex pad; else Pearl still escrows GNS — seed LP at List via EOA CreatePool.",
+                "Phí CreatePool Gnoswap (~100 GNS escrow lúc Create khi cần). zdex: feeGns=0 chỉ pad dualDex; Pearl vẫn escrow GNS — seed LP lúc List qua EOA CreatePool.",
               )}
             </li>
             <li>
@@ -777,8 +775,8 @@ export default function Docs() {
           <div className="docs-faq-list">
             <FaqItem q={t("Wallet won’t connect", "Không kết nối ví")}>
               {t(
-                "Install Adena, unlock it, select the same network as the Gnomi header (Sapphire or Pearl), refresh, then Connect.",
-                "Cài Adena, mở khóa, chọn cùng network với header Gnomi (Sapphire hoặc Pearl), refresh, rồi Connect.",
+                "Install Adena, unlock it, select the same network as the Gnomi header (Mainnet gnoland-1 / OnBloc, or Pearl pearl-1), refresh, then Connect.",
+                "Cài Adena, mở khóa, chọn cùng network với header Gnomi (Mainnet gnoland-1 / OnBloc, hoặc Pearl pearl-1), refresh, rồi Connect.",
               )}
             </FaqItem>
             <FaqItem q={t("What’s different on Pearl vs Sapphire?", "Pearl khác Sapphire thế nào?")}>
@@ -803,14 +801,14 @@ export default function Docs() {
             </FaqItem>
             <FaqItem q={t("Stale markets / empty chart", "Markets cũ / chart trống")}>
               {t(
-                "Refresh; check Ops for RPC health. New launches need at least one trade for chart points. API timeouts can briefly 502 on heavy Sapphire reads.",
-                "Refresh; xem Ops cho RPC. Launch mới cần ít nhất một trade để có điểm chart. API nặng trên Sapphire có thể 502 tạm thời.",
+                "Refresh; check Ops for RPC health. New launches need at least one trade for chart points. API timeouts can briefly 502 on heavy RPC reads.",
+                "Refresh; xem Ops cho RPC. Launch mới cần ít nhất một trade để có điểm chart. API nặng trên RPC có thể 502 tạm thời.",
               )}
             </FaqItem>
             <FaqItem q={t("Is this mainnet?", "Đây có phải mainnet?")}>
               {t(
-                "No — Sapphire and Pearl are testnets. Mainnet appears as coming soon until enabled. Do not assume mainnet behavior from testnet numbers.",
-                "Không — Sapphire và Pearl là testnet. Mainnet hiện coming soon cho đến khi bật. Đừng suy ra mainnet từ số testnet.",
+                "Yes — Mainnet gnoland-1 (OnBloc RPC). Fair launch → graduate → list on zdex and/or Gnoswap when enabled. Pad may show pending until deploy. Real funds at risk. Not financial advice.",
+                "Có — Mainnet gnoland-1 (RPC OnBloc). Fair launch → graduate → list zdex và/hoặc Gnoswap khi bật. Pad có thể pending đến khi deploy. Tiền thật có rủi ro. Không phải lời khuyên đầu tư.",
               )}
             </FaqItem>
           </div>

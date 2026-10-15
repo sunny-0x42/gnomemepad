@@ -15,6 +15,8 @@ type listFund struct {
 // tryListOnGnoswap is a stub for local unit tests (no Sapphire Gnoswap deps).
 // Sapphire deploy prepare overwrites this file with gnoswap_list_full.gno which
 // CreatePool + ExactOut GNS fee + position.Mint using remaining tokens + WUGNOT inventory.
+// Full build requires wugnot.BalanceOf(pad) >= reservedWugnot() (and raised for LP)
+// so listing cannot spend another launch's PoolUgnot.
 // testForceGnoswapList lives in memepad.gno (must survive full-list overwrite on deploy).
 func tryListOnGnoswap(cur realm, l *Launch, raisedUgnot, remainingTokens int64) bool {
 	_ = cur
@@ -29,7 +31,21 @@ func tryListOnGnoswap(cur realm, l *Launch, raisedUgnot, remainingTokens int64) 
 		_ = remainingTokens
 		return true
 	}
-	_ = raisedUgnot
+	// Mirror production backing gate (stub has no WUGNOT inventory → under-backed when reserved > 0).
+	if l != nil {
+		res := reservedWugnot()
+		wBal := int64(0) // unit tests / stub: no live WUGNOT balance
+		if wBal < res {
+			l.GnoswapNote = "list skip: WUGNOT under-backed vs reserved; have " +
+				strconv.FormatInt(wBal, 10) + " reserved " + strconv.FormatInt(res, 10)
+			return false
+		}
+		if wBal < raisedUgnot {
+			l.GnoswapNote = "list skip: need WUGNOT inventory >= raised for LP; have " +
+				strconv.FormatInt(wBal, 10) + " need " + strconv.FormatInt(raisedUgnot, 10)
+			return false
+		}
+	}
 	_ = remainingTokens
 	if l != nil && l.GnoswapNote == "" {
 		l.GnoswapNote = "gnoswap auto-list not linked (local/stub build)"
@@ -98,13 +114,21 @@ func ListNeed(id string) string {
 	return listNeedOf(mustLaunch(id))
 }
 
-// ListNeedFor is venue-aware ListNeed. Unknown/non-gnoswap venues return a
-// short pipe with note in field0-style empty capital + fee hint for UI.
+// ListNeedFor is venue-aware ListNeed. zdex: poolU as seed size, feeGns=0
+// (EOA CreatePool after ReleaseListSeed). Unknown venues: empty capital.
 func ListNeedFor(id, venueId string) string {
 	l := mustLaunch(id)
 	vid := normalizeVenueID(venueId)
+	if vid == VenueZdex {
+		poolU := int64(0)
+		if l != nil && l.Status == StatusGraduated && !l.GnoswapListed {
+			poolU = l.PoolUgnot
+		}
+		// poolU|wHave|wNeedLp|gnsHave|gnsNeed|feeGns|feeWugnotBudget|padAddr
+		return strconv.FormatInt(poolU, 10) + "|0|" +
+			strconv.FormatInt(poolU, 10) + "|0|0|0|0|" + padAddr.String()
+	}
 	if vid != VenueGnoswap {
-		// No alternate Need() adapters yet — surface soft guidance.
 		poolU := int64(0)
 		if l != nil && l.Status == StatusGraduated && !l.GnoswapListed {
 			poolU = l.PoolUgnot

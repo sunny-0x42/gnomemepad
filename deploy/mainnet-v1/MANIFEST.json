@@ -1,0 +1,52 @@
+{
+  "at": "2026-09-16T08:48:30.760Z",
+  "deployer": "g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt",
+  "namespace": "gnomi",
+  "chainId": "gnoland-1",
+  "rpc": "https://rpc.onbloc.xyz:443",
+  "economics": {
+    "virtualUgnot0": "102_375_071_625",
+    "graduationUgnot": "300_000_000_000",
+    "createBondFallbackUgnot": "150_000_000",
+    "listFeeGns": "100_000_000",
+    "defaultVenue": "zdex"
+  },
+  "rewrites": [
+    "p/demo/tokens/grc20 → p/nt/grc20/v0",
+    "r/demo/defi/grc20reg → r/nt/grc20reg/v0",
+    "p/gnoswap/{consts,uint256} → …/v1",
+    "gnoswap_list_full → gnoswap_list.gno",
+    "strip *_test.gno"
+  ],
+  "packages": [
+    {
+      "rel": "p/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/ammmath",
+      "pkgpath": "gno.land/p/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/ammmath"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pad",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pad"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/hubv2",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/hubv2"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/profile",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/profile"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/meta",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/meta"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pointsv2",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/pointsv2"
+    },
+    {
+      "rel": "r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/bond",
+      "pkgpath": "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/gnomi/bond"
+    }
+  ],
+  "note": "Prepared only — GPAO may park addpkg. No MAINNET_PAD_READY."
+}

@@ -21,6 +21,7 @@ import {
 import {
   configForNetwork,
   listNetworks,
+  listVenuesFallback,
   normalizeNetworkId,
   DEFAULT_NETWORK_ID,
 } from "./networks.mjs";
@@ -44,8 +45,17 @@ import {
 import {
   readMarketsSnapshot,
   snapshotFresh,
+  snapshotUsable,
   writeMarketsSnapshot,
 } from "./markets-snapshot.mjs";
+import {
+  evaluateCreatorBadges,
+  evaluateTokenBadges,
+  evaluateTraderBadges,
+  listCatalogPublic,
+  wearBadges,
+  WEAR_LIMIT,
+} from "./badges.mjs";
 
 const UGNOT_PER_GNOT = 1_000_000;
 
@@ -132,7 +142,7 @@ async function getHubInfo(RPC, cfg) {
     };
   }
   try {
-    const listRaw = await qeval(RPC, cfg.HUB, `${cfg.HUB}.ListModules()`);
+    const listRaw = await qeval(RPC, cfg.HUB, `${cfg.HUB}.ListModules()`, 12000);
     const modules = parseModuleList(listRaw);
     return {
       hub: cfg.HUB,
@@ -198,11 +208,12 @@ function parseLeaderboard(raw) {
   return rows;
 }
 
-async function rpc(RPC, method, params) {
+async function rpc(RPC, method, params, signal) {
   const r = await fetch(RPC, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal,
   });
   if (!r.ok) throw new Error(`RPC HTTP ${r.status}`);
   const j = await r.json();
@@ -215,14 +226,14 @@ function b64utf8(b64) {
   return Buffer.from(b64, "base64").toString("utf8");
 }
 
-async function qevalRaw(RPC, expr) {
+async function qevalRaw(RPC, expr, signal) {
   const data = Buffer.from(expr, "utf8").toString("base64");
   const result = await rpc(RPC, "abci_query", {
     path: "vm/qeval",
     data,
     height: "0",
     prove: false,
-  });
+  }, signal);
   const rb = result?.response?.ResponseBase;
   if (rb?.Error) {
     const err = typeof rb.Error === "string" ? rb.Error : JSON.stringify(rb.Error);
@@ -231,8 +242,16 @@ async function qevalRaw(RPC, expr) {
   return b64utf8(rb?.Data);
 }
 
-async function qeval(RPC, PKG, expr) {
-  let text = await qevalRaw(RPC, expr);
+async function qeval(RPC, PKG, expr, timeoutMs) {
+  let signal;
+  let timer;
+  if (timeoutMs > 0) {
+    const ctrl = new AbortController();
+    signal = ctrl.signal;
+    timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  }
+  try {
+  let text = await qevalRaw(RPC, expr, signal);
   const m = text.match(/^\((.*)\)\s*$/s);
   if (m) {
     let inner = m[1].trim();
@@ -243,6 +262,9 @@ async function qeval(RPC, PKG, expr) {
     return inner;
   }
   return text;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Parse all `(N int64)` values from a multi-result qeval payload. */
@@ -476,25 +498,53 @@ function applySpotPrice(m, priceGnot, totalSupply = 1_000_000_000, source = "spo
 }
 
 /**
- * Gnoswap public price API (Sapphire / beta).
- * Returns GNOT USD (oracle TWAP) + optional per-token path map.
- * Cached ~60s to avoid rate pressure on list endpoints.
+ * Gnoswap public prices API (api.gnoswap.io).
+ * Returns GNOT USD (ORACLE grade for ugnot/wugnot) + optional per-token path map.
+ * Cached ~60s. Fallback: CoinGecko gno-land, then optional GNOT_USD env pin.
+ * Never invent a fake USD when all sources miss.
  */
+/** Live GNOT/ugnot USD — Gnoswap ORACLE (post KuCoin/Kraken listing ~2026-09-16). */
 const GNOSWAP_PRICES_URL =
-  process.env.GNOSWAP_PRICES_URL || "https://beta.api.gnoswap.io/v1/tokens/prices";
+  process.env.GNOSWAP_PRICES_URL || "https://api.gnoswap.io/v1/tokens/prices";
 const GNOSWAP_API_BASE =
-  process.env.GNOSWAP_API_BASE || "https://beta.api.gnoswap.io/v1";
+  process.env.GNOSWAP_API_BASE || "https://api.gnoswap.io/v1";
+const COINGECKO_GNOT_URL =
+  process.env.COINGECKO_GNOT_URL ||
+  "https://api.coingecko.com/api/v3/simple/price?ids=gno-land&vs_currencies=usd";
 const WUGNOT_TOKEN_KEY = "gno.land/r/gnoland/wugnot.wugnot";
-/** Fallback when Gnoswap leaves ugnot.usd empty (common on Sapphire indexer). */
-const DEFAULT_GNOT_USD = Number(process.env.GNOT_USD) > 0 ? Number(process.env.GNOT_USD) : 235;
+/**
+ * Optional override: GNOT_USD=… only when you intentionally pin a price.
+ * Default 0 — prefer live Gnoswap ORACLE / CoinGecko; never invent a fake price.
+ */
+const ENV_GNOT_USD = Number(process.env.GNOT_USD);
+const PINNED_GNOT_USD =
+  Number.isFinite(ENV_GNOT_USD) && ENV_GNOT_USD > 0 ? ENV_GNOT_USD : 0;
+
+async function fetchCoinGeckoGnotUsd() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6_000);
+    const res = await fetch(COINGECKO_GNOT_URL, {
+      signal: ctrl.signal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return 0;
+    const body = await res.json();
+    const usd = Number(body?.["gno-land"]?.usd);
+    return Number.isFinite(usd) && usd > 0 ? usd : 0;
+  } catch {
+    return 0;
+  }
+}
 
 async function fetchGnoswapFx() {
   const hit = cacheGet("fx:gnoswap");
   if (hit) return hit;
   const empty = {
-    gnotUsd: DEFAULT_GNOT_USD,
+    gnotUsd: PINNED_GNOT_USD,
     byPath: {},
-    source: "fallback",
+    source: PINNED_GNOT_USD > 0 ? "env" : "none",
     updatedAt: null,
   };
   try {
@@ -530,27 +580,49 @@ async function fetchGnoswapFx() {
         Number.isFinite(usd) &&
         usd > 0
       ) {
-        // Prefer ORACLE grade for ugnot
+        // Prefer ORACLE grade for ugnot (Gnoswap prices API)
         if (!gnotUsd || grade === "ORACLE") {
           gnotUsd = usd;
-          gnotSource = "gnoswap";
+          gnotSource = grade === "ORACLE" ? "oracle" : "gnoswap";
         }
       }
     }
-    // Sapphire indexer often returns empty ugnot.usd — keep UI $ metrics alive
     if (!(gnotUsd > 0)) {
-      gnotUsd = DEFAULT_GNOT_USD;
-      gnotSource = "fallback";
+      const cg = await fetchCoinGeckoGnotUsd();
+      if (cg > 0) {
+        gnotUsd = cg;
+        gnotSource = "coingecko";
+      }
+    }
+    if (!(gnotUsd > 0) && PINNED_GNOT_USD > 0) {
+      gnotUsd = PINNED_GNOT_USD;
+      gnotSource = "env";
     }
     const fx = {
-      gnotUsd,
+      gnotUsd: gnotUsd > 0 ? gnotUsd : 0,
       byPath,
-      source: gnotSource || "gnoswap",
+      source: gnotUsd > 0 ? gnotSource || "gnoswap" : "none",
       updatedAt: Date.now(),
     };
     cacheSet("fx:gnoswap", fx, 60_000);
     return fx;
   } catch {
+    // Gnoswap down → CoinGecko / env
+    try {
+      const cg = await fetchCoinGeckoGnotUsd();
+      if (cg > 0) {
+        const fx = {
+          gnotUsd: cg,
+          byPath: {},
+          source: "coingecko",
+          updatedAt: Date.now(),
+        };
+        cacheSet("fx:gnoswap", fx, 60_000);
+        return fx;
+      }
+    } catch {
+      /* fall through */
+    }
     cacheSet("fx:gnoswap", empty, 15_000);
     return empty;
   }
@@ -669,6 +741,29 @@ function parseLaunchInfo(line, totalSupply = 1_000_000_000, gradUgnot = 50_000_0
   const status = Number(p[3]);
   const raised = Number(p[4]);
   const sold = Number(p[5]);
+  // Tail after fixed prefix (0..17): poolPath|note|listVenue.
+  // Zdex ConfirmZdexList stores poolId "ugnot|SYMBOL" — extra "|" shifts indices.
+  // Rebuild from the right so listVenue/note stay correct.
+  let gnoswapPoolPath = "";
+  let gnoswapNote = "";
+  let listVenue = "";
+  if (p.length >= 18) {
+    const tail = p.slice(18);
+    if (tail.length >= 3) {
+      listVenue = tail[tail.length - 1] || "";
+      gnoswapNote = tail[tail.length - 2] || "";
+      gnoswapPoolPath = tail.slice(0, -2).join("|");
+    } else if (tail.length === 2) {
+      gnoswapPoolPath = tail[0] || "";
+      gnoswapNote = tail[1] || "";
+    } else if (tail.length === 1) {
+      gnoswapPoolPath = tail[0] || "";
+    }
+  }
+  // Compat default only when pad omits listVenue; zdex pool ids use "ugnot|…"
+  if (!listVenue && p[17] === "1") {
+    listVenue = /^ugnot\|/i.test(gnoswapPoolPath) ? "zdex" : "gnoswap";
+  }
   const m = {
     id: p[0],
     name: p[1],
@@ -691,10 +786,10 @@ function parseLaunchInfo(line, totalSupply = 1_000_000_000, gradUgnot = 50_000_0
     gnoswapReady: p[16] === "1" || status === 1,
     // padv8+: gnoswapListed|gnoswapPoolPath; padv12+: gnoswapNote
     gnoswapListed: p[17] === "1",
-    gnoswapPoolPath: p[18] || "",
-    gnoswapNote: p[19] || "",
-    // padv23+: listVenue (e.g. "gnoswap"); empty if unlisted / older pads
-    listVenue: p[20] || (p[17] === "1" ? "gnoswap" : ""),
+    gnoswapPoolPath,
+    gnoswapNote,
+    // padv23+: listVenue (e.g. "gnoswap"|"zdex"); empty if unlisted / older pads
+    listVenue,
     progressPct: status === 1 ? 100 : Math.min(100, Math.floor((raised * 100) / gradUgnot)),
   };
   return enrichPricing(m, totalSupply);
@@ -760,12 +855,18 @@ function padVersionNumber(pkgOrKey) {
 
 /**
  * True if this pad must not appear in public discovery.
- * - Versioned pads with v < MIN_PUBLIC_PAD_VERSION
+ * - Old gnomemepad paths with padvN where N < MIN_PUBLIC_PAD_VERSION
  * - Hub keys named legacy*
+ * Never retire /gnomi/* (padv3 = third gnomi cut, not legacy padv3).
+ * Bare hub labels ("pad", "padv3") are not package paths — keep visible.
  */
 function isRetiredPadVersion(pkgOrKey) {
   const s = String(pkgOrKey || "").toLowerCase();
+  if (!s) return false;
+  if (/\/gnomi\//.test(s)) return false;
   if (/(?:^|[/_.-])legacy(?:$|[/_.-])/.test(s) || s.startsWith("legacy")) return true;
+  // Hub source labels only (no path separators)
+  if (!/[/.]/.test(s)) return false;
   const n = padVersionNumber(s);
   if (n == null) return false;
   return n < MIN_PUBLIC_PAD_VERSION;
@@ -878,6 +979,31 @@ async function getMarketsOne(RPC, PKG, meta = {}) {
       const rem = remainingRaiseUgnot(parsed, params.graduation);
       parsed.remainingRaiseUgnot = rem;
       parsed.remainingRaiseGnot = rem / UGNOT_PER_GNOT;
+      // TradeHistory is one RPC per token. The page request skips it.
+      // The snapshot worker still fills tradeStats so cards keep volume.
+      if (meta.tradeStats !== false) {
+        try {
+          const hist = await qeval(
+            RPC,
+            PKG,
+            `${PKG}.TradeHistory(${JSON.stringify(id)})`,
+          );
+          const pts = parseTradeHistory(hist).map((pt) => ({
+            ...pt,
+            volumeGnot: (Number(pt.ugnot) || 0) / UGNOT_PER_GNOT,
+          }));
+          parsed.tradeStats = summarizeTradeStats(pts);
+        } catch {
+          parsed.tradeStats = {
+            trades: 0,
+            buyCount: 0,
+            sellCount: 0,
+            volumeGnot: 0,
+            buyVolumeGnot: 0,
+            sellVolumeGnot: 0,
+          };
+        }
+      }
       return parsed;
     } catch (e) {
       return {
@@ -953,6 +1079,7 @@ async function getMarkets(RPC, sources, opts = {}) {
         sourceKey: s.key,
         active: s.active,
         legacy: s.legacy,
+        tradeStats: opts.tradeStats !== false,
       }),
     ),
   );
@@ -993,6 +1120,50 @@ async function getMarkets(RPC, sources, opts = {}) {
       label: String(s.pkg).split("/").pop(),
     })),
   };
+}
+
+/**
+ * Attach pools-style achievement badges onto market rows.
+ * volByKey: optional map `${pkg}|${id}` → volumeGnot from activity sample.
+ */
+function attachTokenBadges(markets, opts = {}) {
+  const tipHeight = Number(opts.tipHeight) || 0;
+  const volByKey = opts.volByKey || null;
+  const list = Array.isArray(markets) ? markets : [];
+  for (const m of list) {
+    if (!m || m.error) continue;
+    const k = `${m.pkg || ""}|${m.id || ""}`;
+    const volumeGnot = volByKey ? Number(volByKey[k]) || 0 : Number(m.volumeGnot) || 0;
+    const all = evaluateTokenBadges(m, {
+      volumeGnot,
+      tipHeight,
+      blockSecs: opts.blockSecs || 2,
+    });
+    m.badges = all;
+    m.wearBadges = wearBadges(all, WEAR_LIMIT);
+  }
+  return list;
+}
+
+async function tipHeightCached(RPC) {
+  const key = `tip:${RPC}`;
+  const hit = cacheGet(key);
+  if (hit != null) return Number(hit) || 0;
+  try {
+    const st = await rpc(RPC, "status", {});
+    const h = Number(st?.sync_info?.latest_block_height) || 0;
+    cacheSet(key, h, 15_000);
+    return h;
+  } catch {
+    return 0;
+  }
+}
+
+async function decorateMarketsBadges(RPC, marketsPayload) {
+  if (!marketsPayload || !Array.isArray(marketsPayload.markets)) return marketsPayload;
+  const tip = await tipHeightCached(RPC);
+  attachTokenBadges(marketsPayload.markets, { tipHeight: tip });
+  return marketsPayload;
 }
 
 /**
@@ -1333,7 +1504,7 @@ function shortAddrSafe(addr) {
 /**
  * Post-list swaps live on Gnoswap, not pad TradeHistory.
  * Fetch recent WUGNOT↔token swaps for chart continuity after listing.
- * Note: Sapphire meme pools are often missing from beta.api.gnoswap.io —
+ * Note: Sapphire meme pools are often missing from the Gnoswap indexer —
  * empty 200 is common; transport errors must not poison-cache as empty.
  */
 async function fetchGnoswapSwapHistory(tokenPath, limit = 80) {
@@ -1631,6 +1802,49 @@ function lpEventFromGnoswapNote(m) {
   };
 }
 
+const INDEXER_GQL = "https://indexer.gno.land/graphql/query";
+
+/** Unique Buy and SwapBuy callers for one launch. Read-only indexer query; does not touch the pad. */
+export async function indexerPadBuyers(pkg, id) {
+  const cacheKey = `holders:buyers:${pkg}:${id}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  const found = new Set();
+  for (const func of ["Buy", "SwapBuy"]) {
+    const query = `{
+      getTransactions(
+        where: {
+          success: { eq: true }
+          messages: { value: { MsgCall: { pkg_path: { eq: ${JSON.stringify(pkg)} }, func: { eq: ${JSON.stringify(func)} } } } }
+        }
+        order: { heightAndIndex: ASC }
+      ) {
+        messages { value { ... on MsgCall { func pkg_path caller args } } }
+      }
+    }`;
+    const res = await fetch(INDEXER_GQL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) throw new Error(`indexer HTTP ${res.status}`);
+    const body = await res.json();
+    if (body.errors?.length) throw new Error(body.errors[0].message || "indexer");
+    for (const tx of body.data?.getTransactions || []) {
+      for (const msg of tx.messages || []) {
+        const value = msg.value || {};
+        if (value.func !== func || value.pkg_path !== pkg) continue;
+        if (!Array.isArray(value.args) || value.args[0] !== id) continue;
+        const caller = String(value.caller || "");
+        if (/^g1[a-z0-9]{38,}$/i.test(caller)) found.add(caller);
+      }
+    }
+  }
+  const list = [...found];
+  cacheSet(cacheKey, list, 5 * 60_000);
+  return list;
+}
+
 async function getMarket(RPC, PKG, id, meta = {}) {
   const params = await getParams(RPC, PKG);
   const info = await qeval(RPC, PKG, `${PKG}.LaunchInfo("${id}")`);
@@ -1658,6 +1872,30 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     if (/^g1[a-z0-9]+$/i.test(pa)) m.padAddr = pa;
   } catch {
     /* optional */
+  }
+  // Dual-DEX SOURCE: PreferredVenueOf + ListSeedReleasedOf (absent on Pearl padv23)
+  try {
+    const pref = String(
+      await qeval(RPC, PKG, `${PKG}.PreferredVenueOf(${JSON.stringify(id)})`),
+    )
+      .replace(/^"|"$/g, "")
+      .trim()
+      .toLowerCase();
+    if (pref) m.preferredVenue = pref;
+  } catch {
+    /* older pad */
+  }
+  try {
+    const released = String(
+      await qeval(RPC, PKG, `${PKG}.ListSeedReleasedOf(${JSON.stringify(id)})`),
+    )
+      .replace(/^"|"$/g, "")
+      .trim()
+      .toLowerCase();
+    m.listSeedReleased =
+      released === "true" || released === "1" || released === "True";
+  } catch {
+    m.listSeedReleased = false;
   }
   try {
     const hist = await qeval(RPC, PKG, `${PKG}.TradeHistory(${JSON.stringify(id)})`);
@@ -1820,59 +2058,90 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     m.markReliable = false;
   }
 
-  // Holders / buyers (padv7+ ListBuyers; graceful on older pads)
+  m.topTrades = (m.chart || [])
+    .filter((pt) => Number(pt.side) !== 2)
+    .map((pt) => ({
+      height: pt.height,
+      side: pt.side,
+      sideLabel: pt.sideLabel,
+      volumeGnot: pt.volumeGnot || 0,
+      tokens: pt.tokens || 0,
+      priceGnot: pt.priceGnot || 0,
+    }))
+    .sort((a, b) => (b.volumeGnot || 0) - (a.volumeGnot || 0))
+    .slice(0, 8);
+
+  // Holders are a separate request. Doing them here blows the Netlify time limit.
   m.holders = [];
   m.holdersNote = null;
+  if (meta.holders !== true) {
+    m.holdersSource = null;
+    m.holdersStats = null;
+    return m;
+  }
   try {
     const buyersRaw = await qeval(RPC, PKG, `${PKG}.ListBuyers(${JSON.stringify(id)})`);
     const addrs = String(buyersRaw || "")
       .split("\n")
       .map((s) => s.trim())
       .filter((s) => /^g1[a-z0-9]{38,}$/i.test(s))
-      .slice(0, 40);
+      .slice(0, 100);
+    let holdersSource = "ListBuyers";
+    let holdersCapped = addrs.length >= 100;
+    if (holdersCapped) {
+      try {
+        const extra = await indexerPadBuyers(PKG, id);
+        const seen = new Set(addrs);
+        for (const addr of extra) {
+          if (!seen.has(addr)) {
+            seen.add(addr);
+            addrs.push(addr);
+          }
+        }
+        holdersCapped = false;
+        holdersSource = "ListBuyers+indexer";
+      } catch {
+        /* ListBuyers stays the 100-address list */
+      }
+    }
     const holders = [];
     const supply = Number(params.totalSupply) || 1e9;
     const px = Number(m.spotGnot || m.priceGnot) || 0;
     const entry = openPriceGnot;
-    // Parallel balance reads (capped)
-    await Promise.all(
-      addrs.map(async (addr) => {
-        try {
-          const bal = Number(
-            await qeval(RPC, PKG, `${PKG}.BalanceOf(${JSON.stringify(id)}, ${JSON.stringify(addr)})`),
-          );
-          if (bal > 0) {
-            const valueGnot = px > 0 ? bal * px : 0;
-            // Unrealized PnL vs market VWAP entry (shared; not personal cost basis)
-            let pnlGnot = null;
-            let pnlPct = null;
-            if (entry != null && entry > 0 && px > 0) {
-              const cost = bal * entry;
-              pnlGnot = valueGnot - cost;
-              pnlPct = ((px - entry) / entry) * 100;
-            }
-            holders.push({
-              address: addr,
-              balance: bal,
-              valueGnot,
-              pctSupply: supply > 0 ? (bal / supply) * 100 : 0,
-              pnlGnot,
-              pnlPct,
-              entryGnot: entry,
-              spotGnot: px,
-            });
-          }
-        } catch {
-          /* skip */
+    async function readHolder(addr) {
+      try {
+        const bal = Number(
+          await qeval(RPC, PKG, `${PKG}.BalanceOf(${JSON.stringify(id)}, ${JSON.stringify(addr)})`),
+        );
+        if (!(bal > 0)) return;
+        const valueGnot = px > 0 ? bal * px : 0;
+        let pnlGnot = null;
+        let pnlPct = null;
+        if (entry != null && entry > 0 && px > 0) {
+          const cost = bal * entry;
+          pnlGnot = valueGnot - cost;
+          pnlPct = ((px - entry) / entry) * 100;
         }
-      }),
-    );
+        holders.push({
+          address: addr,
+          balance: bal,
+          valueGnot,
+          pctSupply: supply > 0 ? (bal / supply) * 100 : 0,
+          pnlGnot,
+          pnlPct,
+          entryGnot: entry,
+          spotGnot: px,
+        });
+      } catch {
+        /* skip */
+      }
+    }
+    await mapPool(addrs, 16, readHolder);
     holders.sort((a, b) => (b.balance || 0) - (a.balance || 0));
     m.holders = holders;
     m.holdersActive = holders.length;
-    // Cap = ListBuyers query truncated (pad max ~100), not full GRC20 transfer set
-    m.holdersCapped = addrs.length >= 40 || addrs.length >= 100;
-    m.holdersSource = "ListBuyers";
+    m.holdersCapped = holdersCapped;
+    m.holdersSource = holdersSource;
     m.holdersLabel = "Holders";
     // UI no longer shows long disclaimer notes
     m.holdersNote = null;
@@ -1888,27 +2157,13 @@ async function getMarket(RPC, PKG, id, meta = {}) {
       top1Pct: top1,
       top10Pct: top10,
       capped: m.holdersCapped,
-      source: "ListBuyers",
+      source: holdersSource,
     };
   } catch {
     m.holdersNote = null;
     m.holdersSource = null;
     m.holdersStats = null;
   }
-
-  // Top trades by size (always available from trade ring)
-  m.topTrades = (m.chart || [])
-    .filter((pt) => Number(pt.side) !== 2)
-    .map((pt) => ({
-      height: pt.height,
-      side: pt.side,
-      sideLabel: pt.sideLabel,
-      volumeGnot: pt.volumeGnot || 0,
-      tokens: pt.tokens || 0,
-      priceGnot: pt.priceGnot || 0,
-    }))
-    .sort((a, b) => (b.volumeGnot || 0) - (a.volumeGnot || 0))
-    .slice(0, 8);
 
   return m;
 }
@@ -2021,8 +2276,67 @@ async function getMetaBatch(RPC, META, items) {
   return out;
 }
 
+/** Holder balances only. Does not rebuild the token page. */
+async function loadHolderBalances(RPC, PKG, id) {
+  const buyersRaw = await qeval(RPC, PKG, `${PKG}.ListBuyers(${JSON.stringify(id)})`);
+  const addrs = String(buyersRaw || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => /^g1[a-z0-9]{38,}$/i.test(s))
+    .slice(0, 100);
+  let holdersSource = "ListBuyers";
+  let holdersCapped = addrs.length >= 100;
+  if (holdersCapped) {
+    try {
+      const extra = await Promise.race([
+        indexerPadBuyers(PKG, id),
+        new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      if (extra) {
+        const seen = new Set(addrs);
+        for (const addr of extra) {
+          if (!seen.has(addr)) {
+            seen.add(addr);
+            addrs.push(addr);
+          }
+        }
+        holdersCapped = false;
+        holdersSource = "ListBuyers+indexer";
+      }
+    } catch {
+      /* keep the first 100 */
+    }
+  }
+  const holders = [];
+  await mapPool(addrs, 16, async (addr) => {
+    try {
+      const bal = Number(
+        await qeval(RPC, PKG, `${PKG}.BalanceOf(${JSON.stringify(id)}, ${JSON.stringify(addr)})`),
+      );
+      if (bal > 0) holders.push({ address: addr, balance: bal });
+    } catch {
+      /* skip */
+    }
+  });
+  holders.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+  return {
+    id,
+    pkg: PKG,
+    holders,
+    holdersActive: holders.length,
+    holdersCapped,
+    holdersSource,
+    holdersStats: {
+      active: holders.length,
+      buyersEver: addrs.length,
+      capped: holdersCapped,
+      source: holdersSource,
+    },
+  };
+}
+
 /** Resolve which pad package owns launch id (try query pkg first, then sources). */
-async function resolveMarketPkg(RPC, id, preferredPkg, sources) {
+async function resolveMarketPkg(RPC, id, preferredPkg, sources, metaExtra = {}) {
   const tryList = [];
   if (preferredPkg) tryList.push(preferredPkg);
   for (const s of sources || []) {
@@ -2039,6 +2353,7 @@ async function resolveMarketPkg(RPC, id, preferredPkg, sources) {
         sourceKey: src.key,
         active: src.active,
         legacy: src.legacy,
+        holders: metaExtra.holders === true,
       });
       return m;
     } catch {
@@ -2048,14 +2363,21 @@ async function resolveMarketPkg(RPC, id, preferredPkg, sources) {
   throw new Error(`Market ${id} not found on any pad`);
 }
 
-async function bankUgnot(RPC, address) {
+async function bankUgnot(RPC, address, timeoutMs) {
+  let signal;
+  let timer;
+  if (timeoutMs > 0) {
+    const ctrl = new AbortController();
+    signal = ctrl.signal;
+    timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  }
   try {
     const result = await rpc(RPC, "abci_query", {
       path: `bank/balances/${address}`,
       data: "",
       height: "0",
       prove: false,
-    });
+    }, signal);
     const rb = result?.response?.ResponseBase;
     if (rb?.Error || !rb?.Data) return 0;
     const text = b64utf8(rb.Data);
@@ -2073,6 +2395,8 @@ async function bankUgnot(RPC, address) {
     return 0;
   } catch {
     return 0;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -2223,6 +2547,7 @@ async function getCreatorDashboard(RPC, sources, SIGNER_ADDR, address) {
     totalRaised += m.raised || 0;
     if (m.status === 1) graduated += 1;
   }
+  const creatorBadges = evaluateCreatorBadges(mine);
   return {
     address,
     launches: mine,
@@ -2232,27 +2557,46 @@ async function getCreatorDashboard(RPC, sources, SIGNER_ADDR, address) {
     totalRaised,
     totalRaisedGnot: totalRaised / UGNOT_PER_GNOT,
     graduated,
+    badges: creatorBadges,
+    wearBadges: wearBadges(creatorBadges, WEAR_LIMIT),
     canSign: false,
     params,
   };
 }
 
+/**
+ * JSON response helper.
+ * When maxAge > 0 and not private: set browser Cache-Control + Netlify durable CDN
+ * so edge can serve without invoking the Function (credit saver).
+ */
 function json(statusCode, body, opts = {}) {
   const maxAge = Number(opts.maxAge) || 0;
   const scope = opts.private ? "private" : "public";
+  const swr = Math.max(maxAge * 2, maxAge + 30);
+  const headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, X-Gnomi-Network",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  };
+  if (maxAge > 0 && !opts.private) {
+    headers["Cache-Control"] =
+      `${scope}, max-age=${Math.min(maxAge, 30)}, s-maxage=${maxAge}, stale-while-revalidate=${swr}`;
+    // Netlify-specific: durable shared cache → fewer Function GB-hours
+    headers["Netlify-CDN-Cache-Control"] =
+      `public, durable, s-maxage=${maxAge}, stale-while-revalidate=${swr}`;
+    headers["Netlify-Vary"] =
+      opts.varyQuery || "query=network|lite|refresh|nocache|chain";
+    if (opts.cacheTag) {
+      headers["Netlify-Cache-Tag"] = String(opts.cacheTag);
+    }
+  } else {
+    headers["Cache-Control"] = "no-store";
+  }
+  Object.assign(headers, opts.headers || {});
   return {
     statusCode,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Cache-Control":
-        maxAge > 0
-          ? `${scope}, max-age=${maxAge}, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 2}`
-          : "no-store",
-      ...(opts.headers || {}),
-    },
+    headers,
     body: typeof body === "string" ? body : JSON.stringify(body),
   };
 }
@@ -2733,7 +3077,8 @@ async function getOps(RPC, cfg, hubInfo, padSources) {
         entry.count = Number(await qeval(RPC, path, `${path}.MetaCount()`)) || 0;
       } else if (kind === "points") {
         entry.ok = true;
-        entry.userCount = Number(await qeval(RPC, path, `${path}.UserCount()`)) || 0;
+        // UserCount walks every points row and can exceed the function limit.
+        entry.userCount = Number(await qeval(RPC, path, `${path}.UserCount()`, 4000)) || 0;
       } else if (kind === "hub") {
         entry.ok = true;
         try {
@@ -2839,11 +3184,11 @@ async function getOps(RPC, cfg, hubInfo, padSources) {
  * Read FeeInfo / AdminInfo for one pad package.
  * @returns {{ pkg, label, protocolAddr, pending, paid, reserved, padAddr, launchCount, pointsEnabled, inited } | null}
  */
-async function readPadFeeSnapshot(RPC, pkgPath) {
+async function readPadFeeSnapshot(RPC, pkgPath, timeoutMs) {
   if (!pkgPath) return null;
   const label = String(pkgPath).split("/").pop() || pkgPath;
   try {
-    const raw = String(await qeval(RPC, pkgPath, `${pkgPath}.AdminInfo()`) || "");
+    const raw = String(await qeval(RPC, pkgPath, `${pkgPath}.AdminInfo()`, timeoutMs) || "");
     const p = raw.split("|");
     if (p.length >= 3) {
       return {
@@ -2859,11 +3204,13 @@ async function readPadFeeSnapshot(RPC, pkgPath) {
         padAddr: p[7] || "",
       };
     }
-  } catch {
-    /* try FeeInfo fallback */
+  } catch (e) {
+    const name = String(e?.name || "");
+    const msg = String(e?.message || e || "");
+    if (timeoutMs > 0 && (name === "AbortError" || /abort/i.test(msg))) return null;
   }
   try {
-    const fi = String(await qeval(RPC, pkgPath, `${pkgPath}.FeeInfo()`) || "");
+    const fi = String(await qeval(RPC, pkgPath, `${pkgPath}.FeeInfo()`, timeoutMs) || "");
     const fp = fi.split("|");
     if (fp.length >= 2) {
       return {
@@ -2888,14 +3235,39 @@ async function readPadFeeSnapshot(RPC, pkgPath) {
 /**
  * Admin dashboard (platform treasury). Caller must check wallet === protocolAddr
  * or SIGNER_ADDR on the client; this endpoint is public read-only.
+ * Market counts come from LaunchInfo only. Trade history and the daily
+ * revenue scan are not part of this response.
  */
-async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
-  const ops = await getOps(RPC, cfg, hubInfo, padSources);
-  const { markets, params, protocolFees, protocolFeesPaid, protocolAddr } =
-    await getMarketsOne(RPC, PKG, { sourceKey: "pad", active: true, legacy: false });
+function paramsFromInfoRaw(raw) {
+  const p = String(raw || "").split("|");
+  const totalSupply = Number(p[0]);
+  const graduation = Number(p[3]);
+  if (!Number.isFinite(totalSupply) || !Number.isFinite(graduation)) return null;
+  const createBond = Number(p[5]);
+  let listFeeGns = Number(p[6]);
+  if (!Number.isFinite(listFeeGns) || listFeeGns < 0) listFeeGns = 0;
+  const bond = Number.isFinite(createBond) ? createBond : 0;
+  return {
+    totalSupply,
+    curveSupply: Number(p[1]) || 0,
+    poolSeed: Number(p[2]) || 0,
+    graduation,
+    graduationGnot: graduation / UGNOT_PER_GNOT,
+    feeBps: Number(p[4]) || 120,
+    createBond: bond,
+    createBondGnot: bond / UGNOT_PER_GNOT,
+    listFeeGns,
+    listFeeGnsUnits: listFeeGns / 1e6,
+    ugnotPerGnot: UGNOT_PER_GNOT,
+  };
+}
 
-  // Active pad snapshot + fees across discovered pads and recent versioned pads
-  // (hub often only registers legacy_padv3–6; padv8–11 still hold claimable fees).
+async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
+  // Two RPC rounds, each call aborted at 9s. The old path ran Params, ListIDs,
+  // PadAddress, LaunchInfo, ProtocolFees, and FeeInfo one after another, then
+  // balances, and Netlify killed the function at ~30s.
+  const stepMs = 9000;
+  const started = Date.now();
   const feePkgs = [];
   const seen = new Set();
   function addFeePkg(p) {
@@ -2905,21 +3277,32 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
   }
   addFeePkg(PKG);
   for (const s of padSources || []) addFeePkg(s.pkg);
-  const addrMatch = String(PKG).match(/gno\.land\/r\/(g1[a-z0-9]+)\/gnomemepad\//i);
-  const feeAddr = addrMatch?.[1] || DEFAULT_ADDR;
-  for (let v = 8; v <= 20; v++) {
-    addFeePkg(`gno.land/r/${feeAddr}/gnomemepad/padv${v}`);
-  }
 
-  const feeSnaps = (
-    await Promise.all(feePkgs.map((p) => readPadFeeSnapshot(RPC, p)))
-  ).filter(Boolean);
+  const [paramsRaw, idsRaw, feeSnapsRaw] = await Promise.all([
+    qeval(RPC, PKG, `${PKG}.ParamsInfo()`, stepMs).catch(() => ""),
+    qeval(RPC, PKG, `${PKG}.ListIDs()`, stepMs).catch(() => ""),
+    Promise.all(feePkgs.map((p) => readPadFeeSnapshot(RPC, p, stepMs))),
+  ]);
+  const params = paramsFromInfoRaw(paramsRaw) || {
+    totalSupply: 1e9,
+    curveSupply: 8e8,
+    poolSeed: 2e8,
+    graduation: 10_000_000_000,
+    graduationGnot: 10_000,
+    feeBps: 120,
+    createBond: 1e6,
+    createBondGnot: 1,
+    listFeeGns: 0,
+    listFeeGnsUnits: 0,
+    ugnotPerGnot: UGNOT_PER_GNOT,
+  };
+  const feeSnaps = feeSnapsRaw.filter(Boolean);
 
   const activeSnap =
     feeSnaps.find((s) => s.pkg === PKG) || feeSnaps[0] || null;
 
-  let pending = activeSnap?.pending ?? protocolFees ?? 0;
-  let paid = activeSnap?.paid ?? protocolFeesPaid ?? 0;
+  let pending = activeSnap?.pending ?? 0;
+  let paid = activeSnap?.paid ?? 0;
   // Aggregate across pads so deploy wallet sees full protocol revenue.
   let pendingAll = 0;
   let paidAll = 0;
@@ -2948,19 +3331,49 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
       return (b.pending || 0) - (a.pending || 0);
     });
 
-  const proto =
-    activeSnap?.protocolAddr ||
-    protocolAddr ||
-    "";
+  const proto = activeSnap?.protocolAddr || "";
   const padAddr = activeSnap?.padAddr || "";
-  let padBankUgnot = 0;
-  if (padAddr && /^g1[a-z0-9]+$/i.test(padAddr)) {
-    try {
-      padBankUgnot = await bankUgnot(RPC, padAddr);
-    } catch {
-      /* ignore */
-    }
-  }
+  const padAddrOk = /^g1[a-z0-9]+$/i.test(padAddr);
+  const ids = String(idsRaw || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 64);
+  const [launchRows, bank, wrapped, gnsBal] = await Promise.all([
+    mapPool(ids, 12, async (id) => {
+      try {
+        const info = await qeval(
+          RPC,
+          PKG,
+          `${PKG}.LaunchInfo(${JSON.stringify(id)})`,
+          stepMs,
+        );
+        return parseLaunchInfo(String(info), params.totalSupply, params.graduation);
+      } catch {
+        return null;
+      }
+    }),
+    padAddrOk ? bankUgnot(RPC, padAddr, stepMs) : Promise.resolve(0),
+    padAddrOk
+      ? qeval(
+          RPC,
+          "gno.land/r/gnoland/wugnot",
+          `gno.land/r/gnoland/wugnot.BalanceOf(${JSON.stringify(padAddr)})`,
+          stepMs,
+        ).catch(() => 0)
+      : Promise.resolve(0),
+    padAddrOk
+      ? qeval(
+          RPC,
+          "gno.land/r/gnoswap/gns",
+          `gno.land/r/gnoswap/gns.BalanceOf(${JSON.stringify(padAddr)})`,
+          stepMs,
+        ).catch(() => 0)
+      : Promise.resolve(0),
+  ]);
+  const padBankUgnot = Number(bank) || 0;
+  const wugnot = Number(wrapped) || 0;
+  const gns = Number(gnsBal) || 0;
   const reserved = activeSnap?.reserved ?? 0;
   const freeUgnot = Math.max(0, padBankUgnot - reserved);
 
@@ -2969,8 +3382,10 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
   let curve = 0;
   let totalRaised = 0;
   let totalCreatorFees = 0;
-  for (const m of markets || []) {
-    if (m.error) continue;
+  let marketTotal = 0;
+  for (const m of launchRows || []) {
+    if (!m) continue;
+    marketTotal += 1;
     if (m.status === 1) graduated += 1;
     else curve += 1;
     if (m.gnoswapListed) listed += 1;
@@ -3018,7 +3433,7 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
       freeGnot: freeUgnot / UGNOT_PER_GNOT,
     },
     markets: {
-      total: (markets || []).filter((m) => !m.error).length,
+      total: marketTotal,
       curve,
       graduated,
       gnoswapListed: listed,
@@ -3028,7 +3443,27 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
       totalCreatorFeesGnot: totalCreatorFees / UGNOT_PER_GNOT,
     },
     params: params || null,
-    ops,
+    ops: {
+      ok: true,
+      inventory: {
+        pkg: PKG,
+        padLabel: String(PKG).split("/").pop(),
+        padAddr,
+        wugnot,
+        wugnotGnot: wugnot / UGNOT_PER_GNOT,
+        gns,
+        gnsUnits: gns / 1e6,
+        bankUgnot: padBankUgnot,
+        bankGnot: padBankUgnot / UGNOT_PER_GNOT,
+        raiseNeedUgnot: Number(params?.graduation) || 10_000_000_000,
+        raiseNeedGnot: (Number(params?.graduation) || 10_000_000_000) / UGNOT_PER_GNOT,
+        feeGnsNeed: 100_000_000,
+        lpReady: wugnot >= (Number(params?.graduation) || 10_000_000_000),
+        feeReady: gns >= 100_000_000,
+        listReady:
+          wugnot >= (Number(params?.graduation) || 10_000_000_000) && gns >= 100_000_000,
+      },
+    },
     actions: {
       claimProtocol: "ClaimProtocolFees",
       pushProtocol: "PushProtocolFees",
@@ -3043,6 +3478,7 @@ async function getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG) {
       "CreatePool fee is fixed ~100 GNS (GNOT cost moves with market). Prefer ≥100 GNS on pad.",
       "WithdrawProtocolUgnot only free balance (above reserved markets/fees).",
     ],
+    buildMs: Date.now() - started,
   };
 }
 
@@ -3275,6 +3711,7 @@ export async function buildNetworkMarketsPayload(networkId, opts = {}) {
     network: net,
     buildMs,
     snapshot: false,
+    lite: !!lite,
   };
   if (opts.writeSnapshot) {
     await writeMarketsSnapshot(net, payload, buildMs);
@@ -3431,18 +3868,139 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         defaultNetwork: DEFAULT_NETWORK_ID,
         selected: networkId,
         networks: listNetworks(),
+        gnoswapPresent: false, // updated after mainnet Gnoswap deploy
       },
       { maxAge: 60 },
     );
   }
 
-  if (cfg.comingSoon || !cfg.enabled || !cfg.PKG || !cfg.RPC) {
+  // Badge catalog works even when pad is not deployed yet.
+  if (
+    method === "GET" &&
+    (p === "/api/badges" || p === "/api/badges/") &&
+    !(q.get("address") || "").trim()
+  ) {
+    return json(
+      200,
+      { ok: true, catalog: listCatalogPublic(), wearLimit: WEAR_LIMIT },
+      { maxAge: 120 },
+    );
+  }
+
+  // List venues — offline fallback so Create DEX picker works before pad deploy.
+  if (method === "GET" && (p === "/api/list-venues" || p === "/api/list-venues/")) {
+    if (!cfg.padReady || !cfg.PKG) {
+      return json(200, listVenuesFallback(networkId, cfg.PKG || null), {
+        maxAge: 30,
+      });
+    }
+    // pad ready → fall through to live handler below
+  }
+
+  // Chain live but pad not deployed yet — allow /api/health RPC probe only.
+  if (cfg.comingSoon || !cfg.enabled || !cfg.RPC) {
     return json(503, {
       ok: false,
       error: `${cfg.label || networkId} is not available yet`,
       network: networkId,
       comingSoon: true,
     });
+  }
+
+  if (!cfg.padReady || !cfg.PKG) {
+    if (method === "GET" && p === "/api/health") {
+      const hKey = `health:pending:${networkId}:${cfg.RPC}`;
+      if (!noCache) {
+        const hit = cacheGet(hKey);
+        if (hit) {
+          return json(200, { ...hit, cached: true }, {
+            maxAge: 20,
+            cacheTag: `health-${networkId}`,
+          });
+        }
+      }
+      try {
+        const st = await rpc(cfg.RPC, "status", {});
+        let fx = { gnotUsd: 0, source: "none", updatedAt: null };
+        try {
+          fx = await fetchGnoswapFx();
+        } catch {
+          /* health stays ok without FX */
+        }
+        const body = {
+          ok: true,
+          network: networkId,
+          networkLabel: cfg.label,
+          rpc: cfg.RPC,
+          pkg: cfg.PKG || null,
+          hub: cfg.HUB || null,
+          profile: cfg.PROFILE || null,
+          meta: cfg.META || null,
+          points: cfg.POINTS || null,
+          bond: cfg.BOND || null,
+          modules: {},
+          pads: [],
+          networks: listNetworks(),
+          height: String(st?.sync_info?.latest_block_height || ""),
+          chainId: st?.node_info?.network || cfg.CHAIN_ID,
+          gnoweb: cfg.GNOWEB || null,
+          faucet: cfg.FAUCET || null,
+          hosting: "netlify",
+          signing: false,
+          padReady: false,
+          padPending: true,
+          hint: "Mainnet RPC is live. Pad realms not deployed yet — awaiting human yes deploy.",
+          gnotUsd: Number(fx?.gnotUsd) > 0 ? Number(fx.gnotUsd) : 0,
+          fxSource: fx?.source || "none",
+          fxUpdatedAt: fx?.updatedAt || null,
+        };
+        cacheSet(hKey, body, 20_000);
+        return json(200, body, { maxAge: 20, cacheTag: `health-${networkId}` });
+      } catch (e) {
+        return json(503, {
+          ok: false,
+          network: networkId,
+          padReady: false,
+          padPending: true,
+          error: String(e.message || e),
+        });
+      }
+    }
+    return json(503, {
+      ok: false,
+      error: "pad_pending_deploy",
+      hint: `${cfg.label} chain is up; gnomemepad packages not live yet`,
+      network: networkId,
+      chainId: cfg.CHAIN_ID,
+      rpc: cfg.RPC,
+      intendedPkg: cfg.PKG || null,
+      intendedHub: cfg.HUB || null,
+      padReady: false,
+      padPending: true,
+    });
+  }
+
+  if (method === "GET" && p === "/api/admin") {
+    if (q.get("ping") === "1") {
+      return json(200, { ok: true, ping: "admin-slim-4" });
+    }
+    const adminPkg = cfg.PKG;
+    const aKey = `admin:${adminPkg}`;
+    if (!noCache) {
+      const hit = cacheGet(aKey);
+      if (hit) return json(200, { ...hit, cached: true }, { maxAge: 30 });
+    }
+    try {
+      const admin = await getAdminDashboard(RPC, cfg, null, null, adminPkg);
+      cacheSet(aKey, admin, 60_000);
+      return json(200, admin, { maxAge: 30 });
+    } catch (e) {
+      return json(200, {
+        ok: false,
+        error: String(e.message || e),
+        pkg: adminPkg,
+      });
+    }
   }
 
   // Resolve active pad from hub (modular upgrades) — cached per network
@@ -3460,9 +4018,44 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
 
   try {
     if (method === "GET" && p === "/api/health") {
+      const hKey = `health:${networkId}:${PKG || "none"}`;
+      if (!noCache) {
+        const hit = cacheGet(hKey);
+        if (hit) {
+          return json(200, { ...hit, cached: true }, {
+            maxAge: 20,
+            cacheTag: `health-${networkId}`,
+          });
+        }
+      }
       try {
         const st = await rpc(RPC, "status", {});
-        return json(200, {
+        // dualDexPad: PreferredVenueOf present (venue-aware Create fee / SetPreferredVenue).
+        // Probe id "0" panics "pad: unknown launch" — that means the selector EXISTS.
+        // Only treat VM "name … not declared" / undeclared as missing.
+        let dualDexPad = false;
+        if (PKG) {
+          try {
+            await qeval(RPC, PKG, `${PKG}.PreferredVenueOf("0")`);
+            dualDexPad = true;
+          } catch (e) {
+            const msg = String(e?.message || e || "");
+            if (/\bpad:\s/i.test(msg) || /unknown launch/i.test(msg)) {
+              dualDexPad = true;
+            } else {
+              dualDexPad = !/undeclared|Name Error|name \w+ not declared|does not exist|no such (function|method|name)|unknown selector/i.test(
+                msg,
+              );
+            }
+          }
+        }
+        let fx = { gnotUsd: 0, source: "none", updatedAt: null };
+        try {
+          fx = await fetchGnoswapFx();
+        } catch {
+          /* health stays ok without FX */
+        }
+        const body = {
           ok: true,
           network: networkId,
           networkLabel: cfg.label,
@@ -3488,7 +4081,14 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           faucet: cfg.FAUCET || null,
           hosting: "netlify",
           signing: false,
-        });
+          padReady: true,
+          dualDexPad,
+          gnotUsd: Number(fx?.gnotUsd) > 0 ? Number(fx.gnotUsd) : 0,
+          fxSource: fx?.source || "none",
+          fxUpdatedAt: fx?.updatedAt || null,
+        };
+        cacheSet(hKey, body, 20_000);
+        return json(200, body, { maxAge: 20, cacheTag: `health-${networkId}` });
       } catch (e) {
         return json(200, {
           ok: false,
@@ -3522,11 +4122,11 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       const aKey = `activity:${padSources.map((s) => s.pkg).join(",")}:${limit}`;
       if (!noCache) {
         const hit = cacheGet(aKey);
-        if (hit) return json(200, { ...hit, cached: true }, { maxAge: 12 });
+        if (hit) return json(200, { ...hit, cached: true }, { maxAge: 20 });
       }
       const act = await getActivity(RPC, padSources, limit);
-      cacheSet(aKey, act, 15_000);
-      return json(200, act, { maxAge: 12 });
+      cacheSet(aKey, act, 20_000);
+      return json(200, act, { maxAge: 20, cacheTag: `activity-${networkId}` });
     }
 
     if (method === "GET" && p === "/api/leaderboard") {
@@ -3549,18 +4149,6 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       const ops = await getOps(RPC, cfg, hubInfo, padSources);
       cacheSet(oKey, ops, 25_000);
       return json(200, ops, { maxAge: 20 });
-    }
-
-    if (method === "GET" && p === "/api/admin") {
-      // Public read; UI gates by wallet === protocolAddr | signerAddr
-      const aKey = `admin:${PKG}`;
-      if (!noCache) {
-        const hit = cacheGet(aKey);
-        if (hit) return json(200, { ...hit, cached: true }, { maxAge: 12 });
-      }
-      const admin = await getAdminDashboard(RPC, cfg, hubInfo, padSources, PKG);
-      cacheSet(aKey, admin, 15_000);
-      return json(200, admin, { maxAge: 12 });
     }
 
     // Gnoswap list funding wizard: ListNeed(id) → poolU|wHave|wNeed|gnsHave|gnsNeed|feeGns|feeWugnotBudget|padAddr
@@ -3634,9 +4222,13 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     }
 
     // Create preflight (padv20+): bond ugnot + GNS list fee + free GNS on pad + padAddr
+    // ?venue=zdex|gnoswap → ListFeeRequiredFor when dual-DEX SOURCE cut is live
     if (method === "GET" && p === "/api/create-need") {
       let padPkg = String(q.get("pkg") || PKG || "").trim();
       if (!padPkg.startsWith("gno.land/")) padPkg = PKG;
+      const venueQ = String(q.get("venue") || "")
+        .trim()
+        .toLowerCase();
       const params = await getParams(RPC, padPkg);
       let padAddr = "";
       try {
@@ -3648,11 +4240,31 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         /* ignore */
       }
       let listFeeGns = Number(params.listFeeGns) || 0;
-      try {
-        const lf = Number(await qeval(RPC, padPkg, `${padPkg}.ListFeeRequired()`));
-        if (Number.isFinite(lf) && lf > 0) listFeeGns = lf;
-      } catch {
-        /* older pad */
+      let feeVenue = "";
+      if (venueQ) {
+        try {
+          const lf = Number(
+            await qeval(
+              RPC,
+              padPkg,
+              `${padPkg}.ListFeeRequiredFor(${JSON.stringify(venueQ)})`,
+            ),
+          );
+          if (Number.isFinite(lf) && lf >= 0) {
+            listFeeGns = lf;
+            feeVenue = venueQ;
+          }
+        } catch {
+          /* older pad — fall through to ListFeeRequired */
+        }
+      }
+      if (!feeVenue) {
+        try {
+          const lf = Number(await qeval(RPC, padPkg, `${padPkg}.ListFeeRequired()`));
+          if (Number.isFinite(lf) && lf > 0) listFeeGns = lf;
+        } catch {
+          /* older pad */
+        }
       }
       let freeGns = null;
       let haveGns = null;
@@ -3697,6 +4309,7 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         bondGnot: bondUgnot / UGNOT_PER_GNOT,
         listFeeGns,
         listFeeGnsUnits: listFeeGns / 1e6,
+        feeVenue: feeVenue || null,
         freeGns: freeGns != null ? freeGns : 0,
         freeGnsUnits: (Number(freeGns) || 0) / 1e6,
         haveGns: haveGns != null ? haveGns : 0,
@@ -3712,14 +4325,134 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     if (method === "GET" && (p === "/api/list-venues" || p === "/api/list-venues/")) {
       let padPkg = String(q.get("pkg") || PKG || "").trim();
       if (!padPkg.startsWith("gno.land/")) padPkg = PKG;
+      const venuesFallback = listVenuesFallback(networkId, padPkg || null);
+      /**
+       * Probe upcoming dual-DEX pad APIs (protocol cut in parallel).
+       * Missing selector → false; launch-not-found / other panic → function exists.
+       */
+      async function probePadFn(fn, expr) {
+        try {
+          await qeval(RPC, padPkg, expr, 6000);
+          return true;
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (e?.name === "AbortError" || /abort/i.test(msg)) return false;
+          // Realm panics ("pad: unknown launch", must be EOA, …) ⇒ selector exists.
+          if (/\bpad:\s/i.test(msg) || /unknown launch/i.test(msg)) {
+            return true;
+          }
+          // Only VM missing-symbol errors ⇒ false.
+          if (
+            /undeclared|Name Error|name \w+ not declared|does not exist|no such (function|method|name)|unknown selector/i.test(
+              msg,
+            )
+          ) {
+            return false;
+          }
+          // Other runtime errors still mean the symbol exists.
+          return true;
+        }
+      }
+      async function probeDualDexFlags() {
+        const [
+          hasPreferredVenue,
+          hasReleaseListSeed,
+          hasConfirmZdexList,
+          hasListSeedReleasedOf,
+        ] = await Promise.all([
+          probePadFn("PreferredVenueOf", `${padPkg}.PreferredVenueOf("0")`),
+          probePadFn("ReleaseListSeed", `${padPkg}.ReleaseListSeed("0")`),
+          probePadFn("ConfirmZdexList", `${padPkg}.ConfirmZdexList("0","ugnot|X")`),
+          probePadFn("ListSeedReleasedOf", `${padPkg}.ListSeedReleasedOf("0")`),
+        ]);
+        // PreferredVenue cut (= CreateWithVenue in SOURCE) ⇒ venue-aware Create fee.
+        // Release/Confirm/ListSeedReleasedOf may ship same cut — UI stubs try/catch.
+        return {
+          dualDexPad: !!hasPreferredVenue,
+          hasPreferredVenue,
+          hasReleaseListSeed,
+          hasConfirmZdexList,
+          hasListSeedReleasedOf,
+          funcs: {
+            PreferredVenueOf: hasPreferredVenue,
+            SetPreferredVenue: hasPreferredVenue,
+            CreateWithVenue: hasPreferredVenue,
+            ReleaseListSeed: hasReleaseListSeed,
+            ConfirmZdexList: hasConfirmZdexList,
+            ListSeedReleasedOf: hasListSeedReleasedOf,
+          },
+        };
+      }
+      // Pearl: expose EOA CreatePool zdex (padv23 has no VenueZdex adapter).
+      function withPearlZdexGap(venues, defaultVenue, dual = {}) {
+        const list = Array.isArray(venues) ? venues.slice() : [];
+        const dualReady = dual.dualDexPad === true || dual.hasPreferredVenue === true;
+        const pearlZdex = {
+          id: "zdex",
+          label: "zdex",
+          enabled: networkId === "pearl" || dualReady,
+          feeAssetHint: "ugnot",
+          note: dualReady
+            ? "EOA CreatePool on g1n4pl5…/zdex/v3 after ReleaseListSeed · ConfirmZdexList"
+            : networkId === "pearl"
+              ? "EOA CreatePool on g1n4pl5…/zdex/v3 (AMM …/amm/v1) — padv23 has no VenueZdex; wallet must hold PoolUgnot+PoolToken"
+              : "Not wired on this pad — EOA zdex CreatePool if hub is up",
+          uiGap: !dualReady,
+          eoaList: true,
+        };
+        const zi = list.findIndex((v) => String(v.id).toLowerCase() === "zdex");
+        if (networkId === "pearl" || networkId === "sapphire" || dualReady) {
+          if (zi < 0) list.push(pearlZdex);
+          else {
+            const onChainZdex = list[zi].onChain === true && list[zi].enabled === true;
+            list[zi] = {
+              ...list[zi],
+              ...pearlZdex,
+              onChain: list[zi].onChain,
+              // On-chain VenueZdex registration clears uiGap even if Release not probed yet
+              uiGap: dualReady || onChainZdex ? false : pearlZdex.uiGap,
+              enabled:
+                networkId === "pearl" || dualReady || onChainZdex
+                  ? true
+                  : list[zi].enabled === true
+                    ? true
+                    : false,
+            };
+          }
+        }
+        const chainDefault =
+          networkId === "pearl" || networkId === "sapphire" ? "gnoswap" : "zdex";
+        return {
+          venues: list,
+          defaultVenue: defaultVenue || chainDefault,
+        };
+      }
+      if (!cfg.padReady || !padPkg) {
+        return json(
+          200,
+          {
+            ...venuesFallback,
+            dualDexPad: false,
+            hasPreferredVenue: false,
+            hasReleaseListSeed: false,
+            hasConfirmZdexList: false,
+            hasListSeedReleasedOf: false,
+          },
+          { maxAge: 30 },
+        );
+      }
+      const chainDefaultHint =
+        networkId === "pearl" || networkId === "sapphire" ? "gnoswap" : "zdex";
       try {
         const raw = String(await qeval(RPC, padPkg, `${padPkg}.ListVenues()`) || "");
-        const defaultVenue = String(
-          await qeval(RPC, padPkg, `${padPkg}.DefaultListVenue()`).catch(() => "gnoswap"),
+        const chainDefault = String(
+          await qeval(RPC, padPkg, `${padPkg}.DefaultListVenue()`).catch(
+            () => chainDefaultHint,
+          ),
         )
           .replace(/^"|"$/g, "")
-          .trim() || "gnoswap";
-        const venues = String(raw)
+          .trim() || chainDefaultHint;
+        const chainVenues = String(raw)
           .replace(/^"|"$/g, "")
           .split("\n")
           .map((line) => line.trim())
@@ -3731,27 +4464,71 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
               label: label || id || "",
               enabled: en === "1",
               feeAssetHint: feeHint || "",
+              onChain: true,
             };
           })
           .filter((v) => v.id);
+        const dualFlags = await probeDualDexFlags();
+        const enriched = withPearlZdexGap(chainVenues, chainDefault, dualFlags);
+        const zdexHub =
+          networkId === "local"
+            ? "gno.land/r/zdex/v2"
+            : networkId === "pearl"
+              ? "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/zdex/v3"
+              : networkId === "mainnet"
+                ? "gno.land/r/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/zdex/v1"
+                : null;
+        const zdexAmm =
+          networkId === "local"
+            ? "gno.land/p/zdex/amm/v1"
+            : networkId === "pearl" || networkId === "mainnet"
+              ? "gno.land/p/g1n4pl5uc4yt5r96m9w6fmdznx3x0jyg8l6arhmt/zdex/amm/v1"
+              : null;
+        let zdexRealmAddr = null;
+        if (zdexHub) {
+          try {
+            zdexRealmAddr = String(await qeval(RPC, zdexHub, `${zdexHub}.RealmAddr()`) || "")
+              .replace(/^"|"$/g, "")
+              .replace(/^\(/, "")
+              .split(/\s|\./)[0]
+              .trim();
+            if (!/^g1[a-z0-9]+$/i.test(zdexRealmAddr || "")) zdexRealmAddr = null;
+          } catch {
+            zdexRealmAddr = null;
+          }
+        }
+        // Pearl hub g1n4pl5…/zdex/v3 — known RealmAddr if qeval parse fails
+        if (!zdexRealmAddr && networkId === "pearl") {
+          zdexRealmAddr = "g1dme66padjqu5smytfcl2lq0ame7zymducpdrdu";
+        }
+        // Local gnodev zdex/v2 RealmAddr — fallback if qeval parse fails
+        if (!zdexRealmAddr && networkId === "local") {
+          zdexRealmAddr = "g1kz50j3x9jepk55unw8rrehxmcddpys48xpcj92";
+        }
         return json(
           200,
           {
             ok: true,
             pkg: padPkg,
-            defaultVenue,
-            venues,
+            network: networkId,
             raw: String(raw).replace(/^"|"$/g, ""),
+            chainDefault,
+            ...enriched,
+            ...dualFlags,
+            zdexHub,
+            zdexAmm,
+            zdexRealmAddr,
           },
           { maxAge: 30 },
         );
       } catch (e) {
-        // Older pads: only Gnoswap exists
         return json(200, {
-          ok: true,
-          pkg: padPkg,
-          defaultVenue: "gnoswap",
-          venues: [{ id: "gnoswap", label: "Gnoswap", enabled: true, feeAssetHint: "GNS" }],
+          ...venuesFallback,
+          dualDexPad: false,
+          hasPreferredVenue: false,
+          hasReleaseListSeed: false,
+          hasConfirmZdexList: false,
+          hasListSeedReleasedOf: false,
           legacy: true,
           error: String(e.message || e),
         });
@@ -4302,33 +5079,55 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     if (method === "GET" && (p === "/api/markets" || p === "/api/markets-lite")) {
       const lite = p === "/api/markets-lite" || q.get("lite") === "1";
       const wantSnap = !noCache && q.get("nosnapshot") !== "1";
-      // Speedup #3: serve fresh snapshot when available
+      // Speedup #3: serve snapshot (fresh or soft-stale) before live qeval
       if (wantSnap) {
         const snap = await readMarketsSnapshot(networkId);
-        if (snapshotFresh(snap) && snap.data) {
+        const usable = snapshotFresh(snap) || snapshotUsable(snap);
+        if (usable && snap.data) {
           const data = {
             ...snap.data,
             cached: true,
             snapshot: true,
             snapshotAgeMs: Date.now() - snap.at,
+            snapshotStale: !snapshotFresh(snap),
             lite: snap.data.lite ?? lite,
           };
           // If caller wants full enrich but snap is lite, fall through to live full
           if (!(lite === false && data.lite === true)) {
-            return json(200, data, { maxAge: 15 });
+            await decorateMarketsBadges(RPC, data);
+            return json(200, data, {
+              maxAge: snapshotFresh(snap) ? 20 : 12,
+              cacheTag: `markets-${networkId}`,
+            });
           }
         }
       }
       const mKey = `markets:${lite ? "lite:" : ""}${padSources.map((s) => s.pkg).join(",")}`;
       if (!noCache) {
         const hit = cacheGet(mKey);
-        if (hit) return json(200, { ...hit, cached: true, snapshot: false }, { maxAge: 15 });
+        if (hit) {
+          const out = { ...hit, markets: (hit.markets || []).map((m) => ({ ...m })), cached: true, snapshot: false };
+          await decorateMarketsBadges(RPC, out);
+          return json(200, out, {
+            maxAge: 20,
+            cacheTag: `markets-${networkId}`,
+          });
+        }
       }
       const t0 = Date.now();
-      const markets = await withUsdPricing(await getMarkets(RPC, padSources, { lite }));
+      const markets = await withUsdPricing(
+        await getMarkets(RPC, padSources, { lite, tradeStats: !lite }),
+      );
       const buildMs = Date.now() - t0;
-      const payload = { ...markets, network: networkId, buildMs, snapshot: false };
-      cacheSet(mKey, payload, 20_000);
+      const payload = {
+        ...markets,
+        network: networkId,
+        buildMs,
+        snapshot: false,
+        lite: !!lite,
+      };
+      await decorateMarketsBadges(RPC, payload);
+      cacheSet(mKey, payload, 25_000);
       // Keep snapshot warm for next callers (lite preferred for worker parity)
       if (lite) {
         try {
@@ -4337,7 +5136,106 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
           /* ignore */
         }
       }
-      return json(200, payload, { maxAge: 15 });
+      return json(200, payload, {
+        maxAge: 20,
+        cacheTag: `markets-${networkId}`,
+      });
+    }
+
+    // Achievement badges catalog + wallet evaluation (pools.xyz-inspired)
+    if (method === "GET" && (p === "/api/badges" || p === "/api/badges/")) {
+      const address = (q.get("address") || "").trim();
+      const catalog = listCatalogPublic();
+      if (!address) {
+        return json(200, { ok: true, catalog, wearLimit: WEAR_LIMIT }, { maxAge: 120 });
+      }
+      if (!/^g1[a-z0-9]{38,}$/i.test(address)) {
+        return json(400, { error: "invalid g1 address" });
+      }
+      const bKey = `badges:${networkId}:${address}`;
+      if (!noCache) {
+        const hit = cacheGet(bKey);
+        if (hit) return json(200, { ...hit, cached: true }, { maxAge: 20, private: true });
+      }
+      let creator = { launches: [], badges: [], wearBadges: [] };
+      let trader = { badges: [], wearBadges: [] };
+      let portfolio = null;
+      try {
+        creator = await getCreatorDashboard(RPC, padSources, SIGNER_ADDR, address);
+      } catch (e) {
+        creator = { launches: [], badges: [], error: String(e.message || e) };
+      }
+      try {
+        portfolio = await getPortfolio(RPC, padSources, SIGNER_ADDR, address);
+        const holds = Array.isArray(portfolio?.holdings) ? portfolio.holdings : [];
+        const valueGnot = holds.reduce(
+          (s, h) => s + (Number(h.valueGnotApprox) || Number(h.valueGnot) || 0),
+          0,
+        );
+        const traderBadges = evaluateTraderBadges({
+          holdings: holds.map((h) => ({
+            ...h,
+            balance: h.balance,
+            valueGnot: Number(h.valueGnotApprox) || Number(h.valueGnot) || 0,
+          })),
+          totalValueGnot: valueGnot,
+        });
+        trader = {
+          badges: traderBadges,
+          wearBadges: wearBadges(traderBadges, WEAR_LIMIT),
+          positions: Number(portfolio?.memePositions) || holds.length,
+          valueGnot,
+        };
+      } catch (e) {
+        trader = { badges: [], wearBadges: [], error: String(e.message || e) };
+      }
+      // Token badges for this creator's launches
+      const tip = await tipHeightCached(RPC);
+      const tokenBadgesById = {};
+      for (const m of creator.launches || []) {
+        attachTokenBadges([m], { tipHeight: tip });
+        if (m.id) tokenBadgesById[`${m.pkg || ""}|${m.id}`] = m.badges || [];
+      }
+      const out = {
+        ok: true,
+        address,
+        network: networkId,
+        wearLimit: WEAR_LIMIT,
+        catalog,
+        creator: {
+          count: creator.count || (creator.launches || []).length,
+          graduated: creator.graduated || 0,
+          badges: creator.badges || evaluateCreatorBadges(creator.launches || []),
+          wearBadges:
+            creator.wearBadges ||
+            wearBadges(creator.badges || evaluateCreatorBadges(creator.launches || []), WEAR_LIMIT),
+        },
+        trader,
+        tokens: tokenBadgesById,
+      };
+      cacheSet(bKey, out, 20_000);
+      return json(200, out, { maxAge: 20, private: true });
+    }
+
+    // Snapshot health (local verify + ops) — no chain calls
+    if (method === "GET" && (p === "/api/snapshot" || p === "/api/snapshot/")) {
+      const snap = await readMarketsSnapshot(networkId);
+      return json(
+        200,
+        {
+          network: networkId,
+          ttlMs: Number(process.env.MARKETS_SNAP_TTL_MS || 20_000),
+          present: !!snap,
+          fresh: snapshotFresh(snap),
+          usable: snapshotUsable(snap),
+          ageMs: snap ? Date.now() - snap.at : null,
+          buildMs: snap?.buildMs ?? null,
+          markets: snap?.data?.count ?? snap?.data?.markets?.length ?? null,
+          lite: snap?.data?.lite ?? null,
+          at: snap?.at ?? null,
+        },
+        { maxAge: 5 },
+      );
     }
 
     // ── Gnoswap token-resource (canonical registry + auto-PR) ──
@@ -4356,10 +5254,10 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         metaByKey = {};
       }
       const plan = await buildRegistrationPlan(list, metaByKey, {
-        chainId: CHAIN_ID || "sapphire-1",
+        chainId: CHAIN_ID || networkId || "sapphire-1",
       });
       const format = String(q.get("format") || "plan").toLowerCase();
-      if (format === "grc20" || format === "sapphire") {
+      if (format === "grc20" || format === "sapphire" || format === "gnoland-1") {
         return json(
           200,
           plan.items.map((x) => x.entry),
@@ -4463,7 +5361,7 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         );
       }
       const plan = await buildRegistrationPlan(filtered, metaByKey, {
-        chainId: CHAIN_ID || "sapphire-1",
+        chainId: CHAIN_ID || networkId || "sapphire-1",
       });
       const dry = q.get("dry") === "1" || q.get("dryRun") === "1";
       if (dry) {
@@ -4484,6 +5382,25 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
         },
         { maxAge: 30 },
       );
+    }
+
+    if (method === "GET" && p.startsWith("/api/market/") && p.endsWith("/holders")) {
+      const id = decodeURIComponent(
+        p.slice("/api/market/".length, -"/holders".length).replace(/\/$/, ""),
+      );
+      const pkgQ = (q.get("pkg") || "").trim();
+      const holdKey = `holders:${pkgQ || "auto"}:${id}`;
+      if (!noCache) {
+        const hit = cacheGet(holdKey);
+        if (hit) return json(200, hit, { maxAge: 15 });
+      }
+      const pkg =
+        pkgQ ||
+        (padSources.find((s) => s.active) || padSources[0] || {}).pkg ||
+        PKG;
+      const payload = await loadHolderBalances(RPC, pkg, id);
+      cacheSet(holdKey, payload, 20_000);
+      return json(200, payload, { maxAge: 15 });
     }
 
     if (method === "GET" && p.startsWith("/api/market/") && p.endsWith("/chart")) {
@@ -4910,10 +5827,12 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
     if (method === "GET" && p.startsWith("/api/market/")) {
       const id = decodeURIComponent(p.slice("/api/market/".length));
       const pkgQ = (q.get("pkg") || "").trim();
-      return json(
-        200,
-        await withUsdPricing(await resolveMarketPkg(RPC, id, pkgQ || null, padSources)),
+      const m = await withUsdPricing(
+        await resolveMarketPkg(RPC, id, pkgQ || null, padSources),
       );
+      const tip = await tipHeightCached(RPC);
+      if (m && !m.error) attachTokenBadges([m], { tipHeight: tip });
+      return json(200, m, { maxAge: 12 });
     }
 
     if (method === "GET" && p === "/api/render") {

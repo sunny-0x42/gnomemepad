@@ -41,6 +41,7 @@ import {
 } from "../lib/meta";
 import { isWatched } from "../lib/watchlist";
 import CreatorChip from "../components/CreatorChip";
+import { AchievementBadgeRow } from "../components/AchievementBadge";
 import {
   adenaPath,
   appendLocalGnoswapTrade,
@@ -51,10 +52,43 @@ import {
   gnoswapWugnotApproveKey,
   isGnoswapListed,
   loadLocalGnoswapTrades,
+  queueGnoswapLogoRequest,
   mergeTradeRows,
   toTradeRow,
   tokenIdFull,
 } from "../lib/gnoswap";
+import {
+  VENUE_GNOSWAP,
+  VENUE_ZDEX,
+  defaultPreferredVenue,
+  dexTradeUrl,
+  dualDexFromVenuesApi,
+  isListed,
+  loadTokenPreferredVenue,
+  normalizeVenue,
+  offlineVenuesPayload,
+  preferredOf,
+  storeLocalListVenue,
+  venueLabel,
+  venueOf,
+  venueSelectable,
+  zdexConfirmPending,
+} from "../lib/venues";
+import {
+  buildConfirmZdexListMsg,
+  buildCreatePoolMsgs,
+  buildReleaseListSeedMsg,
+  buildSwapExactInMsgs,
+  buildWithdrawWugnotMsg,
+  createPoolArgsFromLaunch,
+  zdexHubReady,
+  zdexListChecklist,
+  zdexPoolId,
+  zdexPoolIdOf,
+  zdexRealmAddr,
+  zdexTokenApproveKey,
+  ZDEX_MIN_LIST_UGNOT,
+} from "../lib/zdex";
 
 export default function Token() {
   const { id: rawId } = useParams();
@@ -72,8 +106,11 @@ export default function Token() {
     watchlist,
     toggleWatch,
     health,
+    networkId,
+    network,
   } = useApp();
   const { t } = usePrefs();
+  const netLabel = network?.label || "Mainnet";
 
   const [m, setM] = useState(null);
   const [meta, setMeta] = useState(null);
@@ -87,10 +124,11 @@ export default function Token() {
   const [infoTab, setInfoTab] = useState("trades"); // trades | holders | about
   const [poolQuote, setPoolQuote] = useState(null);
   const [listNeed, setListNeed] = useState(null);
-  const [listVenues, setListVenues] = useState([
-    { id: "gnoswap", label: "Gnoswap", enabled: true, feeAssetHint: "GNS" },
-  ]);
-  const [listVenue, setListVenue] = useState("gnoswap");
+  const offlineVenues = offlineVenuesPayload(networkId);
+  const [listVenues, setListVenues] = useState(offlineVenues.venues);
+  const [listVenue, setListVenue] = useState(
+    () => defaultPreferredVenue(offlineVenues, networkId),
+  );
   /** Local Gnoswap swaps (on-page) merged into Trades tab */
   const [dexTrades, setDexTrades] = useState([]);
   /** Mobile terminal pane: raise | chart | trade */
@@ -134,13 +172,50 @@ export default function Token() {
       const path = `/api/market/${encodeURIComponent(id)}${pkgQ ? `?pkg=${encodeURIComponent(pkgQ)}` : ""}`;
       const data = await api(path);
       setM(data);
+      const holdQs = new URLSearchParams();
+      if (data?.pkg) holdQs.set("pkg", data.pkg);
+      api(`/api/market/${encodeURIComponent(id)}/holders?${holdQs}`)
+        .then((h) => {
+          if (!h) return;
+          setM((prev) => {
+            if (!prev || prev.id !== data.id) return prev;
+            const supply = Number(prev.params?.totalSupply) || 1_000_000_000;
+            const px = Number(prev.spotGnot || prev.priceGnot) || 0;
+            const entry = Number(prev.openPriceGnot || prev.avgEntryGnot) || 0;
+            const holders = (h.holders || []).map((row) => {
+              const balance = Number(row.balance) || 0;
+              const valueGnot = px > 0 ? balance * px : 0;
+              const pnlGnot = entry > 0 && px > 0 ? valueGnot - balance * entry : null;
+              const pnlPct = entry > 0 && px > 0 ? ((px - entry) / entry) * 100 : null;
+              return {
+                ...row,
+                valueGnot,
+                pnlGnot,
+                pnlPct,
+                pctSupply: supply > 0 ? (balance / supply) * 100 : 0,
+              };
+            });
+            return {
+              ...prev,
+              holders,
+              holdersActive: h.holdersActive || holders.length,
+              holdersCapped: !!h.holdersCapped,
+              holdersSource: h.holdersSource || null,
+              holdersStats: h.holdersStats || null,
+            };
+          });
+        })
+        .catch(() => {});
       // Meta for image/socials
       if (data?.pkg && data?.id) {
         fetchMetaOne(data.pkg, data.id).then(setMeta).catch(() => setMeta(null));
       }
       return data;
     } catch (e) {
-      setErr(e.message || String(e));
+      setM((prev) => {
+        if (!prev) setErr(e.message || String(e));
+        return prev;
+      });
       return null;
     }
   }, [id, pkgQ]);
@@ -152,8 +227,11 @@ export default function Token() {
 
     function scheduleNext() {
       if (cancelled) return;
-      // Fast 3s polling on visible tab for realtime Sapphire block updates (~2s), 15s when hidden
-      const delay = typeof document !== "undefined" && document.visibilityState === "visible" ? 3000 : 15000;
+      // Credit-aware poll: ~7s visible (blocks ~2s; CDN/SWR covers gaps), 30s when hidden
+      const delay =
+        typeof document !== "undefined" && document.visibilityState === "visible"
+          ? 7000
+          : 30000;
       timer = setTimeout(async () => {
         if (cancelled) return;
         await load();
@@ -200,36 +278,60 @@ export default function Token() {
     });
   }, [editingMeta, meta, m?.uri, m?.imageURI]);
 
-  // List venues (padv23+); fall back to Gnoswap-only on older pads
+  // List venues — include Pearl uiGap zdex (EOA CreatePool); prefer LS / chain pref
   useEffect(() => {
     if (!m?.pkg && !pkgQ) return undefined;
     let cancelled = false;
+    const venueQ = (sp.get("venue") || "").toLowerCase();
     api(`/api/list-venues?pkg=${encodeURIComponent(m?.pkg || pkgQ || "")}`)
       .then((res) => {
         if (cancelled || !res?.venues?.length) return;
         setListVenues(res.venues);
-        const def = String(res.defaultVenue || "gnoswap").toLowerCase();
-        const enabled = res.venues.filter((v) => v.enabled);
+        const hubOk = zdexHubReady(networkId, res);
+        const pickable = res.venues.filter(
+          (v) =>
+            venueSelectable(v) &&
+            (normalizeVenue(v.id) !== VENUE_ZDEX || hubOk),
+        );
+        let def = String(
+          res.defaultVenue || defaultPreferredVenue(res, networkId),
+        ).toLowerCase();
+        if (def === VENUE_ZDEX && !hubOk) def = VENUE_GNOSWAP;
+        const fromLs = loadTokenPreferredVenue(m?.pkg || pkgQ, m?.id || id);
+        let fromPref = String(m?.preferredVenue || fromLs || "").toLowerCase();
+        if (fromPref === VENUE_ZDEX && !hubOk) fromPref = "";
         const pick =
-          enabled.find((v) => v.id === def)?.id ||
-          enabled[0]?.id ||
-          "gnoswap";
+          (venueQ && pickable.find((v) => v.id === venueQ)?.id) ||
+          (fromPref && pickable.find((v) => v.id === fromPref)?.id) ||
+          pickable.find((v) => v.id === def)?.id ||
+          pickable[0]?.id ||
+          defaultPreferredVenue(null, networkId);
         setListVenue((prev) => {
-          if (enabled.some((v) => v.id === prev)) return prev;
-          return pick;
+          if (pickable.some((v) => v.id === prev)) return prev;
+          return pick === VENUE_ZDEX && !hubOk ? VENUE_GNOSWAP : pick;
         });
       })
       .catch(() => {
-        /* keep default gnoswap */
+        const offline = offlineVenuesPayload(networkId);
+        setListVenues(offline.venues);
+        const fromLs = loadTokenPreferredVenue(m?.pkg || pkgQ, m?.id || id);
+        const venueQ = (sp.get("venue") || "").toLowerCase();
+        const hubOk = zdexHubReady(networkId, offline);
+        let pick =
+          venueQ || fromLs || defaultPreferredVenue(offline, networkId);
+        if (String(pick).toLowerCase() === VENUE_ZDEX && !hubOk) {
+          pick = VENUE_GNOSWAP;
+        }
+        setListVenue(pick);
       });
     return () => {
       cancelled = true;
     };
-  }, [m?.pkg, pkgQ]);
+  }, [m?.pkg, m?.id, m?.preferredVenue, pkgQ, networkId, id, sp]);
 
-  // ListNeed checklist for graduated internal-CPMM markets (padv13+)
+  // ListNeed checklist for graduated markets (skip when already listed / zdex EOA)
   useEffect(() => {
-    if (!m?.id || m.status !== 1 || m.gnoswapListed) {
+    if (!m?.id || m.status !== 1 || isListed(m) || String(listVenue).toLowerCase() === "zdex") {
       setListNeed(null);
       return;
     }
@@ -247,7 +349,7 @@ export default function Token() {
     return () => {
       cancelled = true;
     };
-  }, [m?.id, m?.pkg, m?.status, m?.gnoswapListed, listVenue]);
+  }, [m?.id, m?.pkg, m?.status, m?.gnoswapListed, m?.listVenue, listVenue]);
 
   // Document title + basic share meta for SPA
   useEffect(() => {
@@ -257,7 +359,7 @@ export default function Token() {
     document.title = title;
     const desc =
       meta?.description ||
-      `${m.name} ($${m.symbol}) — ${pct}% to graduate on Gno Sapphire. Fair bonding curve.`;
+      `${m.name} ($${m.symbol}) — ${pct}% to graduate on Gno ${netLabel}. Fair bonding curve.`;
     let el = document.querySelector('meta[name="description"]');
     if (el) el.setAttribute("content", desc);
     let og = document.querySelector('meta[property="og:title"]');
@@ -271,11 +373,11 @@ export default function Token() {
     let ogImg = document.querySelector('meta[property="og:image"]');
     if (ogImg) ogImg.setAttribute("content", img);
     return () => {
-      document.title = "gnomi · Sapphire";
+      document.title = `gnomi · ${netLabel}`;
       let oImg = document.querySelector('meta[property="og:image"]');
       if (oImg) oImg.setAttribute("content", "/thumbnail.jpg");
     };
-  }, [m, meta]);
+  }, [m, meta, netLabel]);
 
   async function afterTrade() {
     // Show trades list so FOMO flash is visible on the new fill
@@ -291,9 +393,8 @@ export default function Token() {
         await loadBalance(data);
       }
     }
-    // Auto Gnoswap list: pad cannot self-wrap ugnot (wugnot.Deposit = EOA-only).
-    // System wraps from wallet (temp loan), pulls fee GNS or WUGNOT→GNS, lists, reimburses LP.
-    if (latest?.status === 1 && !latest?.gnoswapListed && wallet?.canSign) {
+    // Auto-list after graduate — venue-aware (zdex EOA CreatePool · gnoswap RetryList).
+    if (latest?.status === 1 && !isListed(latest) && wallet?.canSign) {
       await ensureGnoswapListed(latest, { silent: false });
     }
   }
@@ -333,17 +434,318 @@ export default function Token() {
     }
   }
 
-  async function ensureGnoswapListed(market, { silent = false } = {}) {
-    if (!market?.id || market.status !== 1 || market.gnoswapListed) return false;
+  /**
+   * List graduated launch on zdex via EOA CreatePool.
+   * Never pad RetryList for zdex (Gnoswap path unchanged).
+   *
+   * Flow (dualDexPad when available, else stub + toast):
+   *   1. ReleaseListSeed(id) — creator pulls WUGNOT+tokens
+   *   2. wugnot.Withdraw if needed
+   *   3. pad.Approve + zdex hub CreatePool (g1n4pl5…/zdex/v3)
+   *   4. ConfirmZdexList(id, "ugnot|"+symbol)
+   */
+  async function ensureZdexListed(market, { silent = false } = {}) {
+    if (!market?.id || market.status !== 1 || isListed(market)) return false;
     if (!wallet?.canSign) {
-      if (!silent) showToast("Connect wallet to finish list", false);
+      if (!silent) showToast("Connect wallet to list on zdex", false);
       return false;
     }
     if (listAutoBusyRef.current) return false;
     listAutoBusyRef.current = true;
     setBusy(true);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const venue = String(listVenue || "gnoswap").toLowerCase() || "gnoswap";
+    try {
+      let args;
+      try {
+        args = createPoolArgsFromLaunch(market);
+      } catch (e) {
+        throw new Error(
+          String(e?.message || e) ||
+            "zdex CreatePool needs Symbol + PoolUgnot + PoolToken. Refresh token page.",
+        );
+      }
+      const venuesMeta = await api(
+        `/api/list-venues?pkg=${encodeURIComponent(market.pkg || "")}`,
+      ).catch(() => null);
+      const dual = {
+        ...dualDexFromVenuesApi(venuesMeta),
+        ...(health?.dualDexPad === true
+          ? { dualDexPad: true, hasPreferredVenue: true }
+          : {}),
+      };
+      const realm = zdexRealmAddr(networkId, venuesMeta?.zdexRealmAddr);
+      if (!realm) {
+        throw new Error(
+          "Zdex realm address unknown on this network (hub not live / not probed)",
+        );
+      }
+
+      // 1) ReleaseListSeed — pad cut pulls reserved LP to creator wallet
+      let released = !!(market.listSeedReleased || market.ListSeedReleased);
+      if (released) {
+        /* ListSeedReleasedOf already true — skip MsgCall */
+      } else if (dual.hasReleaseListSeed || dual.dualDexPad) {
+        try {
+          if (!silent) {
+            showToast("zdex: ReleaseListSeed — nhả LP seed về ví…");
+          }
+          const rel = buildReleaseListSeedMsg(market.pkg, market.id);
+          await broadcast(rel.func, rel.args, "", rel.pkgPath, {
+            label: `ReleaseListSeed $${market.symbol}`,
+            gasWanted: 200_000_000,
+            gasFee: 2_000_000,
+          });
+          released = true;
+          await sleep(3500);
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (/not found|unknown|undefined|no such|undeclared|ReleaseListSeed/i.test(msg)) {
+            if (!silent) {
+              showToast(
+                "Pad chưa có ReleaseListSeed — cần GNOT + token sẵn trong ví để CreatePool.",
+                false,
+              );
+            }
+          } else if (/already|released|empty pool|not graduated|creator/i.test(msg)) {
+            // Idempotent / already released — continue
+            released = true;
+          } else {
+            throw e;
+          }
+        }
+      } else if (!silent) {
+        showToast(
+          "Pad chưa ReleaseListSeed — list zdex cần seed trong ví (pad LP chưa nhả).",
+        );
+      }
+
+      // Refresh wallet bal after release (best-effort)
+      let ugnotHave =
+        bal?.ugnot != null
+          ? Math.floor(Number(bal.ugnot) || 0)
+          : Math.floor((Number(bal?.gnot) || 0) * UGNOT_PER_GNOT);
+      let wugHave = Math.floor(Number(bal?.wugnot) || 0);
+      let tokHave = Math.floor(Number(bal?.tokens) || 0);
+      if (released) {
+        try {
+          const b = await api(
+            `/api/balance?id=${encodeURIComponent(market.id)}&pkg=${encodeURIComponent(market.pkg || "")}&address=${encodeURIComponent(wallet.address || "")}`,
+          );
+          if (b) {
+            ugnotHave =
+              b.ugnot != null
+                ? Math.floor(Number(b.ugnot) || 0)
+                : Math.floor((Number(b.gnot) || 0) * UGNOT_PER_GNOT);
+            wugHave = Math.floor(Number(b.wugnot) || 0);
+            tokHave = Math.floor(Number(b.tokens) || 0);
+            setBal((prev) => ({ ...prev, ...b }));
+          }
+        } catch {
+          /* keep prior bal */
+        }
+      }
+
+      const check = zdexListChecklist(market, {
+        networkId,
+        walletUgnot: ugnotHave,
+        walletWugnot: wugHave,
+        walletTokens: tokHave,
+        padCanReleaseLp: dual.hasReleaseListSeed || dual.dualDexPad,
+        padHasVenueZdex: dual.dualDexPad,
+        hasConfirmZdexList: dual.hasConfirmZdexList,
+      });
+
+      // 2) WUGNOT Withdraw → ugnot for OriginSend
+      if (ugnotHave < args.amountU && wugHave >= args.amountU) {
+        if (!silent) {
+          showToast(
+            `zdex: Withdraw ${(args.amountU / 1e6).toFixed(2)} WUGNOT → GNOT…`,
+          );
+        }
+        await broadcastBundle([buildWithdrawWugnotMsg(args.amountU)], {
+          label: `zdex: Withdraw WUGNOT`,
+          gasWanted: 120_000_000,
+          gasFee: 2_000_000,
+        });
+        await sleep(3500);
+        ugnotHave = args.amountU;
+      }
+      if (ugnotHave < args.amountU) {
+        throw new Error(
+          `Need ${(args.amountU / 1e6).toFixed(2)} GNOT in wallet for CreatePool OriginSend ` +
+            `(have ${(ugnotHave / 1e6).toFixed(2)}).` +
+            (dual.hasReleaseListSeed
+              ? " ReleaseListSeed xong — kiểm tra WUGNOT rồi Withdraw."
+              : " Pad chưa ReleaseListSeed — fund EOA hoặc đợi pad cut."),
+        );
+      }
+      if (tokHave < args.amountT) {
+        throw new Error(
+          `Need ${args.amountT} $${args.symbol} in wallet (have ${tokHave}).` +
+            (dual.hasReleaseListSeed
+              ? " ReleaseListSeed should mint PoolToken — refresh and retry."
+              : " Pad chưa MintForList/ReleaseListSeed — PoolToken vẫn trên pad."),
+        );
+      }
+
+      // 3) Approve + CreatePool on zdex hub
+      if (!silent) {
+        showToast(
+          `List on zdex: Approve → CreatePool (${(args.amountU / 1e6).toFixed(2)} GNOT + ${args.amountT} tokens)…`,
+        );
+      }
+      const approveBuilt = buildCreatePoolMsgs(market, {
+        networkId,
+        realmAddr: realm,
+        ownerAddr: wallet?.address || "",
+        includeApprove: true,
+        skipCreate: true,
+      });
+      await broadcastBundle(approveBuilt.messages, {
+        label: `zdex: Approve $${market.symbol}`,
+        gasWanted: 120_000_000,
+        gasFee: 2_000_000,
+      });
+      await sleep(3500);
+
+      const createBuilt = buildCreatePoolMsgs(market, {
+        networkId,
+        realmAddr: realm,
+        ownerAddr: wallet?.address || "",
+        includeApprove: false,
+      });
+      await broadcast(
+        createBuilt.call.func,
+        createBuilt.call.args,
+        createBuilt.call.send,
+        createBuilt.hub,
+        {
+          label: `List $${market.symbol} on zdex`,
+          celebrate: true,
+          gasWanted: 320_000_000,
+          gasFee: 2_000_000,
+        },
+      );
+
+      const poolId = args.poolId || zdexPoolId(args.symbol);
+      // Capital left pad only after ReleaseListSeed. Never mark LS-listed while
+      // pad still holds PoolUgnot (Confirm would panic: ReleaseListSeed first).
+      const seedLeftPad = !!(released || market.listSeedReleased || market.ListSeedReleased);
+
+      // 4) ConfirmZdexList — on-chain ListVenue=zdex (badges sync via listVenue)
+      let confirmed = false;
+      if (dual.hasConfirmZdexList || dual.dualDexPad) {
+        try {
+          if (!silent) showToast(`ConfirmZdexList · ${poolId}…`);
+          const conf = buildConfirmZdexListMsg(market.pkg, market.id, poolId);
+          await broadcast(conf.func, conf.args, "", conf.pkgPath, {
+            label: `ConfirmZdexList $${market.symbol}`,
+            gasWanted: 120_000_000,
+            gasFee: 2_000_000,
+          });
+          confirmed = true;
+        } catch (e) {
+          const msg = String(e?.message || e || "");
+          if (/ReleaseListSeed first|empty pool/i.test(msg)) {
+            if (!silent) {
+              showToast(
+                "CreatePool ok but pad capital still on pad — run ReleaseListSeed before ConfirmZdexList. UI will not mark listed.",
+                false,
+              );
+            }
+          } else if (/not found|unknown|undefined|no such|undeclared|ConfirmZdexList/i.test(msg)) {
+            if (seedLeftPad) {
+              storeLocalListVenue(market.pkg, market.id, VENUE_ZDEX);
+              if (!silent) {
+                showToast(
+                  "CreatePool ok · ConfirmZdexList missing on pad — local badge only until pad cut. Retry Confirm when available.",
+                  false,
+                );
+              }
+            } else if (!silent) {
+              showToast(
+                "CreatePool ok · pad still holds LP seed — do not treat as listed until ReleaseListSeed + ConfirmZdexList.",
+                false,
+              );
+            }
+          } else if (!silent) {
+            showToast(
+              `CreatePool ok · ConfirmZdexList lỗi: ${msg.slice(0, 120)}`,
+              false,
+            );
+          }
+        }
+      } else if (seedLeftPad) {
+        storeLocalListVenue(market.pkg, market.id, VENUE_ZDEX);
+        if (!silent) {
+          showToast(
+            "CreatePool ok · pad ListVenue unset until ConfirmZdexList — trade via zdex app; Confirm when pad cut lands.",
+            false,
+          );
+        }
+      } else if (!silent) {
+        showToast(
+          "CreatePool ok with wallet seed — pad raise capital still on pad CPMM. Run ReleaseListSeed + ConfirmZdexList before treating as listed.",
+          false,
+        );
+      }
+
+      if (confirmed) {
+        storeLocalListVenue(market.pkg, market.id, VENUE_ZDEX);
+        if (!silent) {
+          showToast("Listed on zdex — ListVenue on-chain · trade via zdex swap");
+        }
+      }
+      await load();
+      return confirmed || seedLeftPad;
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      if (!silent) {
+        if (/requireListed|not listed|ApproveListing/i.test(msg)) {
+          showToast(
+            "zdex: symbol needs RequestListing + admin ApproveListing (or admin CreatePool) before non-admin list.",
+            false,
+          );
+        } else if (/min 1 GNOT|amountU must/i.test(msg)) {
+          showToast(
+            `zdex: min ${(ZDEX_MIN_LIST_UGNOT / 1e6).toFixed(0)} GNOT seed (PoolUgnot).`,
+            false,
+          );
+        } else {
+          showToast(msg || "zdex list failed", false);
+        }
+      }
+      return false;
+    } finally {
+      listAutoBusyRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function ensureGnoswapListed(market, { silent = false } = {}) {
+    if (!market?.id || market.status !== 1 || isListed(market)) return false;
+    if (!wallet?.canSign) {
+      if (!silent) showToast("Connect wallet to finish list", false);
+      return false;
+    }
+    // Prefer Create-time preference over React state / gnoswap hard-default.
+    const venue = normalizeVenue(
+      preferredOf(market) ||
+        listVenue ||
+        loadTokenPreferredVenue(market.pkg, market.id) ||
+        defaultPreferredVenue(
+          { venues: listVenues, defaultVenue: null },
+          networkId,
+        ) ||
+        "zdex",
+    );
+    if (venue === "zdex") {
+      return ensureZdexListed(market, { silent });
+    }
+    if (listAutoBusyRef.current) return false;
+    listAutoBusyRef.current = true;
+    setBusy(true);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     try {
       const addrQ = wallet.address
         ? `&address=${encodeURIComponent(wallet.address)}`
@@ -352,23 +754,35 @@ export default function Token() {
         `/api/list-need?id=${encodeURIComponent(market.id)}&pkg=${encodeURIComponent(market.pkg || "")}&venue=${encodeURIComponent(venue)}&refresh=1${addrQ}`,
       ).catch(() => null);
 
+      const verifyListed = async (label) => {
+        await sleep(2500);
+        const latest = await load();
+        if (isListed(latest) || latest?.gnoswapListed || latest?.listVenue) {
+          if (!silent) showToast(label);
+          return true;
+        }
+        const note = String(latest?.gnoswapNote || latest?.listNote || "").trim();
+        throw new Error(
+          note
+            ? `RetryList tx ok but not listed on-chain: ${note.slice(0, 160)}`
+            : "RetryList tx ok but pad still unlisted (soft-fail / fee shortfall). Check GNS + ListNeed, then retry.",
+        );
+      };
+
       if (!need?.ok) {
+        // Legacy / ListNeed probe failed — still try RetryList, but do not celebrate blindly.
         await broadcastRetryList(market, venue, {
           gasWanted: 280_000_000,
           gasFee: 2_000_000,
         });
-        showToast("List submitted");
-        await load();
-        return true;
+        return verifyListed(`List submitted · verify ${venue}`);
       }
       if (need.ready) {
         await broadcastRetryList(market, venue, {
           gasWanted: 280_000_000,
           gasFee: 2_000_000,
         });
-        showToast("Pad inventory ready — list submitted");
-        await load();
-        return true;
+        return verifyListed("Pad inventory ready — listed");
       }
 
       const padAddr = String(need.padAddr || market.padAddr || "").trim();
@@ -385,6 +799,12 @@ export default function Token() {
         need.walletHasGnsFee === true ||
         (Number.isFinite(walletGns) && gNeed > 0 && walletGns >= gNeed);
       // Prefer GNS fee: only wrap LP shortfall. Else wrap LP + fee budget.
+      // Fail-closed when GNS required but wallet lacks GNS and no fee WUGNOT budget.
+      if (gNeed > 0 && !hasGnsFee && feeBudRaw <= 0) {
+        throw new Error(
+          `Need ~${(gNeed / 1e6).toFixed(0)} GNS in wallet (or on pad escrow) before RetryList. Fee WUGNOT budget unavailable.`,
+        );
+      }
       const feeBud =
         gNeed > 0 && !hasGnsFee
           ? Math.min(feeBudRaw > 0 ? feeBudRaw : FEE_WRAP_CAP, FEE_WRAP_CAP)
@@ -479,18 +899,27 @@ export default function Token() {
         gasWanted: 320_000_000,
         gasFee: 2_000_000,
       });
-      showToast(`Listed on ${venue} 🎉`);
-      queueTokenResourceSync(market);
-      await load();
-      return true;
+      const ok = await verifyListed(`Listed on ${venue} 🎉`);
+      if (ok) {
+        queueGnoswapLogoRequest(market, {
+          imageURI: market?.imageURI || market?.uri || market?.image,
+        });
+      }
+      return ok;
     } catch (err) {
       const msg = String(err.message || err);
       if (!silent) {
-        if (/InsufficientCoins/i.test(msg)) {
+        if (/Need ~\d+ GNS/i.test(msg)) {
+          showToast(msg, false);
+        } else if (/InsufficientCoins/i.test(msg)) {
           showToast(
-            "Insufficient GNOT for wrap+gas. Prefer ~100 GNS in wallet so list only needs LP wrap (reimbursed).",
+            msg.length < 220
+              ? msg
+              : "Insufficient GNOT for wrap+gas. Prefer ~100 GNS in wallet so list only needs LP wrap (reimbursed).",
             false,
           );
+        } else if (/not listed on-chain|still unlisted/i.test(msg)) {
+          showToast(msg, false);
         } else if (/insufficient allowance/i.test(msg)) {
           showToast(
             "List hit allowance (old multi-msg). Hard-refresh, retry List — funding is now Transfer→pad then RetryList alone.",
@@ -540,9 +969,14 @@ export default function Token() {
     return () => window.removeEventListener("storage", onStorage);
   }, [m]);
 
-  // DrySwap quote for graduated / listed markets (Gnoswap router)
+  // DrySwap quote for graduated / listed markets (Gnoswap router only)
   useEffect(() => {
     if (!m || !isPool) {
+      setPoolQuote(null);
+      return;
+    }
+    // zdex-listed: in-app ExactIn uses minOut=0 (no Netlify zdex quote yet)
+    if (isListed(m) && venueOf(m) === VENUE_ZDEX) {
       setPoolQuote(null);
       return;
     }
@@ -714,7 +1148,7 @@ export default function Token() {
         let tMs = Number(t.timeMs) || 0;
         const h = Number(t.height) || 0;
         if (!tMs && h > 0 && refH > 0) {
-          // Gno Sapphire block interval is ~2.0s
+          // Gno block interval is ~2.0s
           tMs = Math.max(0, now - (refH - h) * 2000);
         } else if (!tMs) {
           tMs = now - (rawTrades.length - idx) * 30_000;
@@ -949,8 +1383,21 @@ export default function Token() {
 
   function isWugnotCollateralPad(pkgPath) {
     for (const p of padPkgCandidates(pkgPath)) {
-      if (p === "wugnot" || /padv1[4-9]\b|padv[2-9]\d\b|wugnot/i.test(p)) return true;
+      // padv14+ numbered cuts, explicit wugnot, or current unsigned / gnomi paths
+      // (local gnodev: gno.land/r/gnomemepad/pad — no "padvNN" in path).
+      // Live mainnet …/gnomi/padv3 is WUGNOT 3-arg Buy — never legacy -send.
+      if (
+        p === "wugnot" ||
+        /padv1[4-9]\b|padv[2-9]\d\b|wugnot/i.test(p) ||
+        /\/gnomemepad\/pad(?:v\d+)?$/i.test(p) ||
+        /\/gnomi\/pad(?:v\d+)?$/i.test(p)
+      ) {
+        return true;
+      }
     }
+    const net = String(networkId || "").toLowerCase();
+    // Local + mainnet gnomi pads are WUGNOT push-pay (3-arg). Never legacy 2-arg.
+    if (net === "local" || net === "mainnet") return true;
     return m?.collateral === "wugnot";
   }
 
@@ -975,6 +1422,122 @@ export default function Token() {
     if (netProbe <= remRaise) return userUg;
     const exact = maxGrossForNetIn(remRaise, userUg, feeBps);
     return exact > 0 ? exact : userUg;
+  }
+
+  /** True when zdex pool is live for in-app ExactIn (not ConfirmZdexList-pending). */
+  function isZdexTradeLive(market = m) {
+    return (
+      !!market &&
+      isListed(market) &&
+      venueOf(market) === VENUE_ZDEX &&
+      !zdexConfirmPending(market)
+    );
+  }
+
+  /** On-page zdex hub SwapExactIn (listed tokens only) — prefer 1 Adena popup. */
+  async function onZdexSwap(side, amountIn) {
+    if (!wallet?.canSign) return connect();
+    if (!isZdexTradeLive(m)) throw new Error("Token not listed on zdex");
+    const padPkg = m.pkg || pkgQ || health?.pkg || "";
+    const amt = Math.trunc(Number(amountIn) || 0);
+    if (amt <= 0) throw new Error("Enter amount");
+
+    // No Netlify zdex DrySwap yet — minOut=0 (slip control kept for UX parity).
+    const minOut = 0;
+
+    let skipApprove = false;
+    if (side === "sell" && wallet?.address && m?.id) {
+      try {
+        skipApprove = localStorage.getItem(zdexTokenApproveKey(wallet.address, m.id)) === "1";
+      } catch {
+        skipApprove = false;
+      }
+    }
+
+    const { messages, approveMax } = buildSwapExactInMsgs(m, {
+      networkId,
+      side,
+      amountIn: amt,
+      minOut,
+      includeApprove: side === "sell" && !skipApprove,
+      padPkg,
+      launchId: m.id,
+      ownerAddr: wallet.address,
+      approveMax: true,
+    });
+
+    const parts = [];
+    if (side === "sell" && !skipApprove) parts.push("approve");
+    parts.push("swap");
+    showToast(`1-click zdex ${parts.join(" → ")} — sign once`);
+
+    const res = await broadcastBundle(messages, {
+      label:
+        side === "buy" ? `zdex buy $${m.symbol}` : `zdex sell $${m.symbol}`,
+      gasWanted: 350_000_000,
+      gasFee: 2_000_000,
+      silent: true,
+    });
+
+    if (side === "sell" && !skipApprove && approveMax && wallet?.address && m?.id) {
+      try {
+        localStorage.setItem(zdexTokenApproveKey(wallet.address, m.id), "1");
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const ug = side === "buy" ? amt : 0;
+    const tok = side === "sell" ? amt : 0;
+    const row = toTradeRow({
+      side,
+      ugnot: ug,
+      tokens: tok,
+      height: Number(res?.height) || 0,
+      timeMs: Date.now(),
+      source: "zdex",
+      hash: res?.hash || "",
+      address: wallet?.address || "",
+    });
+    const poolKey = zdexPoolIdOf(m) || m.gnoswapPoolPath || adenaPath(m) || String(m.id);
+    appendLocalGnoswapTrade(poolKey, row);
+    setDexTrades((prev) => mergeTradeRows([row], prev).slice(0, 80));
+    try {
+      void api("/api/trades/report", {
+        method: "POST",
+        body: {
+          id: m.id,
+          pkg: m.pkg,
+          poolPath: zdexPoolIdOf(m) || m.gnoswapPoolPath || "",
+          tokenKey: adenaPath(m) || "",
+          side: side === "sell" ? 1 : 0,
+          ugnot: ug,
+          tokens: tok,
+          height: Number(res?.height) || 0,
+          timeMs: row.timeMs || Date.now(),
+          hash: res?.hash || "",
+        },
+      });
+    } catch {
+      /* non-fatal */
+    }
+
+    if (side === "buy" && ug > 0) {
+      setBal((prev) => ({
+        ...prev,
+        gnot: Math.max(0, (Number(prev?.gnot) || 0) - ug / 1e6),
+      }));
+    } else if (side === "sell" && tok > 0) {
+      setBal((prev) => ({
+        ...prev,
+        tokens: Math.max(0, (Number(prev?.tokens) || 0) - tok),
+      }));
+    }
+
+    showToast(
+      side === "buy" ? "zdex buy submitted" : "zdex sell submitted",
+    );
+    await afterTrade();
   }
 
   /** On-page Gnoswap router swap (listed tokens only) — prefer 1 Adena popup. */
@@ -1134,15 +1697,59 @@ export default function Token() {
   async function onBuy(e) {
     e.preventDefault();
     if (!wallet?.canSign) return connect();
+    // Listed: never pad SwapBuy/Buy. Zdex → in-app ExactIn; Gnoswap → ExactIn.
+    // ConfirmZdexList sets GnoswapListed=true for compat — venueOf must win.
+    const listedVenue = venueOf(m);
+    // Seed released but Confirm/CreatePool incomplete — pad SwapBuy panics
+    if (
+      isPool &&
+      (m?.listSeedReleased || m?.ListSeedReleased) &&
+      !m?.listVenue &&
+      !isGnoswapListed(m)
+    ) {
+      if (zdexConfirmPending(m)) {
+        showToast(
+          "ConfirmZdexList pending — finish Confirm before trading (pad SwapBuy disabled).",
+          false,
+        );
+      } else {
+        showToast(
+          "List seed released — finish zdex CreatePool + ConfirmZdexList (pad SwapBuy disabled).",
+          false,
+        );
+      }
+      return;
+    }
     // Parse GNOT → ugnot without float drift for large sizes
     const raw = String(amountGnot || "").trim().replace(/,/g, "");
     const userUg = Math.floor(Number(raw) * UGNOT_PER_GNOT);
     if (!Number.isFinite(userUg) || userUg <= 0) return showToast("Enter amount", false);
     setBusy(true);
     try {
+      // Listed on zdex → hub SwapExactIn (in-app; not deep-link)
+      if (isZdexTradeLive(m)) {
+        await onZdexSwap("buy", userUg);
+        return;
+      }
+      if (isListed(m) && listedVenue === VENUE_ZDEX) {
+        showToast(
+          zdexConfirmPending(m)
+            ? "ConfirmZdexList pending — finish Confirm before trading."
+            : "Listed on zdex — use the trade panel or Open zdex",
+          false,
+        );
+        return;
+      }
       // Listed → Gnoswap router ExactIn (not pad Buy/SwapBuy)
-      if (isGnoswapListed(m)) {
+      if (isGnoswapListed(m) && listedVenue !== VENUE_ZDEX) {
         await onGnoswapSwap("buy", userUg);
+        return;
+      }
+      if (isListed(m)) {
+        showToast(
+          `Listed on ${venueLabel(listedVenue) || "DEX"} — use Swap on ${venueLabel(listedVenue) || "DEX"}`,
+          false,
+        );
         return;
       }
       const func = isPool ? "SwapBuy" : "Buy";
@@ -1402,12 +2009,52 @@ export default function Token() {
   async function onSell(e) {
     e.preventDefault();
     if (!wallet?.canSign) return connect();
+    const listedVenue = venueOf(m);
+    if (
+      isPool &&
+      (m?.listSeedReleased || m?.ListSeedReleased) &&
+      !m?.listVenue &&
+      !isGnoswapListed(m)
+    ) {
+      if (zdexConfirmPending(m)) {
+        showToast(
+          "ConfirmZdexList pending — finish Confirm before trading (pad SwapSell disabled).",
+          false,
+        );
+      } else {
+        showToast(
+          "List seed released — finish zdex CreatePool + ConfirmZdexList (pad SwapSell disabled).",
+          false,
+        );
+      }
+      return;
+    }
     const t = Math.floor(Number(sellTokens));
     if (t <= 0) return showToast("Enter tokens", false);
     setBusy(true);
     try {
-      if (isGnoswapListed(m)) {
+      if (isZdexTradeLive(m)) {
+        await onZdexSwap("sell", t);
+        return;
+      }
+      if (isListed(m) && listedVenue === VENUE_ZDEX) {
+        showToast(
+          zdexConfirmPending(m)
+            ? "ConfirmZdexList pending — finish Confirm before trading."
+            : "Listed on zdex — use the trade panel or Open zdex",
+          false,
+        );
+        return;
+      }
+      if (isGnoswapListed(m) && listedVenue !== VENUE_ZDEX) {
         await onGnoswapSwap("sell", t);
+        return;
+      }
+      if (isListed(m)) {
+        showToast(
+          `Listed on ${venueLabel(listedVenue) || "DEX"} — use Swap on ${venueLabel(listedVenue) || "DEX"}`,
+          false,
+        );
         return;
       }
       const func = isPool ? "SwapSell" : "Sell";
@@ -1435,7 +2082,11 @@ export default function Token() {
         label: `Graduate $${m.symbol}`,
         celebrate: true,
       });
-      showToast("Graduate submitted — finishing Gnoswap list…");
+      showToast(
+        String(listVenue).toLowerCase() === "zdex"
+          ? "Graduate submitted — finishing zdex list…"
+          : "Graduate submitted — finishing Gnoswap list…",
+      );
       await afterTrade();
     } catch (err) {
       showToast(err.message || err, false);
@@ -1444,23 +2095,55 @@ export default function Token() {
     }
   }
 
-  /** Manual / checklist button — same auto pipeline as post-graduate. */
+  /** Manual list — zdex CreatePool EOA · gnoswap RetryList pipeline. */
   async function onRetryListGnoswap() {
     if (!wallet?.canSign) return connect();
+    const venue = String(listVenue || "gnoswap").toLowerCase() || "gnoswap";
+    const pref = preferredOf(m) || loadTokenPreferredVenue(m?.pkg, m?.id);
+    if (pref && venue && pref !== venue) {
+      showToast(
+        `Warning: preferredVenue=${pref} but List venue=${venue}. RetryList uses the picker (not PreferredVenue unless venue arg empty).`,
+        false,
+      );
+    }
+    if (venue === "zdex") {
+      await ensureZdexListed(m, { silent: false });
+      return;
+    }
     await ensureGnoswapListed(m, { silent: false });
-    // After list: queue logo registration for Gnoswap/Adena (token-resource PR)
-    queueTokenResourceSync(m);
+    queueGnoswapLogoRequest(m, { imageURI: m?.imageURI || m?.uri || m?.image });
   }
 
-  /** Fire-and-forget: standardize logo into gno-token-resource pipeline. */
-  function queueTokenResourceSync(market) {
-    if (!market?.id) return;
-    const qs = new URLSearchParams({
-      id: market.id,
-      pkg: market.pkg || "",
-    });
-    fetch(`/api/token-resource/register?${qs}`, { method: "POST" }).catch(() => {});
+  /** Retry ConfirmZdexList when CreatePool already done (LS pending). */
+  async function onConfirmZdexList() {
+    if (!wallet?.canSign) return connect();
+    if (!m?.id || !m?.pkg) return;
+    const poolId =
+      zdexPoolId(m.symbol) ||
+      String(m.zdexPoolId || m.gnoswapPoolPath || "").trim();
+    if (!poolId) {
+      showToast("poolId unknown (need Symbol or ugnot|SYMBOL)", false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const conf = buildConfirmZdexListMsg(m.pkg, m.id, poolId);
+      await broadcast(conf.func, conf.args, "", conf.pkgPath, {
+        label: `ConfirmZdexList $${m.symbol}`,
+        gasWanted: 120_000_000,
+        gasFee: 2_000_000,
+      });
+      storeLocalListVenue(m.pkg, m.id, VENUE_ZDEX);
+      showToast("ConfirmZdexList ok — ListVenue=zdex on-chain");
+      await load();
+    } catch (err) {
+      showToast(String(err?.message || err || "ConfirmZdexList failed"), false);
+    } finally {
+      setBusy(false);
+    }
   }
+
+
 
   async function copy(pathOrId, label) {
     try {
@@ -1475,7 +2158,7 @@ export default function Token() {
     const og = `${window.location.origin}/.netlify/functions/og?id=${encodeURIComponent(m?.id || id)}${m?.pkg ? `&pkg=${encodeURIComponent(m.pkg)}` : ""}`;
     const url = m?.id ? og : window.location.href;
     const text = m
-      ? `$${m.symbol} on gnomi — ${m.progressPct || 0}% to graduate on Gno Sapphire`
+      ? `$${m.symbol} on gnomi — ${m.progressPct || 0}% to graduate on Gno ${netLabel}`
       : "gnomi";
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
@@ -1532,8 +2215,7 @@ export default function Token() {
       const next = await fetchMetaOne(m.pkg, m.id);
       setMeta(next);
       setEditingMeta(false);
-      // Icon change → re-queue Gnoswap token-resource logo sync
-      queueTokenResourceSync(m);
+      queueGnoswapLogoRequest(m, { imageURI: imageURI || next?.imageURI });
     } catch (err) {
       showToast(err.message || err, false);
     } finally {
@@ -1652,7 +2334,7 @@ export default function Token() {
   }
   const volUsd =
     toUsd(vol, m.gnotUsd, m.tradeStats?.volumeUsd) ||
-    (vol > 0 && m.gnotUsd > 0 ? vol * m.gnotUsd : vol > 0 ? vol * 235 : 0);
+    (vol > 0 && m.gnotUsd > 0 ? vol * m.gnotUsd : 0);
   const txCount = Number(m.tradeStats?.trades != null ? m.tradeStats.trades : trades?.length || 0);
   const mcapGnotNum = Number(m.mcapGnot || 0);
   const volGnotNum = Number(vol || 0);
@@ -1816,8 +2498,12 @@ export default function Token() {
                 <code>{m.id.length > 12 ? `${m.id.slice(0, 6)}…${m.id.slice(-4)}` : m.id}</code>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
               </button>
-              {isGnoswapListed(m) ? (
-                <span className="ths-badge listed">{t("gnoswapBadge")}</span>
+              {isListed(m) && venueOf(m) ? (
+                <span
+                  className={`ths-badge listed${venueOf(m) === VENUE_ZDEX ? " zdex" : ""}`}
+                >
+                  {venueLabel(venueOf(m))}
+                </span>
               ) : isPool ? (
                 <span className="ths-badge graduated">{t("graduated")}</span>
               ) : (
@@ -1826,6 +2512,14 @@ export default function Token() {
                 </span>
               )}
             </div>
+            {(Array.isArray(m.badges) && m.badges.length > 0) ||
+            (Array.isArray(m.wearBadges) && m.wearBadges.length > 0) ? (
+              <AchievementBadgeRow
+                className="ths-ach-badges"
+                badges={m.badges?.length ? m.badges : m.wearBadges}
+                size="md"
+              />
+            ) : null}
             <div className="ths-sub-row">
               {(tw || tg || web) && (
                 <div className="ths-socials">
@@ -1919,7 +2613,13 @@ export default function Token() {
           <div className="ths-metric-item">
             <span className="ths-metric-label">{(t("volume") || "VOLUME").toUpperCase()}</span>
             <strong className="ths-metric-val mono ths-vol-val">
-              {volUsd > 0 ? fmtMcapUsd(volUsd) : "$0"}
+              {volUsd > 0
+                ? fmtMcapUsd(volUsd)
+                : volGnotNum > 0
+                  ? `${fmtGnot(volGnotNum, { alreadyGnot: true })} GNOT`
+                  : Number(m.gnotUsd) > 0
+                    ? "$0"
+                    : "—"}
             </strong>
             <span className="ths-metric-sub faint mono">
               {`${fmtNum(txCount)} tx · ${volGnotNum > 0 ? volGnotNum.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "0.0000"} GNOT`}
@@ -1932,7 +2632,8 @@ export default function Token() {
             <strong className="ths-metric-val mono">
               {(() => {
                 // Listed → live pool TVL (GNOT); always prefer USD display.
-                const listed = !!(m.gnoswapListed || m.listVenue);
+                // Prefer on-chain listVenue (ConfirmZdexList / RetryList); LS for EOA-only.
+                const listed = isListed(m);
                 const liqG = Number(m.liquidityGnot) || 0;
                 const fallbackG = (() => {
                   if (listed) return 0;
@@ -1944,10 +2645,15 @@ export default function Token() {
                 const shownG = liqG > 0 ? liqG : fallbackG;
                 if (isPool) {
                   if (!(shownG > 0)) return "—";
-                  const fx = Number(m.gnotUsd) > 0 ? Number(m.gnotUsd) : 235;
+                  const fx = Number(m.gnotUsd) > 0 ? Number(m.gnotUsd) : 0;
                   const usd =
-                    Number(m.liquidityUsd) > 0 ? Number(m.liquidityUsd) : shownG * fx;
-                  return fmtMcapUsd(usd);
+                    Number(m.liquidityUsd) > 0
+                      ? Number(m.liquidityUsd)
+                      : fx > 0
+                        ? shownG * fx
+                        : 0;
+                  if (usd > 0) return fmtMcapUsd(usd);
+                  return `${fmtGnot(shownG, { alreadyGnot: true })} GNOT`;
                 }
                 return `${fmtGnot(gradGnot, { alreadyGnot: true })} ${raiseUnit}`;
               })()}
@@ -1957,7 +2663,7 @@ export default function Token() {
                 ? (() => {
                     const w = Number(m.liquidityWugnotGnot) || 0;
                     const live = m.liquiditySource === "gnoswap_pool_balances";
-                    const listed = !!(m.gnoswapListed || m.listVenue);
+                    const listed = isListed(m);
                     if (live && w > 0) {
                       return `${w.toLocaleString("en-US", {
                         maximumFractionDigits: 2,
@@ -2021,21 +2727,32 @@ export default function Token() {
                   {t("copyPad") || "Copy pad"}
                 </button>
               )}
-              {adenaTokenPath && (
+              {isListed(m) && dexTradeUrl(m, networkId) && (
                 <a
-                  className="btn sm primary gnoswap-swap-btn"
-                  href={gnoswapSwapUrl(m)}
+                  className={`btn sm ${venueOf(m) === VENUE_ZDEX ? "ghost" : "primary"} gnoswap-swap-btn`}
+                  href={dexTradeUrl(m, networkId)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title={`Swap $${m?.symbol || ""} on Gnoswap DEX`}
+                  title={
+                    venueOf(m) === VENUE_ZDEX
+                      ? t("openZdexApp") || `Open zdex for $${m?.symbol || ""}`
+                      : `Swap $${m?.symbol || ""} on ${venueLabel(venueOf(m))}`
+                  }
                 >
-                  {t("gnoswapSwap") || "Swap on Gnoswap"} ↗
+                  {venueOf(m) === VENUE_ZDEX
+                    ? `${t("openZdex") || "Open zdex"} ↗`
+                    : `${(t("swapOnVenue") || "Swap on {venue}").replace(
+                        "{venue}",
+                        venueLabel(venueOf(m)),
+                      )} ↗`}
                 </a>
               )}
             </div>
             {adenaTokenPath && (
               <div className="mono faint ths-adena-path">
-                <span className="muted">Adena / Gnoswap: </span>
+                <span className="muted">
+                  {venueOf(m) === VENUE_ZDEX ? "Adena / zdex: " : "Adena / Gnoswap: "}
+                </span>
                 {adenaTokenPath}
               </div>
             )}
@@ -2338,7 +3055,30 @@ export default function Token() {
           )}
 
           {/* Swap / Order Execution Box */}
-          <div className={`panel trade-panel trade-panel-terminal side-${side}${wugnotCurve ? " wugnot-curve" : ""}${isGnoswapListed(m) ? " gnoswap-live" : ""}`}>
+          <div
+            className={`panel trade-panel trade-panel-terminal side-${side}${wugnotCurve ? " wugnot-curve" : ""}${isGnoswapListed(m) ? " gnoswap-live" : ""}${isListed(m) && venueOf(m) === VENUE_ZDEX ? " zdex-live" : ""}`}
+          >
+            {isZdexTradeLive(m) ? (
+              <div className="zdex-quick-trade-head">
+                <span className="zdex-quick-badge mono">
+                  {t("zdexExactIn") || "zdex ExactIn"}
+                </span>
+                {dexTradeUrl(m, networkId) ? (
+                  <a
+                    className="zdex-open-ext muted"
+                    href={dexTradeUrl(m, networkId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={(t("openZdexApp") || "Open zdex app").replace(
+                      "{symbol}",
+                      m?.symbol || "",
+                    )}
+                  >
+                    {t("openZdex") || "Open zdex"} ↗
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
             {/* Big Buy / Sell switcher */}
             <div className="terminal-trade-tabs">
               <button
@@ -2533,6 +3273,8 @@ export default function Token() {
                       </svg>
                       <span>{t("connect") || "Connect Wallet"}</span>
                     </>
+                  ) : isZdexTradeLive(m) ? (
+                    `${t("buy")} $${m.symbol} ${t("onZdex") || "on zdex"}`
                   ) : isGnoswapListed(m) ? (
                     `${t("buy")} $${m.symbol} ${t("onGnoswap") || "on Gnoswap"}`
                   ) : (
@@ -2651,6 +3393,8 @@ export default function Token() {
                       </svg>
                       <span>{t("connect") || "Connect Wallet"}</span>
                     </>
+                  ) : isZdexTradeLive(m) ? (
+                    `${t("sell")} $${m.symbol} ${t("onZdex") || "on zdex"}`
                   ) : isGnoswapListed(m) ? (
                     `${t("sell")} $${m.symbol} ${t("onGnoswap") || "on Gnoswap"}`
                   ) : (
@@ -2662,7 +3406,16 @@ export default function Token() {
 
             <div className="terminal-route-foot faint mono">
               <span>{(t("estGas") || "EST. GAS").toUpperCase()}: ~0.002 GNOT</span>
-              <span>{(t("route") || "ROUTE").toUpperCase()}: {isGnoswapListed(m) ? "GNOSWAP" : "CURVE"}</span>
+              <span>
+                {(t("route") || "ROUTE").toUpperCase()}:{" "}
+                {isZdexTradeLive(m)
+                  ? "ZDEX ExactIn"
+                  : isListed(m) && venueOf(m) === VENUE_ZDEX
+                    ? "ZDEX"
+                    : isGnoswapListed(m)
+                      ? "GNOSWAP"
+                      : "CURVE"}
+              </span>
             </div>
           </div>
 
@@ -2718,17 +3471,47 @@ export default function Token() {
             </div>
           )}
 
-          {/* Internal CPMM checklist if needed */}
-          {isPool && !m.gnoswapListed && (
+          {/* ConfirmZdexList recovery — CreatePool done, pad ListVenue still empty */}
+          {isPool && zdexConfirmPending(m) && (
+            <div className="grad-fomo ready list-checklist-panel" style={{ marginTop: "0.85rem" }}>
+              <div className="grad-fomo-top">
+                <span>
+                  <strong>zdex CreatePool done</strong>
+                  <span className="muted"> — ConfirmZdexList pending (pad ListVenue unset)</span>
+                </span>
+              </div>
+              <p className="muted" style={{ fontSize: "0.78rem", margin: "0.45rem 0" }}>
+                Pad SwapBuy/Sell is disabled after ReleaseListSeed. Confirm so badges and
+                RetryList locks sync on-chain.
+              </p>
+              <button
+                type="button"
+                className="btn primary block"
+                disabled={busy}
+                onClick={onConfirmZdexList}
+              >
+                ConfirmZdexList
+              </button>
+            </div>
+          )}
+
+          {/* List checklist — venue-aware (incl. Pearl uiGap zdex EOA) */}
+          {isPool && !isListed(m) && !zdexConfirmPending(m) && (
             <div className="grad-fomo ready list-checklist-panel" style={{ marginTop: "0.85rem" }}>
               <div className="grad-fomo-top">
                 <span>
                   <strong>{t("internalCpmm")}</strong>
-                  <span className="muted"> - {t("notOnGnoswap")}</span>
+                  <span className="muted">
+                    {" "}
+                    -{" "}
+                    {String(listVenue).toLowerCase() === "zdex"
+                      ? t("notOnZdex") || "not on zdex yet"
+                      : t("notOnGnoswap")}
+                  </span>
                 </span>
               </div>
               <p className="list-checklist-title">{t("listChecklist")}</p>
-              {listVenues.filter((v) => v.enabled).length > 0 && (
+              {listVenues.filter((v) => venueSelectable(v)).length > 0 && (
                 <label className="list-venue-pick" style={{ display: "block", marginTop: "0.55rem" }}>
                   <span className="muted" style={{ fontSize: "0.78rem", display: "block", marginBottom: "0.25rem" }}>
                     List venue
@@ -2736,18 +3519,96 @@ export default function Token() {
                   <select
                     className="input"
                     value={listVenue}
-                    disabled={busy || listVenues.filter((v) => v.enabled).length <= 1}
+                    disabled={
+                      busy ||
+                      listVenues.filter(
+                        (v) =>
+                          venueSelectable(v) &&
+                          (normalizeVenue(v.id) !== VENUE_ZDEX ||
+                            zdexHubReady(networkId)),
+                      ).length <= 1
+                    }
                     onChange={(e) => setListVenue(e.target.value)}
                   >
                     {listVenues
-                      .filter((v) => v.enabled)
+                      .filter(
+                        (v) =>
+                          venueSelectable(v) &&
+                          (normalizeVenue(v.id) !== VENUE_ZDEX ||
+                            zdexHubReady(networkId)),
+                      )
                       .map((v) => (
                         <option key={v.id} value={v.id}>
                           {v.label || v.id}
-                          {v.feeAssetHint ? ` (${v.feeAssetHint} fee)` : ""}
+                          {v.uiGap || v.eoaList
+                            ? " · EOA"
+                            : v.feeAssetHint
+                              ? ` (${v.feeAssetHint} fee)`
+                              : ""}
                         </option>
                       ))}
                   </select>
+                  <p className="list-venue-fee-hint muted">
+                    {String(listVenue).toLowerCase() === "zdex"
+                      ? t("preferredDexConfirmZdex") ||
+                        "No GNS fee · EOA CreatePool (seed ≥1 GNOT + tokens)"
+                      : t("preferredDexConfirmGnoswap") || "~100 GNS escrow at Create"}
+                  </p>
+                  {preferredOf(m) &&
+                  listVenue &&
+                  preferredOf(m) !== String(listVenue).toLowerCase() ? (
+                    <p className="muted" style={{ fontSize: "0.75rem", color: "var(--warn, #c9a227)" }}>
+                      preferredVenue={preferredOf(m)} · picker={listVenue} — List uses picker
+                    </p>
+                  ) : null}
+                  {String(listVenue).toLowerCase() === "zdex" ? (
+                    <ul
+                      className="muted"
+                      style={{
+                        fontSize: "0.75rem",
+                        margin: "0.45rem 0 0",
+                        paddingLeft: "1.1rem",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      <li>
+                        EOA CreatePool on <code className="mono">g1n4pl5…/zdex/v3</code>{" "}
+                        · never pad RetryList for zdex
+                      </li>
+                      <li>
+                        Steps: ReleaseListSeed (if pad) → Withdraw WUGNOT → Approve →
+                        CreatePool → ConfirmZdexList
+                      </li>
+                      <li>
+                        Without ReleaseListSeed, wallet must already hold seed GNOT +
+                        PoolToken (pad reserved LP stays on pad).
+                      </li>
+                    </ul>
+                  ) : listNeed ? (
+                    <ul
+                      className="muted"
+                      style={{
+                        fontSize: "0.75rem",
+                        margin: "0.45rem 0 0",
+                        paddingLeft: "1.1rem",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {listGNeed > 0 ? (
+                        <li>
+                          GNS fee ~{(listGNeed / 1e6).toFixed(0)} (escrow at Create or Transfer
+                          before RetryList)
+                        </li>
+                      ) : null}
+                      {listWNeed > 0 ? (
+                        <li>LP WUGNOT shortfall ~{(listWNeed / 1e6).toFixed(2)}</li>
+                      ) : null}
+                      {listWrap > 0 ? (
+                        <li>Wrap ~{(listWrap / 1e6).toFixed(2)} GNOT → WUGNOT then Transfer → pad</li>
+                      ) : null}
+                      {listNeed.ready ? <li>Pad inventory ready — RetryList alone</li> : null}
+                    </ul>
+                  ) : null}
                 </label>
               )}
               <button
@@ -2808,15 +3669,24 @@ export default function Token() {
                     Copy pad
                   </button>
                 )}
-                {adenaTokenPath && (
+                {isListed(m) && dexTradeUrl(m, networkId) && (
                   <a
-                    className="btn sm primary gnoswap-swap-btn"
-                    href={gnoswapSwapUrl(m)}
+                    className={`btn sm ${venueOf(m) === VENUE_ZDEX ? "ghost" : "primary"} gnoswap-swap-btn`}
+                    href={dexTradeUrl(m, networkId)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={`Swap $${m?.symbol || ""} on Gnoswap DEX`}
+                    title={
+                      venueOf(m) === VENUE_ZDEX
+                        ? t("openZdexApp") || `Open zdex for $${m?.symbol || ""}`
+                        : `Swap $${m?.symbol || ""} on ${venueOf(m) || "DEX"}`
+                    }
                   >
-                    Swap on Gnoswap ↗
+                    {venueOf(m) === VENUE_ZDEX
+                      ? `${t("openZdex") || "Open zdex"} ↗`
+                      : `${(t("swapOnVenue") || "Swap on {venue}").replace(
+                          "{venue}",
+                          venueLabel(venueOf(m) || listVenue || "gnoswap"),
+                        )} ↗`}
                   </a>
                 )}
               </div>

@@ -5,15 +5,23 @@
  *   node web/api-dev.mjs
  *   cd web/ui && npm run dev   # proxies /api → :8787
  *
- * Speedup #3: starts a markets snapshot worker (Pearl by default —
- * Sapphire RPC DNS may be down).
+ * Local Pearl session defaults (override with env):
+ *   SHOW_PEARL=1 DEFAULT_NETWORK=pearl SNAPSHOT_NETWORKS=pearl
+ * Must set env BEFORE importing networks/chain-api (module constants).
  */
+process.env.SHOW_PEARL = process.env.SHOW_PEARL || "1";
+process.env.DEFAULT_NETWORK = process.env.DEFAULT_NETWORK || "pearl";
+if (!process.env.SNAPSHOT_NETWORKS) {
+  process.env.SNAPSHOT_NETWORKS = "pearl";
+}
+
 import http from "node:http";
-import { buildNetworkMarketsPayload, handleApi } from "./lib/chain-api.mjs";
-import { startMarketsSnapshotWorker } from "./lib/markets-snapshot.mjs";
+
+const { buildNetworkMarketsPayload, handleApi } = await import("./lib/chain-api.mjs");
+const { startMarketsSnapshotWorker } = await import("./lib/markets-snapshot.mjs");
 
 const PORT = Number(process.env.API_PORT || 8787);
-const SNAP_NETS = String(process.env.SNAPSHOT_NETWORKS || "pearl")
+const SNAP_NETS = String(process.env.SNAPSHOT_NETWORKS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -50,6 +58,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`gnomemepad API dev http://127.0.0.1:${PORT}`);
+  console.log(
+    `default network: ${process.env.DEFAULT_NETWORK} · SHOW_PEARL=${process.env.SHOW_PEARL}`,
+  );
   console.log(`snapshot networks: ${SNAP_NETS.join(", ") || "(none)"}`);
   if (SNAP_NETS.length) {
     startMarketsSnapshotWorker({

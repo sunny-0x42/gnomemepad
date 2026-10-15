@@ -186,9 +186,13 @@ export function fmtMcapUsd(mcapUsd) {
   return fmtUsd(m, { compact: true });
 }
 
-/**
- * Prefer API USD; else derive from GNOT × gnotUsd.
- */
+/** USD label for a GNOT amount at the live price. Empty when either side is missing. */
+export function usdBesideGnot(gnot, gnotUsd) {
+  const usd = toUsd(gnot, gnotUsd);
+  return usd > 0 ? fmtUsd(usd) : "";
+}
+
+/** Prefer API USD; else derive from GNOT × gnotUsd. */
 export function toUsd(gnotAmount, gnotUsd, explicitUsd) {
   if (explicitUsd != null && Number.isFinite(Number(explicitUsd)) && Number(explicitUsd) > 0) {
     return Number(explicitUsd);

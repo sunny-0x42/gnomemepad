@@ -149,7 +149,8 @@ export function AppProvider({ children }) {
   useEffect(() => {
     refreshHealth();
     refreshWalletsMeta();
-    const t = setInterval(refreshHealth, 12000);
+    // Credit saver: health is CDN-cached ~20s; poll every 45s (was 12s)
+    const t = setInterval(refreshHealth, 45000);
     return () => clearInterval(t);
   }, [refreshHealth, refreshWalletsMeta]);
 

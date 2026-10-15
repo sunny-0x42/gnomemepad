@@ -18,8 +18,12 @@ export default function WatchAlerts() {
     if (!prefs.alerts || !watchlist?.length) return;
 
     async function check() {
+      // Skip background tabs — saves Function invokes / credits
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
       try {
-        const m = await api("/api/markets");
+        const m = await api("/api/markets-lite");
         const thr = Number(prefs.alertThreshold) || 80;
         for (const w of watchlist) {
           const hit = (m?.markets || []).find(
@@ -54,8 +58,15 @@ export default function WatchAlerts() {
     }
 
     check();
-    const t = setInterval(check, 45000);
-    return () => clearInterval(t);
+    const t = setInterval(check, 60000);
+    function onVis() {
+      if (document.visibilityState === "visible") check();
+    }
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [watchlist, prefs.alerts, prefs.alertThreshold, showToast, beep]);
 
   // Request notification permission once when alerts enabled

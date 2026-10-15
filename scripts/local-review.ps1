@@ -32,6 +32,8 @@ $root = if (Test-Path "C:\dev\gnomemepad\gnowork.toml") {
 Write-Host "Root: $root"
 Set-Location $root
 
+# Local E2E needs Sapphire grc20 + 1-value AVL + wugnot/gns stubs under workspace.
+# Keep -no-examples so GNOROOT examples AVL (2-value Get) / grc20 (old NewToken) do not win.
 gnodev local `
     -no-examples `
     -no-watch `
@@ -41,7 +43,13 @@ gnodev local `
     -v `
     ./gno.land/p/gnomemepad/ammmath `
     ./gno.land/r/gnomemepad/pad `
+    ./gno.land/r/gnomemepad/bond `
+    ./gno.land/r/gnomemepad/pointsv2 `
     ./gno.land/p/nt/avl/v0 `
     ./gno.land/p/nt/seqid/v0 `
     ./gno.land/p/nt/ufmt/v0 `
-    ./gno.land/p/nt/cford32/v0
+    ./gno.land/p/nt/cford32/v0 `
+    ./gno.land/p/demo/tokens/grc20 `
+    ./gno.land/r/demo/defi/grc20reg `
+    ./gno.land/r/gnoland/wugnot `
+    ./gno.land/r/gnoswap/gns

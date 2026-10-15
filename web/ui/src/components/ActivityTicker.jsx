@@ -20,7 +20,10 @@ export default function ActivityTicker({ className = "" }) {
       }
     }
     load();
-    const t = setInterval(load, 15000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      load();
+    }, 45000);
     return () => {
       cancelled = true;
       clearInterval(t);
@@ -37,7 +40,7 @@ export default function ActivityTicker({ className = "" }) {
         <span className="ticker-live">
           <i /> LIVE
         </span>
-        <span className="muted ticker-empty">Waiting for trades on Sapphire…</span>
+        <span className="muted ticker-empty">Waiting for trades on Mainnet…</span>
       </div>
     );
   }

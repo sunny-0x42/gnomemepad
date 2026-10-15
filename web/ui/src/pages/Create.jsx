@@ -7,13 +7,42 @@ import { PageHeader } from "../components/ui";
 import { api } from "../lib/api";
 import { copyText, formatCountdown, UGNOT_PER_GNOT } from "../lib/format";
 import { normalizeImageUri, safeImageUrl } from "../lib/avatar";
+import { queueGnoswapLogoRequest } from "../lib/gnoswap";
+import {
+  VENUE_GNOSWAP,
+  VENUE_ZDEX,
+  createListFeeGns,
+  defaultPreferredVenue,
+  dualDexFromVenuesApi,
+  offlineVenuesPayload,
+  storeSessionPreferredVenue,
+  storeTokenPreferredVenue,
+  venueLabel,
+  venuePadWired,
+  venueSelectable,
+} from "../lib/venues";
+import { zdexHubReady } from "../lib/zdex";
 
 const GNS_PKG = "gno.land/r/gnoswap/gns";
 const DEFAULT_LIST_FEE_GNS = 100_000_000; // 100 GNS (6 decimals)
+/** Set true to replace the form with the launchpad-upgrade notice. */
+const CREATE_PAUSED = false;
 
 export default function Create() {
-  const { wallet, isConnecting, connect, broadcast, broadcastBundle, pkg, showToast, health } = useApp();
-  const { t } = usePrefs();
+  const {
+    wallet,
+    isConnecting,
+    connect,
+    broadcast,
+    broadcastBundle,
+    pkg,
+    showToast,
+    health,
+    networkId,
+    network,
+  } = useApp();
+  const { t, lang } = usePrefs();
+  const netLabel = network?.label || "Mainnet";
   const nav = useNavigate();
   const [step, setStep] = useState(1); // 1 identity · 2 confirm · 3 success
   const [name, setName] = useState("");
@@ -27,25 +56,65 @@ export default function Create() {
   const [bond, setBond] = useState(null);
   const [createNeed, setCreateNeed] = useState(null);
   const [created, setCreated] = useState(null); // { id, pkg, symbol, name }
+  const [venuesApi, setVenuesApi] = useState(null);
+  const initialVenue = defaultPreferredVenue(null, networkId);
+  const [preferredVenue, setPreferredVenue] = useState(initialVenue);
+  /** Which DEX tab’s fee copy is visible (switches with tab click). */
+  const [dexFeeTab, setDexFeeTab] = useState(initialVenue);
 
   const metaPkg = health?.modules?.meta || health?.meta || null;
 
-  const loadCreateNeed = useCallback(() => {
-    const q = pkg ? `?pkg=${encodeURIComponent(pkg)}` : "";
-    return api(`/api/create-need${q}`)
-      .then(setCreateNeed)
-      .catch(() => setCreateNeed(null));
-  }, [pkg]);
+  const loadCreateNeed = useCallback(
+    (venue) => {
+      const params = new URLSearchParams();
+      if (pkg) params.set("pkg", pkg);
+      if (venue) params.set("venue", venue);
+      const q = params.toString() ? `?${params}` : "";
+      return api(`/api/create-need${q}`)
+        .then(setCreateNeed)
+        .catch(() => setCreateNeed(null));
+    },
+    [pkg],
+  );
 
   useEffect(() => {
+    if (CREATE_PAUSED) return undefined;
     api("/api/bond")
       .then(setBond)
       .catch(() => setBond(null));
+    return undefined;
   }, []);
 
   useEffect(() => {
-    loadCreateNeed();
-  }, [loadCreateNeed]);
+    if (CREATE_PAUSED) return;
+    loadCreateNeed(preferredVenue);
+  }, [loadCreateNeed, preferredVenue]);
+
+  useEffect(() => {
+    if (CREATE_PAUSED) return undefined;
+    const q = pkg ? `?pkg=${encodeURIComponent(pkg)}` : "";
+    api(`/api/list-venues${q}`)
+      .then((d) => {
+        setVenuesApi(d);
+        let def = defaultPreferredVenue(d, networkId);
+        // Mainnet zdex hub not live yet — do not default Create into a dead list path.
+        if (def === VENUE_ZDEX && !zdexHubReady(networkId, d)) {
+          def = VENUE_GNOSWAP;
+        }
+        setPreferredVenue(def);
+        setDexFeeTab(def);
+      })
+      .catch(() => {
+        const offline = offlineVenuesPayload(networkId);
+        setVenuesApi(offline);
+        let def = defaultPreferredVenue(offline, networkId);
+        if (def === VENUE_ZDEX && !zdexHubReady(networkId, offline)) {
+          def = VENUE_GNOSWAP;
+        }
+        setPreferredVenue(def);
+        setDexFeeTab(def);
+      });
+  }, [pkg, networkId]);
 
   const bondUgnot =
     Number(createNeed?.bondUgnot) > 0
@@ -54,15 +123,32 @@ export default function Create() {
         ? Number(bond.currentUgnot)
         : 2_000_000;
   const bondGnot = bondUgnot / UGNOT_PER_GNOT;
-  // padv20+: ListFeeRequired from /api/create-need; fall back when health is padv20+
   const padLabel = String(pkg || health?.pkg || "");
-  const isListFeePad = /padv2\d\b/i.test(padLabel);
-  const effectiveListFee =
-    Number(createNeed?.listFeeGns) > 0
-      ? Number(createNeed.listFeeGns)
-      : isListFeePad
-        ? DEFAULT_LIST_FEE_GNS
-        : 0;
+  // padv20+ / live …/gnomi/padv3 (word-boundary after "pad" misses padv3)
+  const isListFeePad = /padv2\d\b|\/gnomi\/pad(?:v\d+)?(?:$|\/)/i.test(padLabel);
+  const venueOptions = useMemo(() => {
+    const list = Array.isArray(venuesApi?.venues) ? venuesApi.venues : [];
+    if (list.length) return list;
+    return offlineVenuesPayload(networkId).venues;
+  }, [venuesApi, networkId]);
+  const dualDex = {
+    ...dualDexFromVenuesApi(venuesApi),
+    ...(health?.dualDexPad === true
+      ? { dualDexPad: true, hasPreferredVenue: true }
+      : {}),
+  };
+  // zdex → feeGns=0 only when pad dualDexPad (PreferredVenue cut). Pearl padv23 still 100 GNS.
+  const effectiveListFee = createListFeeGns(
+    preferredVenue,
+    createNeed?.listFeeGns,
+    isListFeePad ? DEFAULT_LIST_FEE_GNS : 0,
+    {
+      dualDexPad: dualDex.dualDexPad,
+      hasPreferredVenue: dualDex.hasPreferredVenue,
+      padLacksPreferredVenue: !dualDex.hasPreferredVenue,
+      networkId,
+    },
+  );
   const listFeeUnits = effectiveListFee / 1e6;
   const isPromo = bond?.statusLabel === "promo";
   const daysLeft =
@@ -140,6 +226,7 @@ export default function Create() {
 
   async function onLaunch(e) {
     e.preventDefault();
+    if (CREATE_PAUSED) return;
     if (!wallet?.canSign) {
       connect();
       return;
@@ -153,26 +240,34 @@ export default function Create() {
     const nm = name.trim();
     setBusy(true);
     try {
-      // Fresh create-need (free GNS / padAddr / fee)
+      // Fresh create-need (free GNS / padAddr / venue-aware fee)
       let need = createNeed;
       try {
-        const q = `?pkg=${encodeURIComponent(pkg)}`;
-        need = await api(`/api/create-need${q}`);
+        const params = new URLSearchParams();
+        params.set("pkg", pkg);
+        params.set("venue", preferredVenue);
+        need = await api(`/api/create-need?${params}`);
         setCreateNeed(need);
       } catch {
         /* use cached */
       }
 
-      const feeGns =
-        Number(need?.listFeeGns) > 0
-          ? Math.floor(Number(need.listFeeGns))
-          : effectiveListFee > 0
-            ? Math.floor(effectiveListFee)
-            : 0;
+      storeSessionPreferredVenue(preferredVenue);
+      const feeGns = createListFeeGns(
+        preferredVenue,
+        need?.listFeeGns,
+        effectiveListFee,
+        {
+          dualDexPad: dualDex.dualDexPad,
+          hasPreferredVenue: dualDex.hasPreferredVenue,
+          padLacksPreferredVenue: !dualDex.hasPreferredVenue,
+          networkId,
+        },
+      );
       const freeGns = Math.floor(Number(need?.freeGns) || 0);
       const gnsShort = Math.max(0, feeGns - freeGns);
       let padAddr = String(need?.padAddr || "").trim();
-      if (!padAddr || !/^g1[a-z0-9]+$/i.test(padAddr)) {
+      if (feeGns > 0 && (!padAddr || !/^g1[a-z0-9]+$/i.test(padAddr))) {
         throw new Error("Pad address unknown — cannot Transfer GNS. Refresh and retry.");
       }
 
@@ -200,7 +295,9 @@ export default function Create() {
         for (let i = 0; i < 12; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           try {
-            const n2 = await api(`/api/create-need?pkg=${encodeURIComponent(pkg)}`);
+            const n2 = await api(
+              `/api/create-need?pkg=${encodeURIComponent(pkg)}&venue=${encodeURIComponent(preferredVenue)}`,
+            );
             setCreateNeed(n2);
             if (n2?.gnsReady || Math.floor(Number(n2?.freeGns) || 0) >= feeGns) {
               okGns = true;
@@ -221,22 +318,48 @@ export default function Create() {
       }
 
       showToast(
-        feeGns > 0 ? `Step 2/2: Create $${sym} (bond ${bondGnot} GNOT)` : `Create $${sym}`,
+        feeGns > 0
+          ? `Step 2/2: Create $${sym} (bond ${bondGnot} GNOT)`
+          : `Create $${sym} · prefer ${preferredVenue}`,
       );
-      await broadcast(
-        "Create",
-        [nm, sym, createUri],
-        `${bondUgnot}ugnot`,
-        pkg,
-        {
-          label:
-            feeGns > 0
-              ? `Create $${sym} · ${bondGnot} GNOT + ${feeGns / 1e6} GNS`
-              : `Create $${sym}`,
-          gasWanted: 200_000_000,
-          gasFee: 2_000_000,
-        },
-      );
+      // Prefer CreateWithVenue (SOURCE dual-DEX); fall back to Create on padv23.
+      let usedCreateWithVenue = false;
+      try {
+        await broadcast(
+          "CreateWithVenue",
+          [nm, sym, createUri, preferredVenue],
+          `${bondUgnot}ugnot`,
+          pkg,
+          {
+            label:
+              feeGns > 0
+                ? `Create $${sym} · ${preferredVenue} · ${bondGnot} GNOT + ${feeGns / 1e6} GNS`
+                : `Create $${sym} · ${preferredVenue}`,
+            gasWanted: 200_000_000,
+            gasFee: 2_000_000,
+          },
+        );
+        usedCreateWithVenue = true;
+      } catch (err) {
+        const msg = String(err?.message || err || "");
+        if (!/not found|unknown|no such|undefined|CreateWithVenue/i.test(msg)) {
+          throw err;
+        }
+        await broadcast(
+          "Create",
+          [nm, sym, createUri],
+          `${bondUgnot}ugnot`,
+          pkg,
+          {
+            label:
+              feeGns > 0
+                ? `Create $${sym} · ${bondGnot} GNOT + ${feeGns / 1e6} GNS`
+                : `Create $${sym}`,
+            gasWanted: 200_000_000,
+            gasFee: 2_000_000,
+          },
+        );
+      }
 
       // Resolve new launch id (Create return value not always exposed by Adena)
       let found = null;
@@ -248,6 +371,34 @@ export default function Create() {
 
       const launchId = found?.id || "";
       const launchPkg = found?.pkg || pkg;
+      if (launchId) {
+        storeTokenPreferredVenue(launchPkg, launchId, preferredVenue);
+        const meta = venueOptions.find((v) => v.id === preferredVenue);
+        // CreateWithVenue already set PreferredVenue — skip extra MsgCall.
+        // Pearl padv23: Create fallback + no SetPreferredVenue → LS only.
+        const canSetPref =
+          !usedCreateWithVenue &&
+          (dualDex.hasPreferredVenue || dualDex.dualDexPad || venuePadWired(meta));
+        if (canSetPref) {
+          try {
+            await broadcast(
+              "SetPreferredVenue",
+              [launchId, preferredVenue],
+              "",
+              launchPkg,
+              {
+                label: `Preferred DEX · ${venueLabel(preferredVenue)}`,
+                gasWanted: 80_000_000,
+              },
+            );
+          } catch (e) {
+            const msg = String(e?.message || e || "");
+            if (!/not found|unknown|undefined|no such|undeclared|SetPreferredVenue/i.test(msg)) {
+              /* venue disabled / already listed — LS still drives Token list */
+            }
+          }
+        }
+      }
       const imageUri = normalizeImageUri(image) || createUri;
       const websiteUri = normalizeImageUri(website) || website.trim();
       const hasMetaFields = !!(
@@ -308,15 +459,10 @@ export default function Create() {
           ? "Launch created · icon on gnomi. Gnoswap logo auto-queues via token-resource sync."
           : "Launch created · add an image on token page for icon + Gnoswap logo sync",
       );
-      // Fire-and-forget: enqueue Gnoswap registry sync (PR when GH token configured)
-      if (launchId) {
-        const qs = new URLSearchParams({
-          id: launchId,
-          pkg: launchPkg,
-          dry: "0",
-        });
-        fetch(`/api/token-resource/register?${qs}`, { method: "POST" }).catch(() => { });
-      }
+      queueGnoswapLogoRequest(
+        { id: launchId, pkg: launchPkg },
+        { imageURI: imageUri || image.trim() },
+      );
       loadCreateNeed();
     } catch (err) {
       const msg = String(err.message || err);
@@ -342,7 +488,7 @@ export default function Create() {
     const url = created?.id
       ? `${window.location.origin}${tokenPath()}`
       : window.location.origin;
-    const text = `Just launched $${created?.symbol || symbol} on gnomi (Gno Sapphire) 🚀`;
+    const text = `Just launched $${created?.symbol || symbol} on gnomi (Gno ${netLabel}) 🚀`;
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
       "_blank",
@@ -360,6 +506,26 @@ export default function Create() {
     } catch {
       showToast("Copy failed", false);
     }
+  }
+
+  if (CREATE_PAUSED) {
+    return (
+      <section className="view">
+        <div className="create-shell">
+          <div className="create-main">
+            <PageHeader kicker={t("createKicker")} title={t("createPausedTitle")} />
+            <div className="callout warn" role="status">
+              {t("createPausedBody")}
+            </div>
+            <div style={{ marginTop: "1rem" }}>
+              <Link className="btn" to="/">
+                {t("markets")}
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
   }
 
   if (step === 3) {
@@ -453,7 +619,9 @@ export default function Create() {
             </strong>
             <div className="muted" style={{ fontSize: "0.82rem", marginTop: "0.35rem" }}>
               {effectiveListFee > 0
-                ? `Create escrows ${listFeeUnits} GNS for Gnoswap CreatePool (Transfer GNS → pad, then bond). After raise, RetryList can list without hunting for GNS.`
+                ? preferredVenue === VENUE_ZDEX && !dualDex.dualDexPad
+                  ? `Pad live vẫn escrow ${listFeeUnits} GNS dù prefer zdex (chưa PreferredVenue). dualDex cut → feeGns=0.`
+                  : `Create escrows ${listFeeUnits} GNS for Gnoswap CreatePool (Transfer GNS → pad, then bond). After raise, RetryList can list without hunting for GNS.`
                 : t("createRaiseNote")}
             </div>
           </div>
@@ -500,15 +668,6 @@ export default function Create() {
               )}
             </div>
 
-            {!wallet && (
-              <div className="callout warn" style={{ marginBottom: "1.15rem" }}>
-                Connect <strong>Adena</strong> on Sapphire to create.{" "}
-                <button type="button" className="btn sm primary" onClick={connect}>
-                  Connect
-                </button>
-              </div>
-            )}
-
             {step === 1 && (
               <form onSubmit={goConfirm} className="create-form">
 
@@ -518,7 +677,7 @@ export default function Create() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     maxLength={48}
-                    placeholder="e.g. Sapphire Doge"
+                    placeholder="e.g. Gnomi Doge"
                     required
                     autoComplete="off"
                   />
@@ -535,6 +694,142 @@ export default function Create() {
                     className="mono"
                   />
                 </label>
+
+                <div className="create-dex-card" aria-labelledby="create-dex-heading">
+                  <div className="create-dex-card-head">
+                    <div className="create-dex-card-titles">
+                      <h3 id="create-dex-heading" className="create-dex-card-title">
+                        {t("preferredDex") || "List on DEX"}
+                      </h3>
+                      <p className="create-dex-card-lede muted">
+                        {t("preferredDexLede") ||
+                          "Preferred venue after graduate. Fees differ — pick before you Create."}
+                      </p>
+                    </div>
+                    <div className="create-dex-fee-compare" aria-label="List fee compare">
+                      <span className="dex-fee-chip zdex">0&nbsp;GNS</span>
+                      <span className="dex-fee-chip-vs">vs</span>
+                      <span className="dex-fee-chip gnoswap">~100&nbsp;GNS</span>
+                    </div>
+                  </div>
+                  <div
+                    id="create-dex-tabs"
+                    className="filter-tabs create-dex-tabs"
+                    role="tablist"
+                    aria-label={t("preferredDex") || "List on DEX"}
+                  >
+                    {venueOptions.map((v) => {
+                      const id = v.id;
+                      const hubOk =
+                        id !== VENUE_ZDEX || zdexHubReady(networkId, venuesApi);
+                      const canPick = venueSelectable(v) && hubOk;
+                      const padGap = v.uiGap === true || v.eoaList === true;
+                      const selected = preferredVenue === id;
+                      const viewing = dexFeeTab === id;
+                      const isZdexTab = id === VENUE_ZDEX;
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          role="tab"
+                          aria-selected={viewing}
+                          className={`filter-btn create-dex-tab-${id}${viewing ? " active" : ""}${!canPick ? " is-soon" : ""}`}
+                          onClick={() => {
+                            setDexFeeTab(id);
+                            if (canPick) setPreferredVenue(id);
+                          }}
+                        >
+                          <span className={`dex-tab-dot ${isZdexTab ? "zdex" : "gnoswap"}`} aria-hidden />
+                          <span className="dex-tab-name">{venueLabel(id, lang)}</span>
+                          {!canPick ? (
+                            <span className="dex-tab-soon">{t("soon") || "Soon"}</span>
+                          ) : padGap && !venuePadWired(v) ? (
+                            <span className="dex-tab-soon">EOA</span>
+                          ) : null}
+                          {selected && canPick ? (
+                            <span className="dex-tab-pick" aria-hidden>
+                              ✓
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(() => {
+                    const v = venueOptions.find((x) => x.id === dexFeeTab) || venueOptions[0];
+                    if (!v) return null;
+                    const id = v.id;
+                    const hubOk =
+                      id !== VENUE_ZDEX || zdexHubReady(networkId, venuesApi);
+                    const canPick = venueSelectable(v) && hubOk;
+                    const isZdex = id === VENUE_ZDEX;
+                    return (
+                      <div
+                        key={id}
+                        className={`dex-fee-panel badge-border-${id}${preferredVenue === id ? " is-selected" : ""}`}
+                        role="tabpanel"
+                        aria-label={venueLabel(id, lang)}
+                      >
+                        <div className="dex-fee-panel-head">
+                          <span className={`badge ${id}`}>{venueLabel(id, lang)}</span>
+                          {!canPick ? (
+                            <span className="muted" style={{ fontSize: "0.78rem" }}>
+                              {isZdex && venueSelectable(v) && !hubOk
+                                ? "zdex hub not live on mainnet yet"
+                                : t("preferredDexUnavailable") ||
+                                  "Not available on this network yet"}
+                            </span>
+                          ) : preferredVenue === id ? (
+                            <span className="dex-fee-selected">
+                              {t("preferredDexSelected") || "Selected for listing"}
+                            </span>
+                          ) : null}
+                        </div>
+                        <ul className="dex-fee-list">
+                          <li>
+                            <span className="dex-fee-k">{t("preferredDexFeeWhenLabel") || "When"}</span>
+                            <span className="dex-fee-v">
+                              {isZdex
+                                ? t("preferredDexZdexFeeWhen") || "After graduate · when you List"
+                                : t("preferredDexGnoswapFeeWhen") || "At Create (escrow) · used on List"}
+                            </span>
+                          </li>
+                          <li>
+                            <span className="dex-fee-k">{t("preferredDexFeeFor") || "How it lists"}</span>
+                            <span className="dex-fee-v">
+                              {isZdex
+                                ? v.uiGap || !venuePadWired(v)
+                                  ? t("preferredDexZdexFeeForEoa") ||
+                                    "EOA CreatePool · seed ≥1 GNOT + tokens in wallet"
+                                  : t("preferredDexZdexFeeFor") ||
+                                    "Release → CreatePool on zDex · seed LP from raise"
+                                : t("preferredDexGnoswapFeeFor") ||
+                                  "RetryList after graduate · Gnoswap CreatePool"}
+                            </span>
+                          </li>
+                          <li>
+                            <span className="dex-fee-k">{t("preferredDexFeeTrade") || "Trade after list"}</span>
+                            <span className="dex-fee-v">
+                              {isZdex ? (
+                                <a
+                                  href="https://zdex.gnomi.fun"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="dex-fee-link"
+                                >
+                                  {t("preferredDexZdexTrade") || "Trade on zdex.gnomi.fun"}
+                                </a>
+                              ) : (
+                                t("preferredDexGnoswapTrade") || "In-app ExactIn after list"
+                              )}
+                            </span>
+                          </li>
+                        </ul>
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 <label>
                   Image URL <span className="opt">(https / ipfs — recommended)</span>
                   <input
@@ -620,12 +915,37 @@ export default function Create() {
                         : "— GNOT"}
                     </strong>
                   </div>
-                  {effectiveListFee > 0 && (
-                    <div className="quote-row">
-                      <span>GNS list fee</span>
-                      <strong>{listFeeUnits} GNS</strong>
-                    </div>
-                  )}
+                  <div className="quote-row">
+                    <span>{t("preferredDex") || "List on DEX"}</span>
+                    <strong className={`badge ${preferredVenue}`}>
+                      {venueLabel(preferredVenue, lang)}
+                    </strong>
+                  </div>
+                  <div className="quote-row">
+                    <span>{t("preferredDexFeeType") || "List fee"}</span>
+                    <strong>
+                      {effectiveListFee > 0
+                        ? `${listFeeUnits} GNS`
+                        : preferredVenue === VENUE_GNOSWAP
+                          ? t("preferredDexGnoswapFeeType") || "~100 GNS"
+                          : t("preferredDexZdexFeeType") || "0 GNS"}
+                    </strong>
+                  </div>
+                  <div className="quote-row">
+                    <span className="muted" style={{ fontSize: "0.78rem" }}>
+                      {preferredVenue === VENUE_GNOSWAP
+                        ? t("preferredDexConfirmGnoswap") ||
+                          "~100 GNS escrow at Create · RetryList"
+                        : venueOptions.find((x) => x.id === VENUE_ZDEX)?.uiGap ||
+                            !venuePadWired(
+                              venueOptions.find((x) => x.id === preferredVenue),
+                            )
+                          ? t("preferredDexZdexFeeForEoa") ||
+                            "EOA CreatePool · seed in wallet"
+                          : t("preferredDexConfirmZdex") ||
+                            "0 GNS · Release → CreatePool on zDex"}
+                    </span>
+                  </div>
                   {metaPkg && (description || website || twitter || telegram || image) && (
                     <div className="quote-row">
                       <span>Metadata</span>
@@ -649,7 +969,11 @@ export default function Create() {
                     style={{ flex: 1 }}
                     disabled={busy || !wallet?.canSign}
                   >
-                    {busy ? "Signing…" : `Create · bond ${bondGnot} GNOT`}
+                    {busy
+                      ? "Signing…"
+                      : effectiveListFee > 0
+                        ? `Create · bond ${bondGnot} GNOT + ${listFeeUnits} GNS`
+                        : `Create · bond ${bondGnot} GNOT`}
                   </button>
                 </div>
                 <p className="faint" style={{ fontSize: "0.75rem", margin: 0 }}>
@@ -669,7 +993,7 @@ export default function Create() {
                 <div className="mc-body">
                   <div className="mc-header-row">
                     <div className="mc-badges-left">
-                      <div className="badge curve">Curve</div>
+                      <div className="badge curve">{t("curve") || "Curve"}</div>
                     </div>
                     <div className="mc-avatar-wrap">
                       <TokenAvatar
@@ -681,13 +1005,21 @@ export default function Create() {
                       />
                     </div>
                     <div className="mc-badges-right">
+                      <div
+                        className={`badge ${preferredVenue === VENUE_ZDEX ? "zdex" : "gnoswap"}`}
+                        title={t("preferredDex") || "List on DEX"}
+                      >
+                        → {venueLabel(preferredVenue, lang)}
+                      </div>
                     </div>
                   </div>
 
                   <div className="mc-title-sec">
                     <h3 className="mc-title">{name || "Your Coin"}</h3>
                     <div className="mc-subtitle">
-                      Fair Launch - ${symbol || "TICKER"} · Creator
+                      Fair Launch · ${symbol || "TICKER"} ·{" "}
+                      {t("preferredDexShort") || "lists on"}{" "}
+                      {venueLabel(preferredVenue, lang)}
                     </div>
                     {(twitter || telegram || website) && (
                       <div className="mc-socials" style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem', marginTop: '0.5rem' }}>

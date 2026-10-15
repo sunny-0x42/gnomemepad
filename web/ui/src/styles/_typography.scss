@@ -201,6 +201,23 @@ main.app-main {
   box-shadow: 0 0 12px rgba(52, 211, 153, 0.22);
 }
 
+/* zDex venue badge — same weight as Gnoswap, brand blue #0550C9 */
+.badge.zdex {
+  background: rgba(5, 80, 201, 0.14);
+  color: #0550c9;
+  border: 1px solid rgba(5, 80, 201, 0.4);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  box-shadow: 0 1px 4px rgba(5, 80, 201, 0.12);
+}
+
+[data-theme="dark"] .badge.zdex {
+  background: rgba(5, 80, 201, 0.28);
+  color: #6b9eff;
+  border: 1px solid rgba(5, 80, 201, 0.55);
+  box-shadow: 0 0 12px rgba(5, 80, 201, 0.28);
+}
+
 .gnoswap-listed-banner {
   display: flex;
   flex-wrap: wrap;
@@ -1579,7 +1596,7 @@ main.app-main {
 }
 
 .holders-list-pro {
-  max-height: 400px;
+  overflow-x: auto;
 }
 
 .holder-row-pro {
@@ -1684,21 +1701,11 @@ main.app-main {
     max-width: 5rem;
   }
 
-  .holders-head,
-  .holder-row-pro,
-  .holders-with-tx .holders-head,
-  .holders-with-tx .holder-row-pro {
-    grid-template-columns: 1.15fr 1fr 0.9fr;
-  }
-
-  /* Hide Value + PnL on mobile — keep User · Pos · Onchain */
-  .holders-head span:nth-child(3),
-  .holders-head span:nth-child(4),
-  .holders-head span:nth-child(5),
-  .holder-row-pro .holder-val,
-  .holder-row-pro .holder-pnl,
-  .holder-row-pro .holder-supply {
-    display: none;
+  .holders-list-pro .holders-head,
+  .holders-list-pro .holder-row-pro,
+  .holders-list-pro.holders-with-tx .holders-head,
+  .holders-list-pro.holders-with-tx .holder-row-pro {
+    min-width: 720px;
   }
 }
 

@@ -4,10 +4,21 @@ export function marketKey(id, pkg = "") {
   return `${id || ""}|${pkg || ""}`;
 }
 
-/** Hide pad v0–v7 from UI discovery (padv3, padv7, etc.). Keeps padv8+. */
+/**
+ * Hide legacy pads from discovery (old gnomemepad padv0–v13 / legacy_*).
+ * Never retire /gnomi/* or bare hub labels ("pad", "padv3") — live mainnet is …/gnomi/padv3.
+ */
 export function isRetiredPad(pkgOrLabel) {
   const s = String(pkgOrLabel || "").toLowerCase();
-  return /(?:^|[/_.-])padv?([0-7])(?:$|[/_.-])/.test(s);
+  if (!s) return false;
+  if (/\/gnomi\//.test(s)) return false;
+  if (/legacy/.test(s)) return true;
+  // Hub source labels are not package paths.
+  if (!/[/.]/.test(s)) return false;
+  const m = s.match(/(?:^|[/_.-])padv?(\d+)(?:$|[/_.-])/);
+  if (!m) return false;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n < 14;
 }
 
 export function isVisiblePadMarket(m) {
@@ -51,18 +62,137 @@ export function volumeMapFromActivity(events) {
   return map;
 }
 
+/** Volume row from market.tradeStats (full TradeHistory ring — matches Token page). */
+export function volumeRowFromMarket(m) {
+  const ts = m?.tradeStats;
+  if (!ts) return null;
+  const volumeGnot = Number(ts.volumeGnot) || 0;
+  const trades = Number(ts.trades) || 0;
+  if (volumeGnot <= 0 && trades <= 0) return null;
+  return {
+    volumeGnot,
+    trades,
+    buyVol: Number(ts.buyVolumeGnot) || 0,
+    sellVol: Number(ts.sellVolumeGnot) || 0,
+  };
+}
+
+/** Seed volMap from markets list tradeStats (preferred over truncated activity sample). */
+export function volumeMapFromMarkets(markets) {
+  const map = {};
+  for (const m of markets || []) {
+    if (!m || m.error || !m.id) continue;
+    const row = volumeRowFromMarket(m);
+    if (!row) continue;
+    map[marketKey(m.id, m.pkg || "")] = row;
+  }
+  return map;
+}
+
 /**
- * Composite heat score: recent volume (if any) + buyers + raised.
- * Higher = hotter.
+ * Merge volume maps — keep the richer row per key (higher volume / trades).
+ * Prevents /api/activity?limit=40 from wiping full TradeHistory totals on cards.
+ */
+export function mergeVolumeMaps(...maps) {
+  const out = {};
+  for (const map of maps) {
+    for (const [k, row] of Object.entries(map || {})) {
+      if (!row) continue;
+      const cur = out[k];
+      if (!cur) {
+        out[k] = {
+          volumeGnot: Number(row.volumeGnot) || 0,
+          trades: Number(row.trades) || 0,
+          buyVol: Number(row.buyVol) || 0,
+          sellVol: Number(row.sellVol) || 0,
+        };
+        continue;
+      }
+      const nextVol = Number(row.volumeGnot) || 0;
+      const nextTrades = Number(row.trades) || 0;
+      const curVol = Number(cur.volumeGnot) || 0;
+      const curTrades = Number(cur.trades) || 0;
+      if (nextVol > curVol || (nextVol === curVol && nextTrades > curTrades)) {
+        out[k] = {
+          volumeGnot: Math.max(curVol, nextVol),
+          trades: Math.max(curTrades, nextTrades),
+          buyVol: Math.max(Number(cur.buyVol) || 0, Number(row.buyVol) || 0),
+          sellVol: Math.max(Number(cur.sellVol) || 0, Number(row.sellVol) || 0),
+        };
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Card volume: prefer market.tradeStats (full ring), else volMap (activity).
+ * Keeps Markets Vol in sync with Token page tradeStats.
+ */
+export function cardVolumeOf(m, volMap = {}) {
+  const fromTs = volumeRowFromMarket(m);
+  const fromMap = volMap[marketKey(m?.id, m?.pkg || "")] || null;
+  if (fromTs && fromMap) {
+    if (
+      fromTs.volumeGnot > fromMap.volumeGnot ||
+      (fromTs.volumeGnot === fromMap.volumeGnot && fromTs.trades >= fromMap.trades)
+    ) {
+      return fromTs;
+    }
+    return {
+      volumeGnot: Math.max(fromTs.volumeGnot, fromMap.volumeGnot || 0),
+      trades: Math.max(fromTs.trades, fromMap.trades || 0),
+      buyVol: Math.max(fromTs.buyVol, fromMap.buyVol || 0),
+      sellVol: Math.max(fromTs.sellVol, fromMap.sellVol || 0),
+    };
+  }
+  return fromTs || fromMap || { volumeGnot: 0, trades: 0, buyVol: 0, sellVol: 0 };
+}
+
+/**
+ * Live interaction / “momentum” score for homepage ordering.
+ * Strong recent volume + trades bubble up; quiet tokens sink.
+ * Higher = hotter. Recalculated whenever volMap / market stats change.
  */
 export function marketHeatScore(m, volMap = {}) {
   const k = marketKey(m.id, m.pkg || "");
-  const vol = volMap[k]?.volumeGnot || 0;
-  const trades = volMap[k]?.trades || 0;
+  const row = volMap[k] || {};
+  const vol = Number(row.volumeGnot) || 0;
+  const trades = Number(row.trades) || 0;
+  const buyVol = Number(row.buyVol) || 0;
+  const sellVol = Number(row.sellVol) || 0;
   const buyers = Number(m.buyers) || 0;
   const raised = raisedGnotOf(m);
-  // Weight recent ring volume heavily when present
-  return vol * 12 + trades * 2.5 + buyers * 1.8 + raised * 0.9;
+  const pct = Math.min(100, Number(m.progressPct) || 0);
+  const listed = !!(m.gnoswapListed || m.listed);
+  const graduated = Number(m.status) === 1;
+
+  // Recent activity dominates (sampled activity window)
+  let score =
+    vol * 28 +
+    trades * 9 +
+    buyVol * 6 +
+    sellVol * 3 +
+    buyers * 2.2 +
+    raised * 0.55;
+
+  // Near-grad / hot curve bump (still tradable on pad)
+  if (!graduated && pct >= 70) score += 80 + (pct - 70) * 1.5;
+  else if (!graduated && pct >= 40) score += 25;
+
+  // Listed with ongoing volume stays visible; idle graduated sinks
+  if (listed && vol > 0) score += 40;
+  if (graduated && vol <= 0 && trades <= 0) score *= 0.35;
+  if (!graduated && vol <= 0 && trades <= 0 && buyers < 2 && raised < 1) {
+    score *= 0.55; // cold / unused → push down
+  }
+
+  return score;
+}
+
+/** Alias for UI copy — same ranking engine. */
+export function liveInteractionScore(m, volMap = {}) {
+  return marketHeatScore(m, volMap);
 }
 
 /**

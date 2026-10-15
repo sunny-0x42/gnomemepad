@@ -17,6 +17,7 @@ import {
 } from "../lib/format";
 import { isRetiredPad } from "../lib/marketHeat";
 import { resolveTokenImage } from "../lib/meta";
+import { dexTradeUrl, isListed, venueLabel, venueOf } from "../lib/venues";
 
 function holdingValueGnot(h) {
   if (h?.valueGnotApprox != null) return Number(h.valueGnotApprox) || 0;
@@ -28,9 +29,11 @@ function holdingBalance(h) {
 }
 
 export default function Portfolio() {
-  const { wallet, connect, watchlist, toggleWatch, showToast } = useApp();
+  const { wallet, connect, watchlist, toggleWatch, showToast, network, networkId } = useApp();
   const { t, lang } = usePrefs();
   const vi = lang === "vi";
+  const netLabel = network?.label || "Mainnet";
+  const netChain = network?.chainId || "gnoland-1";
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -126,8 +129,8 @@ export default function Portfolio() {
         title={t("portfolio")}
         lede={
           vi
-            ? "Số dư GNOT / WUGNOT và vị thế meme trên Sapphire."
-            : "GNOT / WUGNOT balances and meme positions on Sapphire."
+            ? `Số dư GNOT / WUGNOT và vị thế meme trên ${netLabel} (${netChain}).`
+            : `GNOT / WUGNOT balances and meme positions on ${netLabel} (${netChain}).`
         }
         actions={
           <>
@@ -177,15 +180,6 @@ export default function Portfolio() {
           )}
         </div>
       </div>
-
-      {err && (
-        <div className="callout warn" style={{ marginBottom: "1rem" }}>
-          {err}
-          <button type="button" className="btn sm ghost" style={{ marginLeft: 8 }} onClick={load}>
-            {t("retry")}
-          </button>
-        </div>
-      )}
 
       {loading && !data && <SkeletonCards n={4} />}
 
@@ -444,8 +438,10 @@ export default function Portfolio() {
                         </div>
                       </Link>
                       <div className="portfolio-card-badges">
-                        {h.gnoswapListed ? (
-                          <Badge kind="gnoswap">{t("gnoswapBadge")}</Badge>
+                        {isListed(h) ? (
+                          <Badge kind={venueOf(h) === "zdex" ? "zdex" : "gnoswap"}>
+                            {venueLabel(venueOf(h)) || t("gnoswapBadge") || "Gnoswap"}
+                          </Badge>
                         ) : (
                           <Badge kind={isGrad ? "graduated" : "curve"}>
                             {isGrad ? t("graduated") : t("onCurve")}
@@ -524,9 +520,23 @@ export default function Portfolio() {
                     </div>
 
                     <div className="portfolio-card-actions">
-                      <Link className="btn sm primary" to={path}>
-                        {t("trade")}
-                      </Link>
+                      {isListed(h) && dexTradeUrl(h, networkId) ? (
+                        <a
+                          className="btn sm primary"
+                          href={dexTradeUrl(h, networkId)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {(t("swapOnVenue") || "Swap on {venue}").replace(
+                            "{venue}",
+                            venueLabel(venueOf(h)),
+                          )}
+                        </a>
+                      ) : (
+                        <Link className="btn sm primary" to={path}>
+                          {t("trade")}
+                        </Link>
+                      )}
                       <Link className="btn sm ghost" to={path}>
                         {isGrad ? t("sell") : t("buy")}
                       </Link>

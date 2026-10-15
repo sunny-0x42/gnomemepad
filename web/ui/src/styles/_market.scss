@@ -28,8 +28,13 @@ main.app-main:has(.admin-shell) {
 }
 
 .market-card-hero .badge.gnoswap,
-.screener-token .badge.gnoswap {
-  box-shadow: none;
+.screener-token .badge.gnoswap,
+.market-card-hero .badge.zdex,
+.screener-token .badge.zdex,
+.mc-badges-left .badge.gnoswap,
+.mc-badges-left .badge.zdex {
+  /* keep venue badges readable on cards */
+  font-weight: 800;
 }
 
 /* Market card highlight tones */
@@ -491,6 +496,11 @@ main.app-main:has(.admin-shell) {
 
 .trending-scroll-track.animate:hover {
   animation-play-state: paused;
+}
+
+.market-grid-live .market-flip-item {
+  height: 100%;
+  will-change: transform;
 }
 
 .market-card-v2 {

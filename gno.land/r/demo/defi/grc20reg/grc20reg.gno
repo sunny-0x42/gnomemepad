@@ -61,6 +61,22 @@ func MustGet(key string) *grc20.Token {
 	return token
 }
 
+// TransferFrom pulls `amount` of `key` from `from` to `to`. rlm is the
+// live caller realm (non-crossing wrapper, same as Pearl grc20reg).
+func TransferFrom(_ int, rlm realm, key string, from, to address, amount int64) {
+	tok := MustGet(key)
+	if err := tok.CallerTeller().TransferFrom(0, rlm, from, to, amount); err != nil {
+		panic(err.Error())
+	}
+}
+
+func Transfer(_ int, rlm realm, key string, to address, amount int64) {
+	tok := MustGet(key)
+	if err := tok.CallerTeller().Transfer(0, rlm, to, amount); err != nil {
+		panic(err.Error())
+	}
+}
+
 func validateSlug(slug string) {
 	if len(slug) > maxSlugLen {
 		panic("grc20reg: slug too long")

@@ -725,7 +725,11 @@ export default function PriceChart({
       <div className="terminal-chart-header">
         <div className="tch-left">
           <span className="tch-pair mono">
-            {symbol ? `${symbol}/${showUsd ? "USD" : "GNOT"}` : "PUNK/USD"}
+            {symbol
+              ? `${symbol}/${showUsd ? "USD" : "GNOT"}`
+              : showUsd
+                ? "PUNK/USD"
+                : "PUNK/GNOT"}
           </span>
           <span className="tch-dex-pill mono">
             GNOSWAP
