@@ -97,6 +97,25 @@ import {
   ZDEX_MIN_LIST_UGNOT,
 } from "../lib/zdex";
 
+function fmtSignedPct(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  const digits = Math.abs(x) >= 100 ? 1 : 2;
+  return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
+}
+
+function fmtExactGnot(g) {
+  const x = Number(g);
+  if (!Number.isFinite(x)) return "—";
+  return `${x.toLocaleString("en-US", { maximumFractionDigits: 6 })} GNOT`;
+}
+
+function fmtExactCount(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return Math.round(x).toLocaleString("en-US");
+}
+
 export default function Token() {
   const { id: rawId } = useParams();
   const id = decodeURIComponent(rawId || "");
@@ -205,7 +224,7 @@ export default function Token() {
             return {
               ...prev,
               holders,
-              holdersActive: h.holdersActive || holders.length,
+              holdersActive: h.holdersActive != null ? h.holdersActive : holders.length,
               holdersCapped: !!h.holdersCapped,
               holdersSource: h.holdersSource || null,
               holdersStats: h.holdersStats || null,
@@ -1139,98 +1158,11 @@ export default function Token() {
     return { ...q, pool: false, tokensIn: t, minOut };
   }, [m, side, sellTokens, isPool, feeBps, slipFactor, poolQuote]);
 
-  const perfStats = useMemo(() => {
-    const rawTrades = (mergedTrades || []).filter((t) => Number(t.side) === 0 || Number(t.side) === 1);
-    if (!rawTrades.length) {
-      return { p5m: 0, p1h: 0, p6h: 0, p24h: 0, netGnot: 0, buys: 0, sells: 0, volGnot: 0 };
-    }
-
-    const now = Date.now();
-    const tipH = Number(health?.blockHeight) || 0;
-    const maxH = rawTrades.reduce((mx, t) => Math.max(mx, Number(t.height) || 0), 0);
-    const refH = tipH > 0 ? Math.max(tipH, maxH) : maxH;
-
-    // Normalize each trade with a reliable timestamp (derived from block height if timeMs is missing)
-    const chrono = [...rawTrades]
-      .map((t, idx) => {
-        let tMs = Number(t.timeMs) || 0;
-        const h = Number(t.height) || 0;
-        if (!tMs && h > 0 && refH > 0) {
-          // Gno block interval is ~2.0s
-          tMs = Math.max(0, now - (refH - h) * 2000);
-        } else if (!tMs) {
-          tMs = now - (rawTrades.length - idx) * 30_000;
-        }
-        return {
-          ...t,
-          _timeMs: tMs,
-          _price: Number(t.priceGnot) || 0,
-        };
-      })
-      .filter((t) => t._price > 0)
-      .sort((a, b) => {
-        if (a._timeMs !== b._timeMs) return a._timeMs - b._timeMs;
-        return (Number(a.height) || 0) - (Number(b.height) || 0);
-      });
-
-    if (!chrono.length) {
-      return { p5m: 0, p1h: 0, p6h: 0, p24h: 0, netGnot: 0, buys: 0, sells: 0, volGnot: 0 };
-    }
-
-    const latestTrade = chrono[chrono.length - 1];
-    const earliestTrade = chrono[0];
-    const currentPrice = Number(m?.priceGnot) || latestTrade._price;
-    const initialPrice = Number(m?.openPriceGnot) || earliestTrade._price;
-
-    function calcChange(windowMs) {
-      if (!currentPrice || chrono.length < 1) return 0;
-      if (chrono.length === 1) {
-        if (initialPrice > 0 && currentPrice !== initialPrice) {
-          return ((currentPrice - initialPrice) / initialPrice) * 100;
-        }
-        return 0;
-      }
-      const cutoff = now - windowMs;
-
-      // Trades that occurred before or at cutoff establish the starting price of this window
-      const beforeCutoff = chrono.filter((t) => t._timeMs <= cutoff);
-      let basePrice = 0;
-      if (beforeCutoff.length > 0) {
-        // Price just before this window started
-        basePrice = beforeCutoff[beforeCutoff.length - 1]._price;
-      } else {
-        // All trades occurred within this window: compare with the token's initial price!
-        basePrice = initialPrice > 0 ? initialPrice : earliestTrade._price;
-      }
-
-      if (!basePrice || basePrice <= 0) return 0;
-      return ((currentPrice - basePrice) / basePrice) * 100;
-    }
-
-    const p5m = calcChange(5 * 60 * 1000);
-    const p1h = calcChange(60 * 60 * 1000);
-    const p6h = calcChange(6 * 60 * 60 * 1000);
-    const p24h = calcChange(24 * 60 * 60 * 1000);
-
-    let buys = 0;
-    let sells = 0;
-    let buyVol = 0;
-    let sellVol = 0;
-    for (const t of rawTrades) {
-      const v = Number(t.volumeGnot != null ? t.volumeGnot : (Number(t.ugnot) || 0) / 1e6) || 0;
-      if (Number(t.side) === 0) {
-        buys += 1;
-        buyVol += v;
-      } else if (Number(t.side) === 1) {
-        sells += 1;
-        sellVol += v;
-      }
-    }
-    const netGnot = buyVol - sellVol;
-    const volGnot = buyVol + sellVol;
-
-    return { p5m, p1h, p6h, p24h, buys, sells, buyVol, sellVol, netGnot, volGnot };
-  }, [mergedTrades, m?.priceGnot, m?.openPriceGnot, health?.blockHeight]);
+  const statWindows = m?.statWindows?.incomplete === true ? null : m?.statWindows?.windows || null;
+  const w5 = statWindows?.["5m"] || null;
+  const w1h = statWindows?.["1h"] || null;
+  const w6h = statWindows?.["6h"] || null;
+  const w24 = statWindows?.["24h"] || null;
 
   const userPos = useMemo(() => {
     const addr = wallet?.address || "";
@@ -2338,17 +2270,7 @@ export default function Token() {
   const tw = twitterUrl(meta?.twitter);
   const tg = telegramUrl(meta?.telegram);
   const web = websiteUrl(meta?.website);
-  // Price Δ% from full chart series (curve + post-list Gnoswap + local swaps)
-  const chartPrices = [...(trades || [])]
-    .filter((p) => Number(p.side) === 0 || Number(p.side) === 1)
-    .sort((a, b) => (Number(a.timeMs) || Number(a.height) || 0) - (Number(b.timeMs) || Number(b.height) || 0))
-    .map((p) => Number(p.priceGnot) || 0)
-    .filter((x) => x > 0);
-  let priceDelta = perfStats?.p24h != null && perfStats.p24h !== 0 ? perfStats.p24h : null;
-  if (priceDelta == null && chartPrices.length >= 2 && chartPrices[0] > 0) {
-    priceDelta =
-      ((chartPrices[chartPrices.length - 1] - chartPrices[0]) / chartPrices[0]) * 100;
-  }
+  const priceDelta = w24?.pricePct != null && Number.isFinite(Number(w24.pricePct)) ? Number(w24.pricePct) : null;
   const volKnown = vol != null;
   const volUsd = volKnown
     ? toUsd(vol, m.gnotUsd) || (vol > 0 && Number(m.gnotUsd) > 0 ? vol * Number(m.gnotUsd) : 0)
@@ -2607,7 +2529,7 @@ export default function Token() {
             </strong>
             <span className={`ths-metric-sub ${priceDelta != null && priceDelta >= 0 ? "up" : priceDelta != null ? "down" : "faint mono"}`}>
               {priceDelta != null
-                ? `${priceDelta >= 0 ? "▲ +" : "▼ "}${Math.abs(priceDelta).toFixed(1)}%`
+                ? `${priceDelta >= 0 ? "▲ " : "▼ "}${fmtSignedPct(priceDelta)}`
                 : Number(m.spotGnot ?? m.priceGnot) > 0 && toUsd(m.spotGnot ?? m.priceGnot, m.gnotUsd, m.priceUsd) > 0
                   ? `${fmtPrice(m.spotGnot ?? m.priceGnot)} GNOT`
                   : m.priceSource
@@ -2860,7 +2782,10 @@ export default function Token() {
                   className={`tt-tab-btn${infoTab === "trades" ? " active" : ""}`}
                   onClick={() => setInfoTab("trades")}
                 >
-                  {t("trades")} <span className="tt-count">{trades.length}</span>
+                  {t("trades")}{" "}
+                  <span className="tt-count">
+                    {m.tradesComplete && txCount != null ? fmtExactCount(txCount) : fmtExactCount(trades.length)}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2868,7 +2793,9 @@ export default function Token() {
                   onClick={() => setInfoTab("holders")}
                 >
                   {m.holdersLabel || t("holders")}{" "}
-                  <span className="tt-count">{holders.length}</span>
+                  <span className="tt-count">
+                    {m.holdersActive != null ? fmtExactCount(m.holdersActive) : fmtExactCount(holders.length)}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2887,7 +2814,12 @@ export default function Token() {
 
             <div className="terminal-tab-content">
               {infoTab === "trades" ? (
-                <TradesList trades={trades} limit={60} showSource gnotUsd={m.gnotUsd} />
+                <TradesList
+                  trades={trades}
+                  limit={Math.max(trades.length, 1)}
+                  showSource
+                  gnotUsd={m.gnotUsd}
+                />
               ) : infoTab === "holders" ? (
                 <HoldersList
                   holders={holders}
@@ -2927,58 +2859,83 @@ export default function Token() {
           {/* Quick Performance Matrix */}
           <div className="panel perf-matrix-card">
             <div className="perf-matrix-grid">
-              <div className="perf-time-cell">
-                <span className="perf-k">5M</span>
-                <b className={`mono ${perfStats.p5m >= 0 ? "up" : "down"}`}>
-                  {perfStats.p5m >= 0 ? "+" : ""}{perfStats.p5m.toFixed(1)}%
-                </b>
-              </div>
-              <div className="perf-time-cell">
-                <span className="perf-k">1H</span>
-                <b className={`mono ${perfStats.p1h >= 0 ? "up" : "down"}`}>
-                  {perfStats.p1h >= 0 ? "+" : ""}{perfStats.p1h.toFixed(1)}%
-                </b>
-              </div>
-              <div className="perf-time-cell">
-                <span className="perf-k">6H</span>
-                <b className={`mono ${perfStats.p6h >= 0 ? "up" : "down"}`}>
-                  {perfStats.p6h >= 0 ? "+" : ""}{perfStats.p6h.toFixed(1)}%
-                </b>
-              </div>
-              <div className="perf-time-cell">
-                <span className="perf-k">24H</span>
-                <b className={`mono ${perfStats.p24h >= 0 ? "up" : "down"}`}>
-                  {perfStats.p24h >= 0 ? "+" : ""}{perfStats.p24h.toFixed(1)}%
-                </b>
-              </div>
+              {[
+                ["5M", w5],
+                ["1H", w1h],
+                ["6H", w6h],
+                ["24H", w24],
+              ].map(([label, row]) => {
+                const pct = row?.pricePct;
+                const n = Number(pct);
+                const known = pct != null && Number.isFinite(n);
+                const tip = row
+                  ? `${fmtExactCount(row.trades)} tx · ${fmtExactGnot(row.volumeGnot)} · net ${fmtExactGnot(row.netGnot)}`
+                  : "";
+                return (
+                  <div key={label} className="perf-time-cell" title={tip}>
+                    <span className="perf-k">{label}</span>
+                    <b className={`mono ${!known ? "" : n >= 0 ? "up" : "down"}`}>
+                      {known ? fmtSignedPct(n) : "—"}
+                    </b>
+                    <span className="perf-time-sub mono faint">
+                      {row ? `${fmtExactCount(row.trades)} tx` : "—"}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             <div className="perf-vol-row">
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("vol24h") || "24H VOL").toUpperCase()}</span>
-                <strong className="mono">
-                  {m.gnotUsd > 0
-                    ? fmtMcapUsd(perfStats.volGnot * m.gnotUsd)
-                    : `${fmtGnot(perfStats.volGnot, { alreadyGnot: true })} GNOT`}
-                </strong>
+                <strong className="mono">{w24 ? fmtExactGnot(w24.volumeGnot) : "—"}</strong>
+                {w24 && Number(m.gnotUsd) > 0 && w24.volumeGnot > 0 ? (
+                  <span className="perf-vol-sub faint">{fmtMcapUsd(w24.volumeGnot * m.gnotUsd)}</span>
+                ) : null}
               </div>
               <div className="perf-vol-item">
-                <span className="perf-vol-k">{(t("buys") || "BUYS").toUpperCase()}</span>
-                <strong className="mono up">{perfStats.buys}</strong>
+                <span className="perf-vol-k">24H {(t("buys") || "BUYS").toUpperCase()}</span>
+                <strong className="mono up">{w24 ? fmtExactCount(w24.buys) : "—"}</strong>
               </div>
               <div className="perf-vol-item">
-                <span className="perf-vol-k">{(t("sells") || "SELLS").toUpperCase()}</span>
-                <strong className="mono down">{perfStats.sells}</strong>
+                <span className="perf-vol-k">24H {(t("sells") || "SELLS").toUpperCase()}</span>
+                <strong className="mono down">{w24 ? fmtExactCount(w24.sells) : "—"}</strong>
               </div>
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("net24h") || "24H NET").toUpperCase()}</span>
-                <strong className={`mono ${perfStats.netGnot >= 0 ? "up" : "down"}`}>
-                  {perfStats.netGnot >= 0 ? "+" : ""}
-                  {m.gnotUsd > 0
-                    ? fmtMcapUsd(perfStats.netGnot * m.gnotUsd)
-                    : `${fmtGnot(perfStats.netGnot, { alreadyGnot: true })} GNOT`}
+                <strong className={`mono ${w24 && w24.netGnot < 0 ? "down" : "up"}`}>
+                  {w24 ? fmtExactGnot(w24.netGnot) : "—"}
                 </strong>
               </div>
             </div>
+            <div className="perf-vol-row">
+              <div className="perf-vol-item">
+                <span className="perf-vol-k">{(t("holders") || "HOLDERS").toUpperCase()}</span>
+                <strong className="mono">
+                  {m.holdersActive != null
+                    ? fmtExactCount(m.holdersActive)
+                    : m.holdersSource
+                      ? fmtExactCount(holders.length)
+                      : "—"}
+                </strong>
+              </div>
+              <div className="perf-vol-item">
+                <span className="perf-vol-k">{(t("buyers") || "BUYERS").toUpperCase()}</span>
+                <strong className="mono">{m.buyers != null ? fmtExactCount(m.buyers) : "—"}</strong>
+              </div>
+              <div className="perf-vol-item">
+                <span className="perf-vol-k">{(t("sold") || "SOLD").toUpperCase()}</span>
+                <strong className="mono">{m.sold != null ? fmtExactCount(m.sold) : "—"}</strong>
+              </div>
+              <div className="perf-vol-item">
+                <span className="perf-vol-k">{(t("raised") || "RAISED").toUpperCase()}</span>
+                <strong className="mono">
+                  {m.raisedGnot != null && Number.isFinite(Number(m.raisedGnot))
+                    ? fmtExactGnot(m.raisedGnot)
+                    : "—"}
+                </strong>
+              </div>
+            </div>
+            <p className="perf-window-note muted">Block time ~2s. 24h vol is the window, not lifetime.</p>
           </div>
 
           {/* Edit Meta Form (if opened) */}
@@ -4491,8 +4448,8 @@ export function TokenSkeleton({ t = (k) => k }) {
             <div className="perf-vol-row">
               {[
                 (t("vol24h") || "24H VOL").toUpperCase(),
-                (t("buys") || "BUYS").toUpperCase(),
-                (t("sells") || "SELLS").toUpperCase(),
+                `24H ${(t("buys") || "BUYS").toUpperCase()}`,
+                `24H ${(t("sells") || "SELLS").toUpperCase()}`,
                 (t("net24h") || "24H NET").toUpperCase(),
               ].map((label, idx) => (
                 <div key={idx} className="perf-vol-item">

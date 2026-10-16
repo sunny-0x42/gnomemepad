@@ -508,7 +508,7 @@ export default function MarketsHero({
       const deltaText =
         deltaNum == null || !Number.isFinite(deltaNum)
           ? "—"
-          : `${deltaNum >= 0 ? "+" : ""}${Math.abs(deltaNum).toFixed(1)}%`;
+          : `${deltaNum >= 0 ? "+" : "-"}${Math.abs(deltaNum).toFixed(Math.abs(deltaNum) >= 100 ? 1 : 2)}%`;
       const deltaDir = deltaNum == null || !Number.isFinite(deltaNum) ? null : deltaNum >= 0 ? "up" : "down";
 
       const mcapGnotKnown = m?.mcapGnot != null && Number.isFinite(Number(m.mcapGnot));
@@ -544,7 +544,7 @@ export default function MarketsHero({
   const spotHolders = holderCountOf(spotlight);
   const spotDeltaNum = finiteNum(spotlight?.priceDelta ?? spotlight?.p24h);
   const spotPriceDelta =
-    spotDeltaNum == null ? "—" : `${spotDeltaNum >= 0 ? "+" : ""}${spotDeltaNum.toFixed(1)}%`;
+    spotDeltaNum == null ? "—" : `${spotDeltaNum >= 0 ? "+" : "-"}${Math.abs(spotDeltaNum).toFixed(Math.abs(spotDeltaNum) >= 100 ? 1 : 2)}%`;
 
   // Dynamic LP lock info (not hardcoded)
   const lpLockInfo = useMemo(() => {

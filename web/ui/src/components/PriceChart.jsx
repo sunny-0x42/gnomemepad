@@ -998,6 +998,19 @@ async function resolveBlockTxHash(height) {
 /**
  * Recent trades with FOMO flash on newly arrived rows (poll / after own trade).
  */
+function fmtBookTokens(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  if (Number.isInteger(x)) return x.toLocaleString("en-US");
+  return x.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
+function fmtBookGnot(g) {
+  const x = Number(g);
+  if (!Number.isFinite(x)) return "—";
+  return x.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
 export function TradesList({ trades = [], limit = 30, showSource = false, gnotUsd = 0 }) {
   const fx = Number(gnotUsd) || 0;
   const seenRef = useRef(new Set());
@@ -1182,20 +1195,26 @@ export function TradesList({ trades = [], limit = 30, showSource = false, gnotUs
               {/* {flashing ? <i className="flash-dot" aria-hidden /> : null} */}
               {sideText}
             </span>
-            <span className="mono trade-px">
-              {t.priceUsd != null && t.priceUsd > 0
-                ? fmtPriceUsd(t.priceUsd)
-                : t.priceGnot != null && t.priceGnot > 0
-                  ? fx > 0
-                    ? fmtPriceUsd(Number(t.priceGnot) * fx)
-                    : `${fmtPrice(t.priceGnot)} GNOT`
-                  : "—"}
+            <span
+              className="mono trade-px"
+              title={
+                t.priceGnot > 0 && fx > 0
+                  ? fmtPriceUsd(Number(t.priceGnot) * fx)
+                  : t.priceUsd > 0
+                    ? fmtPriceUsd(t.priceUsd)
+                    : undefined
+              }
+            >
+              {t.priceGnot != null && t.priceGnot > 0 ? `${fmtPrice(t.priceGnot)} GNOT` : "—"}
             </span>
-            <span className="mono trade-tokens">{fmtNum(t.tokens)}</span>
-            <span className={`mono trade-total ${isBuy ? "up" : isSell ? "down" : ""}`}>
-              {fx > 0 && vol > 0
-                ? fmtPriceUsd(vol * fx)
-                : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`}
+            <span className="mono trade-tokens" title={fmtBookTokens(t.tokens)}>
+              {fmtBookTokens(t.tokens)}
+            </span>
+            <span
+              className={`mono trade-total ${isBuy ? "up" : isSell ? "down" : ""}`}
+              title={fx > 0 && vol > 0 ? fmtPriceUsd(vol * fx) : undefined}
+            >
+              {`${fmtBookGnot(vol)} GNOT`}
             </span>
             <span className={`trade-via mono ${viaGno ? "gnoswap" : viaLp ? "lp" : "curve"}`}>
               {viaGno ? "GNOSWAP" : viaLp ? "LP" : "CURVE"}

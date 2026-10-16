@@ -860,10 +860,21 @@ function MarketCard({
                     : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`
                   : "—"}
                 {hasRv && trades > 0 ? ` · ${trades} tx` : ""}
+                {m.statWindows?.windows?.["24h"] ? (
+                  <span className="muted">{` · 24h ${Number(m.statWindows.windows["24h"].volumeGnot).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}</span>
+                ) : null}
               </span>
             </div>
             <div className="mc-stat-pill">
-              <span className="muted">{t("buyers") || "Buyers"}:</span> <span>{buyers > 0 ? fmtNum(buyers) : "—"}</span>
+              <span className="muted">{t("holders") || "Holders"}:</span>{" "}
+              <span>
+                {m.holdersActive != null && Number.isFinite(Number(m.holdersActive))
+                  ? fmtNum(m.holdersActive)
+                  : "—"}
+              </span>
+              {buyers > 0 ? (
+                <span className="muted">{` · ${fmtNum(buyers)} ${t("buyers") || "buyers"}`}</span>
+              ) : null}
             </div>
           </div>
         </div>

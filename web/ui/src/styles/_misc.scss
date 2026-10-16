@@ -1918,6 +1918,10 @@
   background: var(--bg-elevated);
 }
 
+.trades-list.trades-list-terminal {
+  overflow-x: auto;
+}
+
 /* Always-visible thin scrollbar (WebKit) — avoids “disappear on flash” feel */
 .trades-list::-webkit-scrollbar {
   width: 10px;
@@ -2410,6 +2414,24 @@
   .holders-list-pro.holders-with-tx .holders-head,
   .holders-list-pro.holders-with-tx .holder-row-pro {
     min-width: 720px;
+  }
+
+  .trades-list-terminal {
+    overflow-x: auto !important;
+  }
+
+  .trades-list-terminal.trades-with-tx .trades-head-terminal,
+  .trades-list-terminal.trades-with-tx.trades-with-source .trades-head-terminal,
+  .trades-list-terminal .trade-row-terminal {
+    min-width: 760px;
+    grid-template-columns: 64px 64px minmax(120px, 1.2fr) minmax(108px, 1fr) minmax(120px, 1.1fr) 76px minmax(92px, 0.9fr);
+  }
+
+  .trades-list-terminal .trades-head-terminal span,
+  .trades-list-terminal .trade-row-terminal .trade-px,
+  .trades-list-terminal .trade-row-terminal .trade-tokens,
+  .trades-list-terminal .trade-row-terminal .trade-via {
+    display: block;
   }
 }
 

@@ -153,8 +153,7 @@ export function progressPctOf(m, fallbackParams) {
 }
 
 /**
- * One decimal between 0 and 10, otherwise a whole number.
- * Genuine 0 stays 0%. Missing raised with a 0 pct is an em dash.
+ * One decimal. Genuine 0 stays 0%. Missing raised with a 0 pct is an em dash.
  */
 export function formatProgressPct(pct, m) {
   const n = finiteNum(pct);
@@ -167,12 +166,9 @@ export function formatProgressPct(pct, m) {
       (m.raised == null || m.raised === "");
     return raisedMissing ? "—" : "0%";
   }
-  if (capped < 10) {
-    const one = Math.round(capped * 10) / 10;
-    if (one >= 10) return "10%";
-    return `${one.toFixed(1)}%`;
-  }
-  return `${Math.round(capped)}%`;
+  const one = Math.round(capped * 10) / 10;
+  if (one >= 100) return "100%";
+  return `${one.toFixed(1)}%`;
 }
 
 /** Volume row: curve tradeStats + DEX dexTradeStats. null if both are empty. */

@@ -1074,6 +1074,11 @@
   color: var(--bad, #f6465d);
 }
 
+.perf-time-sub {
+  font-size: 0.62rem;
+  letter-spacing: 0;
+}
+
 .perf-vol-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1107,6 +1112,17 @@
 
 .perf-vol-item strong.down {
   color: var(--bad, #f6465d);
+}
+
+.perf-vol-sub {
+  font-size: 0.62rem;
+  line-height: 1.2;
+}
+
+.perf-window-note {
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.3;
 }
 
 /* Terminal Trade Panel */
@@ -1424,7 +1440,7 @@
 
 .trades-list-terminal .trades-head-terminal {
   display: grid;
-  grid-template-columns: 60px 60px minmax(80px, 1fr) minmax(75px, 1fr) minmax(85px, 1fr) 80px minmax(90px, 1fr);
+  grid-template-columns: 64px 64px minmax(120px, 1.2fr) minmax(108px, 1fr) minmax(120px, 1.1fr) 76px minmax(92px, 0.9fr);
   padding: 0.55rem 0.85rem;
   font-size: 0.65rem;
   font-weight: 750;
@@ -1441,7 +1457,7 @@
 
 .trade-row-terminal {
   display: grid;
-  grid-template-columns: 60px 60px minmax(80px, 1fr) minmax(75px, 1fr) minmax(85px, 1fr) 80px minmax(90px, 1fr);
+  grid-template-columns: 64px 64px minmax(120px, 1.2fr) minmax(108px, 1fr) minmax(120px, 1.1fr) 76px minmax(92px, 0.9fr);
   padding: 0.55rem 0.85rem;
   align-items: center;
   font-size: 0.76rem;
@@ -1451,6 +1467,12 @@
 
 .trade-row-terminal:hover {
   background: var(--surface2);
+}
+
+.trade-row-terminal .trade-px,
+.trade-row-terminal .trade-tokens,
+.trade-row-terminal .trade-total {
+  white-space: nowrap;
 }
 
 .trade-row-terminal .trade-type-tag {

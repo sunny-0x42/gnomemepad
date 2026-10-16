@@ -1174,6 +1174,16 @@ async function getMarkets(RPC, sources, opts = {}) {
   }
   if (fullMetrics()) {
     for (const m of markets) attachCurveDexVolume(m);
+    const byPkg = new Map();
+    for (const m of markets) {
+      if (!m?.pkg || m.error) continue;
+      if (!byPkg.has(m.pkg)) byPkg.set(m.pkg, []);
+      byPkg.get(m.pkg).push(m);
+    }
+    await Promise.all(
+      [...byPkg.entries()].map(([pkg, rows]) => attachLedgerHolderCounts(pkg, rows)),
+    );
+    await attachListStatWindows(RPC, markets);
   }
 
   const params = (parts.find((p) => p.active) || parts[0])?.params || null;
@@ -2194,6 +2204,146 @@ async function scanIndexerCurveVolume(pkg) {
   return { ok: true, byId };
 }
 
+/** Buy/sell points for one launch from the same indexer walk as curve volume. */
+async function curveTradePointsFromIndexer(pkg, id) {
+  const pts = [];
+  let ugnotSum = 0;
+  const buySide = new Set(["Buy", "SwapBuy"]);
+  for (const func of ["Buy", "Sell", "SwapBuy", "SwapSell"]) {
+    const pack = await cachedIndexerFuncTxs(pkg, func);
+    if (!pack?.ok) return null;
+    for (const tx of pack.rows) {
+      const height = Number(tx.block_height) || 0;
+      const hash = String(tx.hash || "");
+      for (const ev of tx.response?.events || []) {
+        if (!ev || ev.type !== func || ev.pkg_path !== pkg) continue;
+        if (eventAttr(ev.attrs, "id") !== id) continue;
+        const ugnot = parseWholeUgnot(eventAttr(ev.attrs, "ugnot"));
+        const tokens = parseWholeUgnot(eventAttr(ev.attrs, "tokens"));
+        if (ugnot == null || tokens == null) return null;
+        const side = buySide.has(func) ? 0 : 1;
+        ugnotSum += ugnot;
+        if (!Number.isSafeInteger(ugnotSum)) return null;
+        const priceGnot = tokens > 0 ? ugnot / UGNOT_PER_GNOT / tokens : 0;
+        pts.push({
+          height,
+          hash,
+          side,
+          sideLabel: side === 0 ? "buy" : "sell",
+          ugnot,
+          tokens,
+          price: tokens > 0 ? (ugnot / tokens) * 1_000_000 : 0,
+          priceGnot,
+          volumeGnot: ugnot / UGNOT_PER_GNOT,
+          source: "curve",
+          trader: String(eventAttr(ev.attrs, side === 0 ? "buyer" : "seller") || ""),
+        });
+      }
+    }
+  }
+  pts.sort((a, b) => (a.height || 0) - (b.height || 0) || a.side - b.side);
+  return { pts, ugnotSum };
+}
+
+function dexLegOfChart(chart) {
+  let n = 0;
+  let ug = 0;
+  for (const p of chart || []) {
+    if (p.source !== "gnoswap" && p.source !== "reported") continue;
+    if (!isVolumeTradeSide(p.side)) continue;
+    n += 1;
+    ug += Number(p.ugnot) || 0;
+  }
+  return { n, ug };
+}
+
+const STAT_WINDOW_MS = [
+  ["5m", 5 * 60 * 1000],
+  ["1h", 60 * 60 * 1000],
+  ["6h", 6 * 60 * 60 * 1000],
+  ["24h", 24 * 60 * 60 * 1000],
+];
+
+/** GNOT/token from a curve point. Ring rows store pad Price, not priceGnot. */
+function volumePointPriceGnot(p) {
+  const direct = Number(p?.priceGnot);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const scaled = Number(p?.price);
+  if (Number.isFinite(scaled) && scaled > 0) return scaled / 1_000_000 / UGNOT_PER_GNOT;
+  const ug = Number(p?.ugnot);
+  const tok = Number(p?.tokens);
+  if (ug > 0 && tok > 0) return ug / UGNOT_PER_GNOT / tok;
+  return 0;
+}
+
+/**
+ * Buy/sell windows from one complete series.
+ * Returns null when any volume point lacks a timestamp or a safe ugnot integer.
+ */
+function buildStatWindows(chart, spotGnot, nowMs) {
+  const now = Number(nowMs) > 0 ? Number(nowMs) : Date.now();
+  const pts = [];
+  for (const p of chart || []) {
+    if (!isVolumeTradeSide(p.side)) continue;
+    const ug = Number(p.ugnot);
+    const tMs = Number(p.timeMs) || 0;
+    if (!Number.isSafeInteger(ug) || ug < 0 || !(tMs > 0)) return null;
+    pts.push({
+      tMs,
+      side: Number(p.side),
+      ug,
+      price: volumePointPriceGnot(p),
+    });
+  }
+  pts.sort((a, b) => a.tMs - b.tMs || a.side - b.side);
+  const lastPx = pts.length ? pts[pts.length - 1].price : 0;
+  const spot = Number(spotGnot) > 0 ? Number(spotGnot) : lastPx;
+  const firstPx = pts.find((p) => p.price > 0)?.price || 0;
+  const windows = {};
+  for (const [key, span] of STAT_WINDOW_MS) {
+    const cutoff = now - span;
+    let base = 0;
+    let buyUg = 0;
+    let sellUg = 0;
+    let buys = 0;
+    let sells = 0;
+    for (const p of pts) {
+      if (p.tMs <= cutoff) {
+        if (p.price > 0) base = p.price;
+        continue;
+      }
+      if (p.side === 0) {
+        buys += 1;
+        buyUg += p.ug;
+      } else if (p.side === 1) {
+        sells += 1;
+        sellUg += p.ug;
+      }
+      if (!Number.isSafeInteger(buyUg) || !Number.isSafeInteger(sellUg)) return null;
+    }
+    if (!(base > 0)) base = firstPx;
+    const volUg = buyUg + sellUg;
+    if (!Number.isSafeInteger(volUg)) return null;
+    windows[key] = {
+      buys,
+      sells,
+      trades: buys + sells,
+      volumeGnot: volUg / UGNOT_PER_GNOT,
+      buyVolumeGnot: buyUg / UGNOT_PER_GNOT,
+      sellVolumeGnot: sellUg / UGNOT_PER_GNOT,
+      netGnot: (buyUg - sellUg) / UGNOT_PER_GNOT,
+      pricePct: base > 0 && spot > 0 ? ((spot - base) / base) * 100 : null,
+    };
+  }
+  return {
+    asOfMs: now,
+    blockMs: 2000,
+    incomplete: false,
+    spotGnot: spot > 0 ? spot : null,
+    windows,
+  };
+}
+
 const HOLDER_G1 = /^g1[a-z0-9]{38,}$/i;
 const ledgerInflight = new Map();
 
@@ -2325,6 +2475,76 @@ async function holdersFromLedger(RPC, PKG, id) {
       source: "indexer ledger",
     },
   };
+}
+
+/** Stamp holdersActive on market rows when the replay sum equals RealSold. */
+async function attachLedgerHolderCounts(pkg, markets) {
+  const ledger = await replayPadBalances(pkg);
+  if (!ledger?.ok) return;
+  for (const m of markets || []) {
+    if (!m || m.pkg !== pkg || m.error) continue;
+    const sold = Number(m.sold);
+    if (!Number.isSafeInteger(sold) || sold < 0) continue;
+    const book = ledger.byId[m.id] || new Map();
+    let sum = 0;
+    let active = 0;
+    let bad = false;
+    for (const bal of book.values()) {
+      if (!Number.isSafeInteger(bal) || bal < 0) {
+        bad = true;
+        break;
+      }
+      if (bal > 0) {
+        active += 1;
+        sum += bal;
+        if (!Number.isSafeInteger(sum)) {
+          bad = true;
+          break;
+        }
+      }
+    }
+    if (bad || sum !== sold) continue;
+    m.holdersActive = active;
+    m.holdersCapped = false;
+    m.holdersSource = "indexer ledger";
+  }
+}
+
+/** 5m–24h windows on list rows when the series is the full trade set. */
+async function attachListStatWindows(RPC, markets) {
+  const jobs = [];
+  for (const m of markets || []) {
+    if (!m || m.error || !m.tradeStats || m.tradeStats.volumeCapped === true) continue;
+    if (m.tradeStats.volumeSource === "indexer") {
+      const life = await curveTradePointsFromIndexer(m.pkg, m.id);
+      const expect = Number(m.tradeStats.trades);
+      const curveUg = Math.round(Number(m.tradeStats.volumeGnot) * UGNOT_PER_GNOT);
+      if (!life || life.pts.length !== expect || Math.abs(life.ugnotSum - curveUg) > 1) continue;
+      jobs.push({ m, pts: life.pts });
+    } else {
+      const pts = rememberedCurvePoints(m.pkg, m.id);
+      if (!pts?.length) continue;
+      const ringSides = pts.filter((p) => isVolumeTradeSide(p.side)).length;
+      if (ringSides !== Number(m.tradeStats.trades)) continue;
+      jobs.push({ m, pts });
+    }
+  }
+  if (!jobs.length) return;
+  try {
+    await stampTradeTimes(RPC, jobs.flatMap((job) => job.pts));
+  } catch {
+    return;
+  }
+  for (const { m, pts } of jobs) {
+    const priced = pts.map((p) => ({ ...p, priceGnot: volumePointPriceGnot(p) }));
+    // Keep the card mark on priceGnot. The window spot is the last trade, same as the token page.
+    const spot = Number(m.spotGnot) > 0 ? Number(m.spotGnot) : lastTradePriceGnot(priced) || 0;
+    const stat = buildStatWindows(priced, spot);
+    if (!stat) continue;
+    m.statWindows = stat;
+    const pct = stat.windows["24h"]?.pricePct;
+    if (pct != null && Number.isFinite(pct)) m.p24h = pct;
+  }
 }
 
 async function indexerPadCurveVolume(pkg) {
@@ -2625,6 +2845,32 @@ async function getMarket(RPC, PKG, id, meta = {}) {
       curveHistoryPts,
       chartOutsideCurve(m.chart),
     );
+    if (m.tradeStats?.volumeSource === "indexer" && m.tradeStats.volumeCapped !== true) {
+      const life = await curveTradePointsFromIndexer(PKG, id);
+      const dex = dexLegOfChart(m.chart);
+      const expectN = Number(m.tradeStats.trades) - dex.n;
+      const curveUg = Math.round(Number(m.tradeStats.volumeGnot) * UGNOT_PER_GNOT - dex.ug);
+      if (
+        life &&
+        life.pts.length === expectN &&
+        life.pts.length > (curveHistoryPts || []).filter((p) => isVolumeTradeSide(p.side)).length &&
+        Math.abs(life.ugnotSum - curveUg) <= 1
+      ) {
+        const keep = (m.chart || []).filter(
+          (p) =>
+            !isVolumeTradeSide(p.side) || p.source === "gnoswap" || p.source === "reported",
+        );
+        m.chart = [...keep, ...life.pts].sort(
+          (a, b) => (Number(a.height) || 0) - (Number(b.height) || 0) || Number(a.side) - Number(b.side),
+        );
+        m.tradesComplete = true;
+        try {
+          await stampTradeTimes(RPC, life.pts);
+        } catch {
+          /* height stamps are optional */
+        }
+      }
+    }
   }
   // Detail chart already merges loaded DEX swaps into tradeStats. Do not add them twice.
   if (fullMetrics() && curveHistoryOk && Number.isFinite(Number(m.tradeStats.volumeGnot))) {
@@ -2718,6 +2964,18 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   m.markReliable = !!reliableMark;
   if (m.gnoswapListed && m.dexHistoryEmpty && !reportedPts.length && src === "pool_mark") {
     m.markReliable = false;
+  }
+
+  if (m.tradeStats && m.tradeStats.volumeCapped !== true) {
+    const volSides = (m.chart || []).filter((p) => isVolumeTradeSide(p.side)).length;
+    if (volSides === Number(m.tradeStats.trades)) {
+      const stat = buildStatWindows(m.chart, m.spotGnot ?? m.priceGnot);
+      if (stat) {
+        m.statWindows = stat;
+        const pct = stat.windows["24h"]?.pricePct;
+        if (pct != null && Number.isFinite(pct)) m.p24h = pct;
+      }
+    }
   }
 
   m.topTrades = (m.chart || [])
