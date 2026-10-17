@@ -132,7 +132,7 @@
 /* Dense single-line: side · token · vol · via · time */
 .activity-feed-row {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) minmax(4.5rem, 0.9fr) auto 3.1rem;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(5.4rem, 1.05fr) auto 3.1rem;
   gap: 0.35rem 0.45rem;
   align-items: center;
   padding: 0.38rem 0.55rem;

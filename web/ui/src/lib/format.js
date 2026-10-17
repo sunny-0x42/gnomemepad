@@ -98,28 +98,32 @@ export function fmtFixedDecimal(n, { maxDecimals = 16 } = {}) {
 }
 
 /**
- * GNOT amounts (volume, raised, fees, trade size).
- * ≥1M → compact M/B; 1K–1M → grouped "1,234.56"; small → sensible decimals.
+ * GNOT volume. Always two decimal places: 196022.6735 → "196,022.67".
+ */
+export function fmtVolGnot(gnot) {
+  const x = Number(gnot);
+  if (!Number.isFinite(x)) return "—";
+  return x.toLocaleString(LOCALE, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
+ * GNOT amounts (raised, fees, balances, trade size).
+ * Two decimal places. ≥1M stays compact (1.2M).
  */
 export function fmtGnot(ugnotOrGnot, { alreadyGnot = false } = {}) {
   const g = alreadyGnot
     ? Number(ugnotOrGnot)
     : (Number(ugnotOrGnot) || 0) / UGNOT_PER_GNOT;
   if (!Number.isFinite(g)) return "—";
-  if (g === 0) return "0";
   const abs = Math.abs(g);
-  const sign = g < 0 ? "-" : "";
-
-  // Very large: 1.2M / 3.4B GNOT
-  if (abs >= 1_000_000) return sign + fmtCompact(abs, { threshold: 1_000_000 }).replace(/^-/, "");
-  // Thousands: always show full with comma separators (not "3.5K")
-  if (abs >= 1_000) return sign + fmtGrouped(abs, { maxFrac: 2 });
-  // 1 … 999.9999
-  if (abs >= 1) return sign + trimFrac(abs.toFixed(4));
-  // 0.0001 … 1
-  if (abs >= 0.0001) return sign + trimFrac(abs.toFixed(6));
-  // Tiny GNOT leftovers
-  return sign + fmtFixedDecimal(abs).replace(/^-/, "");
+  if (abs >= 1_000_000) {
+    const sign = g < 0 ? "-" : "";
+    return sign + fmtCompact(abs, { threshold: 1_000_000 }).replace(/^-/, "");
+  }
+  return fmtVolGnot(g);
 }
 
 /** Spot price in GNOT/token — full fixed decimal only. */

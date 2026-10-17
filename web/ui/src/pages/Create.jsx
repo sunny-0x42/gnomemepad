@@ -59,6 +59,8 @@ export default function Create() {
   const [venuesApi, setVenuesApi] = useState(null);
   const initialVenue = defaultPreferredVenue(null, networkId);
   const [preferredVenue, setPreferredVenue] = useState(initialVenue);
+  const [mechanism, setMechanism] = useState("curve");
+  const [devBuy, setDevBuy] = useState("1");
   /** Which DEX tab’s fee copy is visible (switches with tab click). */
   const [dexFeeTab, setDexFeeTab] = useState(initialVenue);
 
@@ -181,7 +183,17 @@ export default function Create() {
         return false;
       }
     }
+    if (mechanism === "opening" && !openingBuyGnot()) {
+      showToast(t("mechDevBuyBad"), false);
+      return false;
+    }
     return true;
+  }
+
+  function openingBuyGnot() {
+    const n = Number(String(devBuy).replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0 || n > 10_000) return null;
+    return n;
   }
 
   function goConfirm(e) {
@@ -452,6 +464,7 @@ export default function Create() {
         symbol: sym,
         name: nm,
         image: imageUri || image.trim(),
+        devBuy: mechanism === "opening" ? openingBuyGnot() : null,
       });
       setStep(3);
       showToast(
@@ -481,7 +494,11 @@ export default function Create() {
 
   function tokenPath() {
     if (!created?.id) return "/";
-    return `/token/${encodeURIComponent(created.id)}?pkg=${encodeURIComponent(created.pkg || "")}`;
+    const q = new URLSearchParams();
+    if (created.pkg) q.set("pkg", created.pkg);
+    if (created.devBuy) q.set("buy", String(created.devBuy));
+    const qs = q.toString();
+    return `/token/${encodeURIComponent(created.id)}${qs ? `?${qs}` : ""}`;
   }
 
   function shareX() {
@@ -591,6 +608,8 @@ export default function Create() {
                 setWebsite("");
                 setTwitter("");
                 setTelegram("");
+                setMechanism("curve");
+                setDevBuy("1");
                 setCreated(null);
               }}
             >
@@ -874,6 +893,105 @@ export default function Create() {
                   </label>
                 </div>
 
+                <div className="create-dex-card create-mech-card" aria-labelledby="create-mech-heading">
+                  <div className="create-dex-card-head">
+                    <div className="create-dex-card-titles">
+                      <h3 id="create-mech-heading" className="create-dex-card-title">
+                        {t("mechTitle")}
+                      </h3>
+                      <p className="create-dex-card-lede muted">{t("mechLede")}</p>
+                    </div>
+                  </div>
+                  <div className="create-mech-k">{t("mechLive")}</div>
+                  <div className="filter-tabs create-dex-tabs" role="radiogroup" aria-label={t("mechTitle")}>
+                    {[
+                      ["curve", t("mechCurve")],
+                      ["opening", t("mechOpening")],
+                    ].map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        role="radio"
+                        aria-checked={mechanism === id}
+                        className={`filter-btn${mechanism === id ? " active" : ""}`}
+                        onClick={() => setMechanism(id)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="create-mech-body muted">
+                    {mechanism === "opening" ? t("mechOpeningBody") : t("mechCurveBody")}
+                  </p>
+                  {mechanism === "opening" && (
+                    <div className="create-mech-buy">
+                      <span className="create-mech-k">{t("mechDevBuy")}</span>
+                      <div className="create-mech-chips">
+                        {["1", "5", "10"].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            className={`filter-btn${devBuy === n ? " active" : ""}`}
+                            onClick={() => setDevBuy(n)}
+                          >
+                            {n} GNOT
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        className="mono"
+                        inputMode="decimal"
+                        value={devBuy}
+                        placeholder={t("mechDevBuyPh")}
+                        onChange={(e) => setDevBuy(e.target.value.replace(/[^0-9.,]/g, ""))}
+                      />
+                    </div>
+                  )}
+                  <ul className="create-mech-fixed">
+                    <li>
+                      <strong>{t("mechFee")}</strong>
+                      <span>1.20%</span>
+                      <p className="muted">{t("mechFeeBody")}</p>
+                    </li>
+                    <li>
+                      <strong>{t("mechSplit")}</strong>
+                      <div className="create-mech-bar" aria-hidden>
+                        <span className="create-mech-seg creator" style={{ width: "40%" }} />
+                        <span className="create-mech-seg protocol" style={{ width: "40%" }} />
+                        <span className="create-mech-seg lp" style={{ width: "20%" }} />
+                      </div>
+                      <p className="muted">
+                        {t("mechCreator")} 40% · {t("mechProtocol")} 40% · {t("mechLp")} 20%
+                      </p>
+                      <p className="muted">{t("mechSplitBody")}</p>
+                    </li>
+                    <li>
+                      <strong>{t("mechGuard")}</strong>
+                      <span>{t("mechGuardBody")}</span>
+                    </li>
+                    <li>
+                      <strong>{t("mechQuote")}</strong>
+                      <span>GNOT</span>
+                      <p className="muted">{t("mechQuoteBody")}</p>
+                    </li>
+                  </ul>
+                  <div className="create-mech-k">{t("mechSoon")}</div>
+                  <div className="create-mech-chips">
+                    {[
+                      t("mechSoonPool"),
+                      t("mechSoonTax"),
+                      t("mechSoonSplit"),
+                      t("mechSoonQuote"),
+                      t("mechSoonSkip"),
+                    ].map((label) => (
+                      <button key={label} type="button" className="filter-btn is-soon" disabled>
+                        {label}
+                        <span className="dex-tab-soon">{t("soon") || "Soon"}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   className="btn primary lg block"
@@ -952,6 +1070,26 @@ export default function Create() {
                       <span className="muted">Will call SetMeta after Create</span>
                     </div>
                   )}
+                  <div className="quote-row">
+                    <span>{t("mechTitle")}</span>
+                    <strong>{mechanism === "opening" ? t("mechOpening") : t("mechCurve")}</strong>
+                  </div>
+                  <div className="quote-row">
+                    <span>{t("mechFee")}</span>
+                    <strong>1.20%</strong>
+                  </div>
+                  <div className="quote-row">
+                    <span>{t("mechSplit")}</span>
+                    <span>40% · 40% · 20%</span>
+                  </div>
+                  <div className="quote-row">
+                    <span>{t("mechDevBuy")}</span>
+                    <strong>
+                      {mechanism === "opening" && openingBuyGnot()
+                        ? `${openingBuyGnot()} GNOT`
+                        : "—"}
+                    </strong>
+                  </div>
                 </div>
 
                 <div className="admin-actions" style={{ marginBottom: "0.75rem" }}>

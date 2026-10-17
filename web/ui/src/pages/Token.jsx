@@ -26,6 +26,8 @@ import {
   fmtPnl,
   fmtPrice,
   fmtPriceUsd,
+  fmtUsd,
+  fmtVolGnot,
   shortAddr,
   toUsd,
   UGNOT_PER_GNOT,
@@ -107,7 +109,7 @@ function fmtSignedPct(n) {
 function fmtExactGnot(g) {
   const x = Number(g);
   if (!Number.isFinite(x)) return "—";
-  return `${x.toLocaleString("en-US", { maximumFractionDigits: 6 })} GNOT`;
+  return `${fmtVolGnot(x)} GNOT`;
 }
 
 function fmtExactCount(n) {
@@ -122,6 +124,7 @@ export default function Token() {
   const [sp] = useSearchParams();
   const pkgQ = sp.get("pkg") || "";
   const forceSkeleton = sp.get("skeleton") === "1";
+  const buyQ = sp.get("buy") || "";
   const {
     wallet,
     isConnecting,
@@ -172,6 +175,13 @@ export default function Token() {
   });
 
   const metaPkg = health?.modules?.meta || health?.meta || null;
+
+  useEffect(() => {
+    const n = Number(String(buyQ).replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0) return;
+    setSide("buy");
+    setAmountGnot(String(n));
+  }, [buyQ]);
 
   const loadBalance = useCallback(async (market) => {
     if (!wallet?.address || !market?.id) return;
@@ -2602,10 +2612,7 @@ export default function Token() {
             <span className="ths-metric-sub faint mono">
               {txCount == null ? "—" : `${fmtNum(txCount)} tx`}
               {volKnown
-                ? ` · ${(volGnotNum > 0 ? volGnotNum : 0).toLocaleString("en-US", {
-                    minimumFractionDigits: 4,
-                    maximumFractionDigits: 4,
-                  })} GNOT`
+                ? ` · ${fmtVolGnot(volGnotNum > 0 ? volGnotNum : 0)} GNOT`
                 : ""}
               {m.volumeScope === "curve_only" && !(Number(m.dexTradeStats?.volumeGnot) > 0)
                 ? " · curve only"
@@ -2901,8 +2908,12 @@ export default function Token() {
                 const pct = row?.pricePct;
                 const n = Number(pct);
                 const known = pct != null && Number.isFinite(n);
+                const fx = Number(m.gnotUsd) || 0;
+                const volUsd = row && fx > 0 && Number(row.volumeGnot) > 0 ? Number(row.volumeGnot) * fx : 0;
                 const tip = row
-                  ? `${fmtExactCount(row.trades)} tx · ${fmtExactGnot(row.volumeGnot)} · net ${fmtExactGnot(row.netGnot)}`
+                  ? `${fmtExactCount(row.trades)} tx · ${
+                      volUsd > 0 ? `${fmtUsd(volUsd)} · ` : ""
+                    }${fmtVolGnot(row.volumeGnot)} GNOT · net ${fmtExactGnot(row.netGnot)}`
                   : "";
                 return (
                   <div key={label} className="perf-time-cell" title={tip}>
@@ -2911,7 +2922,9 @@ export default function Token() {
                       {known ? fmtSignedPct(n) : "—"}
                     </b>
                     <span className="perf-time-sub mono faint">
-                      {row ? `${fmtExactCount(row.trades)} tx` : "—"}
+                      {row
+                        ? `${fmtExactCount(row.trades)} tx${volUsd > 0 ? ` · ${fmtUsd(volUsd)}` : ""}`
+                        : "—"}
                     </span>
                   </div>
                 );
@@ -2920,9 +2933,15 @@ export default function Token() {
             <div className="perf-vol-row">
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("vol24h") || "24H VOL").toUpperCase()}</span>
-                <strong className="mono">{w24 ? fmtExactGnot(w24.volumeGnot) : "—"}</strong>
-                {w24 && Number(m.gnotUsd) > 0 && w24.volumeGnot > 0 ? (
-                  <span className="perf-vol-sub faint">{fmtMcapUsd(w24.volumeGnot * m.gnotUsd)}</span>
+                <strong className="mono">
+                  {w24 && Number(m.gnotUsd) > 0 && Number(w24.volumeGnot) > 0
+                    ? fmtMcapUsd(w24.volumeGnot * m.gnotUsd)
+                    : w24
+                      ? `${fmtVolGnot(w24.volumeGnot)} GNOT`
+                      : "—"}
+                </strong>
+                {w24 && Number(m.gnotUsd) > 0 && Number(w24.volumeGnot) > 0 ? (
+                  <span className="perf-vol-sub faint">{fmtVolGnot(w24.volumeGnot)} GNOT</span>
                 ) : null}
               </div>
               <div className="perf-vol-item">
@@ -2936,8 +2955,15 @@ export default function Token() {
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("net24h") || "24H NET").toUpperCase()}</span>
                 <strong className={`mono ${w24 && w24.netGnot < 0 ? "down" : "up"}`}>
-                  {w24 ? fmtExactGnot(w24.netGnot) : "—"}
+                  {w24 && Number(m.gnotUsd) > 0
+                    ? fmtUsd(Number(w24.netGnot) * Number(m.gnotUsd))
+                    : w24
+                      ? fmtExactGnot(w24.netGnot)
+                      : "—"}
                 </strong>
+                {w24 && Number(m.gnotUsd) > 0 ? (
+                  <span className="perf-vol-sub faint">{fmtExactGnot(w24.netGnot)}</span>
+                ) : null}
               </div>
             </div>
             <div className="perf-vol-row">
@@ -2957,7 +2983,26 @@ export default function Token() {
               </div>
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("sold") || "SOLD").toUpperCase()}</span>
-                <strong className="mono">{m.sold != null ? fmtExactCount(m.sold) : "—"}</strong>
+                <strong
+                  className="mono sold-token-val"
+                  title={m.symbol ? `${m.symbol} sold` : "Sold"}
+                >
+                  {m.sold != null ? (
+                    <>
+                      <TokenAvatar
+                        name={m.name}
+                        symbol={m.symbol}
+                        uri={img}
+                        seed={`${m.pkg}:${m.id}`}
+                        size="sm"
+                        className="sold-token-icon"
+                      />
+                      <span>{fmtExactCount(m.sold)}</span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </strong>
               </div>
               <div className="perf-vol-item">
                 <span className="perf-vol-k">{(t("raised") || "RAISED").toUpperCase()}</span>

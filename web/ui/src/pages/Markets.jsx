@@ -15,6 +15,7 @@ import {
   fmtNum,
   fmtPrice,
   fmtPriceUsd,
+  fmtVolGnot,
   relativeTime,
   shortAddr,
   toUsd,
@@ -857,11 +858,18 @@ function MarketCard({
                 {hasRv && vol > 0
                   ? toUsd(vol, fx) > 0
                     ? fmtMcapUsd(toUsd(vol, fx))
-                    : `${fmtGnot(vol, { alreadyGnot: true })} GNOT`
+                    : `${fmtVolGnot(vol)} GNOT`
                   : "—"}
                 {hasRv && trades > 0 ? ` · ${trades} tx` : ""}
                 {m.statWindows?.windows?.["24h"] ? (
-                  <span className="muted">{` · 24h ${Number(m.statWindows.windows["24h"].volumeGnot).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}</span>
+                  <span className="muted">
+                    {` · 24h ${(() => {
+                      const g = Number(m.statWindows.windows["24h"].volumeGnot) || 0;
+                      const usd = toUsd(g, fx);
+                      if (usd > 0) return fmtMcapUsd(usd);
+                      return `${fmtVolGnot(g)} GNOT`;
+                    })()}`}
+                  </span>
                 ) : null}
               </span>
             </div>

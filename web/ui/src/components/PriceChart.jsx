@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createChart, ColorType, CrosshairMode, LineStyle } from "lightweight-charts";
 import {
   fmtClock,
-  fmtGnot,
   fmtNum,
   fmtPrice,
   fmtPriceUsd,
+  fmtUsd,
+  fmtVolGnot,
   relativeTime,
   tradeOnchainLink,
   accountExplorerUrl,
@@ -850,7 +851,7 @@ export default function PriceChart({
                   <b>
                     {showUsd && fx > 0
                       ? fmtPriceUsd(hover.vol * fx)
-                      : fmtGnot(hover.vol, { alreadyGnot: true })}
+                      : `${fmtVolGnot(hover.vol)} GNOT`}
                   </b>
                 </div>
               ) : null}
@@ -1006,9 +1007,34 @@ function fmtBookTokens(n) {
 }
 
 function fmtBookGnot(g) {
-  const x = Number(g);
-  if (!Number.isFinite(x)) return "—";
-  return x.toLocaleString("en-US", { maximumFractionDigits: 6 });
+  return fmtVolGnot(g);
+}
+
+function tradeNotionalGnot(t) {
+  if (t?.volumeGnot != null && Number(t.volumeGnot) > 0) return Number(t.volumeGnot);
+  const ug = Number(t?.ugnot) || 0;
+  return ug > 0 ? ug / 1e6 : 0;
+}
+
+function tradeSpotGnot(t) {
+  const p = Number(t?.priceGnot);
+  if (p > 0) return p;
+  const tokens = Number(t?.tokens) || 0;
+  const vol = tradeNotionalGnot(t);
+  if (tokens > 0 && vol > 0) return vol / tokens;
+  return 0;
+}
+
+function tradeSpotUsd(t, fx) {
+  if (Number(t?.priceUsd) > 0) return Number(t.priceUsd);
+  const pg = tradeSpotGnot(t);
+  return pg > 0 && fx > 0 ? pg * fx : 0;
+}
+
+function tradeNotionalUsd(t, fx) {
+  if (Number(t?.volumeUsd) > 0) return Number(t.volumeUsd);
+  const vol = tradeNotionalGnot(t);
+  return vol > 0 && fx > 0 ? vol * fx : 0;
 }
 
 export function TradesList({ trades = [], limit = 30, showSource = false, gnotUsd = 0 }) {
@@ -1145,7 +1171,10 @@ export function TradesList({ trades = [], limit = 30, showSource = false, gnotUs
         const isSell = side === 1;
         const isAddLp = side === 3 || lab === "add_lp";
         const isRmLp = side === 4 || lab === "remove_lp";
-        const vol = t.volumeGnot != null ? t.volumeGnot : (Number(t.ugnot) || 0) / 1e6;
+        const vol = tradeNotionalGnot(t);
+        const pxG = tradeSpotGnot(t);
+        const pxUsd = tradeSpotUsd(t, fx);
+        const volUsd = tradeNotionalUsd(t, fx);
         const ts = tradeTimeMs(t);
         void nowTick;
         const rel =
@@ -1197,24 +1226,36 @@ export function TradesList({ trades = [], limit = 30, showSource = false, gnotUs
             </span>
             <span
               className="mono trade-px"
-              title={
-                t.priceGnot > 0 && fx > 0
-                  ? fmtPriceUsd(Number(t.priceGnot) * fx)
-                  : t.priceUsd > 0
-                    ? fmtPriceUsd(t.priceUsd)
-                    : undefined
-              }
+              title={pxG > 0 ? `${fmtPrice(pxG)} GNOT` : undefined}
             >
-              {t.priceGnot != null && t.priceGnot > 0 ? `${fmtPrice(t.priceGnot)} GNOT` : "—"}
+              {pxUsd > 0 ? (
+                <span className="trade-money">
+                  <span className="trade-money-usd">{fmtPriceUsd(pxUsd)}</span>
+                  {pxG > 0 ? (
+                    <span className="trade-money-sub">{fmtPrice(pxG)} GNOT</span>
+                  ) : null}
+                </span>
+              ) : pxG > 0 ? (
+                `${fmtPrice(pxG)} GNOT`
+              ) : (
+                "—"
+              )}
             </span>
             <span className="mono trade-tokens" title={fmtBookTokens(t.tokens)}>
               {fmtBookTokens(t.tokens)}
             </span>
             <span
               className={`mono trade-total ${isBuy ? "up" : isSell ? "down" : ""}`}
-              title={fx > 0 && vol > 0 ? fmtPriceUsd(vol * fx) : undefined}
+              title={vol > 0 ? `${fmtBookGnot(vol)} GNOT` : undefined}
             >
-              {`${fmtBookGnot(vol)} GNOT`}
+              {volUsd > 0 ? (
+                <span className="trade-money">
+                  <span className="trade-money-usd">{fmtUsd(volUsd)}</span>
+                  <span className="trade-money-sub">{fmtBookGnot(vol)} GNOT</span>
+                </span>
+              ) : (
+                `${fmtBookGnot(vol)} GNOT`
+              )}
             </span>
             <span className={`trade-via mono ${viaGno ? "gnoswap" : viaLp ? "lp" : "curve"}`}>
               {viaGno ? "GNOSWAP" : viaLp ? "LP" : "CURVE"}

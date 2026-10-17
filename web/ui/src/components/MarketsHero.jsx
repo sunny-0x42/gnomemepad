@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { usePrefs } from "../context/PrefsContext";
-import { relativeTime } from "../lib/format";
+import { fmtVolGnot, relativeTime } from "../lib/format";
 import { displayVolumeGnot, formatProgressPct, progressPctOf } from "../lib/marketHeat";
 import { resolveTokenImage, metaKey } from "../lib/meta";
 import TokenAvatar from "./TokenAvatar";
@@ -30,7 +30,7 @@ function formatActivityVol(volGnot, gnotUsd) {
   if (n == null || !(n > 0)) return "—";
   const usd = Number(gnotUsd) > 0 ? n * Number(gnotUsd) : 0;
   if (usd > 0) return `$${formatCompact(usd)} vol`;
-  return `${n.toFixed(2)} GNOT`;
+  return `${fmtVolGnot(n)} GNOT`;
 }
 
 function formatCompact(num) {
@@ -731,7 +731,7 @@ export default function MarketsHero({
                       spotVolUsd > 0
                         ? `$${formatCompact(spotVolUsd)}`
                         : spotVolGnot != null && spotVolGnot > 0
-                          ? `${spotVolGnot.toFixed(1)} GNOT`
+                          ? `${fmtVolGnot(spotVolGnot)} GNOT`
                           : "—"
                     )}
                   </strong>

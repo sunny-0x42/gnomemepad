@@ -2617,7 +2617,9 @@ async function indexerPadCurveVolume(pkg) {
  * extraStats is the already-loaded DEX/reported leg (detail chart only).
  */
 async function maybeUpgradeCurveVolume(pkg, id, stats, curvePoints, extraStats) {
-  if (!fullMetrics() || !stats || stats.volumeCapped !== true || !pkg || !id) return;
+  // A full TradeHistory ring is 128 points and has already dropped older fills.
+  // Replace it only when the indexer walk finishes and covers every ugnot still in the ring.
+  if (!stats || stats.volumeCapped !== true || !pkg || !id) return;
   try {
     const table = await indexerPadCurveVolume(pkg);
     if (!table || table.ok !== true) return;
@@ -2914,7 +2916,7 @@ async function getMarket(RPC, PKG, id, meta = {}) {
     }
   }
   // Detail chart already merges loaded DEX swaps into tradeStats. Do not add them twice.
-  if (fullMetrics() && curveHistoryOk && Number.isFinite(Number(m.tradeStats.volumeGnot))) {
+  if (curveHistoryOk && Number.isFinite(Number(m.tradeStats?.volumeGnot))) {
     m.volumeGnot = Number(m.tradeStats.volumeGnot);
   }
   // Real DEX swaps only (exclude injected list/LP rows that also use source=gnoswap)
@@ -3772,8 +3774,24 @@ async function getActivity(RPC, sources, limit = 40, preloaded = null) {
   } catch {
     /* non-fatal */
   }
+  let gnotUsd = 0;
+  try {
+    const fx = await fetchGnoswapFx();
+    gnotUsd = Number(fx?.gnotUsd) || 0;
+  } catch {
+    gnotUsd = 0;
+  }
+  if (gnotUsd > 0) {
+    for (const e of capped) {
+      const vol = Number(e.volumeGnot) || 0;
+      const px = Number(e.priceGnot) || 0;
+      if (!(Number(e.volumeUsd) > 0) && vol > 0) e.volumeUsd = vol * gnotUsd;
+      if (!(Number(e.priceUsd) > 0) && px > 0) e.priceUsd = px * gnotUsd;
+    }
+  }
   return {
     events: capped,
+    gnotUsd,
     count: capped.length,
     scannedMarkets: sorted.length,
     sources: {

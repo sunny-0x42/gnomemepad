@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { fmtClock, fmtGnot, fmtNum, fmtPrice, relativeTime } from "../lib/format";
+import { fmtClock, fmtNum, fmtPrice, fmtPriceUsd, fmtUsd, fmtVolGnot, relativeTime } from "../lib/format";
 import { usePrefs } from "../context/PrefsContext";
 
 /**
@@ -39,6 +39,7 @@ function eventTimeMs(e) {
 export default function ActivityFeed({ limit = 18 }) {
   const { t } = usePrefs();
   const [events, setEvents] = useState([]);
+  const [gnotUsd, setGnotUsd] = useState(0);
   const [err, setErr] = useState("");
   const [at, setAt] = useState(null);
   const [flashKeys, setFlashKeys] = useState(() => new Set());
@@ -56,6 +57,13 @@ export default function ActivityFeed({ limit = 18 }) {
           .filter((e) => Number(e.side) !== 2 || (Number(e.volumeGnot) || 0) > 0)
           .slice(0, limit);
         setEvents(rows);
+        const fx = Number(d?.gnotUsd) || 0;
+        setGnotUsd(fx);
+        if (!(fx > 0)) {
+          api("/api/fx")
+            .then((fxBody) => setGnotUsd(Number(fxBody?.gnotUsd) || 0))
+            .catch(() => {});
+        }
         setAt(Date.now());
         setErr("");
       } catch (e) {
@@ -154,6 +162,10 @@ export default function ActivityFeed({ limit = 18 }) {
             const lab = side === 0 ? "BUY" : side === 1 ? "SELL" : "NEW";
             const cls = side === 0 ? "buy" : side === 1 ? "sell" : "new";
             const vol = Number(e.volumeGnot) || 0;
+            const fx = Number(e.gnotUsd) > 0 ? Number(e.gnotUsd) : gnotUsd;
+            const volUsd = Number(e.volumeUsd) > 0 ? Number(e.volumeUsd) : vol > 0 && fx > 0 ? vol * fx : 0;
+            const pxG = Number(e.priceGnot) || 0;
+            const pxUsd = Number(e.priceUsd) > 0 ? Number(e.priceUsd) : pxG > 0 && fx > 0 ? pxG * fx : 0;
             const ts = eventTimeMs(e);
             void nowTick;
             const rel = ts != null ? relativeTime(ts) : e.height ? `h${e.height}` : "—";
@@ -167,7 +179,8 @@ export default function ActivityFeed({ limit = 18 }) {
             const sym = e.symbol || e.name || e.id;
             const tip = [
               e.name && e.symbol && e.name !== e.symbol ? e.name : null,
-              e.priceGnot > 0 ? `px ${fmtPrice(e.priceGnot)}` : null,
+              pxUsd > 0 ? `px ${fmtPriceUsd(pxUsd)}` : pxG > 0 ? `px ${fmtPrice(pxG)} GNOT` : null,
+              volUsd > 0 ? fmtUsd(volUsd) : null,
               e.tokens > 0 ? `${fmtNum(e.tokens)} tok` : null,
               abs,
               viaLabel,
@@ -189,11 +202,16 @@ export default function ActivityFeed({ limit = 18 }) {
                   <strong>${sym}</strong>
                 </span>
                 <span className="mono af-vol">
-                  {vol > 0 ? (
-                    <>
-                      {fmtGnot(vol, { alreadyGnot: true })}
-                      <span className="trade-unit"> GNOT</span>
-                    </>
+                  {volUsd > 0 || vol > 0 ? (
+                    <span className="trade-money af-money">
+                      {volUsd > 0 ? <span className="trade-money-usd">{fmtUsd(volUsd)}</span> : null}
+                      {vol > 0 ? (
+                        <span className="trade-money-sub">
+                          {fmtVolGnot(vol)}
+                          <span className="trade-unit"> GNOT</span>
+                        </span>
+                      ) : null}
+                    </span>
                   ) : (
                     "—"
                   )}

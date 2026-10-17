@@ -461,7 +461,7 @@
 /* Dense single-line: side · token · vol · via · time */
 .activity-feed-row {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) minmax(4.5rem, 0.9fr) auto 3.1rem;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(5.4rem, 1.05fr) auto 3.1rem;
   gap: 0.35rem 0.45rem;
   align-items: center;
   padding: 0.38rem 0.55rem;
@@ -584,8 +584,10 @@
   white-space: nowrap;
   text-align: right;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.af-vol .trade-money {
+  align-items: flex-end;
 }
 
 .af-vol .trade-unit {
@@ -6554,6 +6556,64 @@ span.trade-bal:hover {
 }
 
 /* Create — List on DEX (synced with Markets badge.zdex / badge.gnoswap) */
+.create-mech-card {
+  margin-top: 0;
+}
+.create-mech-k {
+  margin: 0.85rem 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.create-mech-body {
+  margin: 0.55rem 0 0;
+  font-size: 0.82rem;
+}
+.create-mech-buy {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+.create-mech-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.create-mech-chips .filter-btn {
+  height: auto;
+  min-height: 36px;
+}
+.create-mech-chips .filter-btn.is-soon {
+  opacity: 0.72;
+}
+.create-mech-fixed {
+  list-style: none;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.create-mech-fixed li {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+}
+.create-mech-fixed p {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.create-mech-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--border);
+}
+.create-mech-seg.creator { background: #34d399; }
+.create-mech-seg.protocol { background: #a78bfa; }
+.create-mech-seg.lp { background: #fbbf24; }
 .create-dex-card {
   margin: 1rem 0 1.25rem;
   padding: 1.05rem 1.1rem 1.15rem;
