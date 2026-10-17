@@ -93,6 +93,43 @@ function cacheSet(key, value, ttlMs) {
   }
 }
 
+/** Last complete payload. Served after the fresh TTL until maxStaleMs, then dropped. */
+const staleCache = new Map();
+const routeInflight = new Map();
+
+function rememberFresh(key, value, ttlMs) {
+  cacheSet(key, value, ttlMs);
+  staleCache.set(key, { at: Date.now(), value });
+  if (staleCache.size > 80) {
+    const first = staleCache.keys().next().value;
+    if (first != null) staleCache.delete(first);
+  }
+}
+
+function readFreshOrStale(key, maxStaleMs) {
+  const fresh = cacheGet(key);
+  if (fresh) return { value: fresh, fresh: true };
+  const stale = staleCache.get(key);
+  if (!stale) return null;
+  if (Date.now() - stale.at > maxStaleMs) {
+    staleCache.delete(key);
+    return null;
+  }
+  return { value: stale.value, fresh: false };
+}
+
+function singleflight(key, fn) {
+  const hit = routeInflight.get(key);
+  if (hit) return hit;
+  const job = Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (routeInflight.get(key) === job) routeInflight.delete(key);
+    });
+  routeInflight.set(key, job);
+  return job;
+}
+
 /** Concurrency-limited Promise.all (speedup #2 — avoid sequential qeval). */
 async function mapPool(items, concurrency, fn) {
   const list = Array.isArray(items) ? items : [];
@@ -2377,8 +2414,11 @@ async function replayPadBalances(pkg) {
   const job = (async () => {
     const byId = Object.create(null);
     const funcs = ["Buy", "Sell", "SwapBuy", "SwapSell", "Transfer", "TransferFrom", "ReleaseListSeed"];
-    for (const func of funcs) {
-      const pack = await cachedIndexerFuncTxs(pkg, func);
+    // Parallel pages. ok:false if any walk stops early, so a short budget cannot publish a partial book.
+    const packs = await Promise.all(funcs.map((func) => cachedIndexerFuncTxs(pkg, func)));
+    for (let fi = 0; fi < funcs.length; fi++) {
+      const func = funcs[fi];
+      const pack = packs[fi];
       if (!pack.ok) return { ok: false, byId };
       for (const tx of pack.rows) {
         let calls = 0;
@@ -2458,6 +2498,7 @@ async function holdersFromLedger(RPC, PKG, id) {
   }
   if (sum !== sold) return null;
   holders.sort((a, b) => b.balance - a.balance);
+  const full = fullMetrics();
   return {
     id,
     pkg: PKG,
@@ -2465,9 +2506,9 @@ async function holdersFromLedger(RPC, PKG, id) {
     holdersActive: holders.length,
     holdersCapped: false,
     holdersSource: "indexer ledger",
-    fullMetrics: true,
-    holdersNote: null,
-    transferHoldersOmitted: false,
+    ...(full
+      ? { fullMetrics: true, holdersNote: null, transferHoldersOmitted: false }
+      : {}),
     holdersStats: {
       active: holders.length,
       buyersEver: Number.isFinite(buyers) ? buyers : null,
@@ -3211,13 +3252,13 @@ async function getMetaBatch(RPC, META, items) {
 /** Holder balances only. Does not rebuild the token page. */
 async function loadHolderBalances(RPC, PKG, id) {
   const full = fullMetrics();
-  if (full) {
-    try {
-      const replayed = await holdersFromLedger(RPC, PKG, id);
-      if (replayed) return replayed;
-    } catch {
-      /* BalanceOf fallback */
-    }
+  // Ledger is the full book, including transfers, only when its sum equals RealSold.
+  // A mismatch returns null and the ListBuyers + BalanceOf path below keeps every balance it can read.
+  try {
+    const replayed = await holdersFromLedger(RPC, PKG, id);
+    if (replayed) return replayed;
+  } catch {
+    /* BalanceOf fallback */
   }
   const [resolved, buyerCount] = await Promise.all([
     resolveHolderAddrs(RPC, PKG, id, { raceMs: 3000 }),
@@ -4824,6 +4865,10 @@ export async function buildNetworkMarketsPayload(networkId, opts = {}) {
   const cfg = getConfig(net);
   const hubInfo = await getHubInfo(cfg.RPC, cfg);
   const padSources = listPadSources(hubInfo, cfg);
+  // Warm the holder ledger beside the market build. Requests do not wait on it.
+  for (const src of padSources) {
+    if (src?.pkg) replayPadBalances(src.pkg).catch(() => {});
+  }
   const t0 = Date.now();
   const raw = await getMarkets(cfg.RPC, padSources, {
     lite,
@@ -6560,16 +6605,26 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       );
       const pkgQ = (q.get("pkg") || "").trim();
       const holdKey = `holders:${pkgQ || "auto"}:${id}`;
-      if (!noCache) {
-        const hit = cacheGet(holdKey);
-        if (hit) return json(200, hit, { maxAge: 15 });
-      }
       const pkg =
         pkgQ ||
         (padSources.find((s) => s.active) || padSources[0] || {}).pkg ||
         PKG;
-      const payload = await loadHolderBalances(RPC, pkg, id);
-      cacheSet(holdKey, payload, 20_000);
+      const load = () =>
+        singleflight(holdKey, async () => {
+          const payload = await loadHolderBalances(RPC, pkg, id);
+          if (payload && Array.isArray(payload.holders)) rememberFresh(holdKey, payload, 45_000);
+          return payload;
+        });
+      if (!noCache) {
+        const hit = readFreshOrStale(holdKey, 5 * 60_000);
+        if (hit?.fresh) return json(200, hit.value, { maxAge: 15 });
+        // Last complete list, including every address from that build. Refresh continues behind it.
+        if (hit) {
+          load().catch(() => {});
+          return json(200, hit.value, { maxAge: 5 });
+        }
+      }
+      const payload = await load();
       return json(200, payload, { maxAge: 15 });
     }
 
@@ -6998,18 +7053,28 @@ export async function handleApi(method, pathname, query, bodyText, headers = nul
       const id = decodeURIComponent(p.slice("/api/market/".length));
       const pkgQ = (q.get("pkg") || "").trim();
       const detailKey = `market-detail:${networkId}:${pkgQ || "auto"}:${id}`;
+      const loadDetail = () =>
+        singleflight(detailKey, async () => {
+          const m = await withUsdPricing(
+            await resolveMarketPkg(RPC, id, pkgQ || null, padSources, {
+              holders: false,
+            }),
+          );
+          const tip = await tipHeightCached(RPC);
+          if (m && !m.error) attachTokenBadges([m], { tipHeight: tip });
+          if (m && !m.error) rememberFresh(detailKey, m, 15_000);
+          return m;
+        });
       if (!noCache) {
-        const hit = cacheGet(detailKey);
-        if (hit) return json(200, hit, { maxAge: 12 });
+        const hit = readFreshOrStale(detailKey, 3 * 60_000);
+        if (hit?.fresh) return json(200, hit.value, { maxAge: 12 });
+        // Full last market, chart included. A live rebuild fills the next request.
+        if (hit) {
+          loadDetail().catch(() => {});
+          return json(200, hit.value, { maxAge: 5 });
+        }
       }
-      const m = await withUsdPricing(
-        await resolveMarketPkg(RPC, id, pkgQ || null, padSources, {
-          holders: false,
-        }),
-      );
-      const tip = await tipHeightCached(RPC);
-      if (m && !m.error) attachTokenBadges([m], { tipHeight: tip });
-      if (m && !m.error) cacheSet(detailKey, m, 15_000);
+      const m = await loadDetail();
       return json(200, m, { maxAge: 12 });
     }
 

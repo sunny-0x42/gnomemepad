@@ -160,6 +160,7 @@ export default function Token() {
   /** Mobile terminal pane: raise | chart | trade */
   const [mobilePane, setMobilePane] = useState("raise");
   const listAutoBusyRef = useRef(false);
+  const holdersAtRef = useRef(0);
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaBusy, setMetaBusy] = useState(false);
   const [metaForm, setMetaForm] = useState({
@@ -197,41 +198,73 @@ export default function Token() {
       setErr("");
       const path = `/api/market/${encodeURIComponent(id)}${pkgQ ? `?pkg=${encodeURIComponent(pkgQ)}` : ""}`;
       const data = await api(path);
-      setM(data);
-      const holdQs = new URLSearchParams();
-      if (data?.pkg) holdQs.set("pkg", data.pkg);
-      api(`/api/market/${encodeURIComponent(id)}/holders?${holdQs}`)
-        .then((h) => {
-          if (!h) return;
-          setM((prev) => {
-            if (!prev || prev.id !== data.id) return prev;
-            const supply = Number(prev.params?.totalSupply) || 1_000_000_000;
-            const px = Number(prev.spotGnot || prev.priceGnot) || 0;
-            const entry = Number(prev.openPriceGnot || prev.avgEntryGnot) || 0;
-            const holders = (h.holders || []).map((row) => {
-              const balance = Number(row.balance) || 0;
-              const valueGnot = px > 0 ? balance * px : 0;
-              const pnlGnot = entry > 0 && px > 0 ? valueGnot - balance * entry : null;
-              const pnlPct = entry > 0 && px > 0 ? ((px - entry) / entry) * 100 : null;
+      setM((prev) => {
+        if (!prev || prev.id !== data.id || !prev.holders?.length) return data;
+        const supply = Number(data.params?.totalSupply) || 1_000_000_000;
+        const px = Number(data.spotGnot || data.priceGnot) || 0;
+        const entry = Number(data.openPriceGnot || data.avgEntryGnot) || 0;
+        const holders = prev.holders.map((row) => {
+          const balance = Number(row.balance) || 0;
+          const valueGnot = px > 0 ? balance * px : 0;
+          const pnlGnot = entry > 0 && px > 0 ? valueGnot - balance * entry : null;
+          const pnlPct = entry > 0 && px > 0 ? ((px - entry) / entry) * 100 : null;
+          return {
+            ...row,
+            valueGnot,
+            pnlGnot,
+            pnlPct,
+            pctSupply: supply > 0 ? (balance / supply) * 100 : 0,
+          };
+        });
+        return {
+          ...data,
+          holders,
+          holdersActive: prev.holdersActive,
+          holdersCapped: prev.holdersCapped,
+          holdersSource: prev.holdersSource,
+          holdersStats: prev.holdersStats,
+        };
+      });
+      // Balances move slower than the 7s price poll. Keep the full list on screen between refreshes.
+      if (Date.now() - holdersAtRef.current > 30_000) {
+        holdersAtRef.current = Date.now();
+        const holdQs = new URLSearchParams();
+        if (data?.pkg) holdQs.set("pkg", data.pkg);
+        api(`/api/market/${encodeURIComponent(id)}/holders?${holdQs}`)
+          .then((h) => {
+            if (!h) return;
+            setM((prev) => {
+              if (!prev || prev.id !== data.id) return prev;
+              const supply = Number(prev.params?.totalSupply) || 1_000_000_000;
+              const px = Number(prev.spotGnot || prev.priceGnot) || 0;
+              const entry = Number(prev.openPriceGnot || prev.avgEntryGnot) || 0;
+              const holders = (h.holders || []).map((row) => {
+                const balance = Number(row.balance) || 0;
+                const valueGnot = px > 0 ? balance * px : 0;
+                const pnlGnot = entry > 0 && px > 0 ? valueGnot - balance * entry : null;
+                const pnlPct = entry > 0 && px > 0 ? ((px - entry) / entry) * 100 : null;
+                return {
+                  ...row,
+                  valueGnot,
+                  pnlGnot,
+                  pnlPct,
+                  pctSupply: supply > 0 ? (balance / supply) * 100 : 0,
+                };
+              });
               return {
-                ...row,
-                valueGnot,
-                pnlGnot,
-                pnlPct,
-                pctSupply: supply > 0 ? (balance / supply) * 100 : 0,
+                ...prev,
+                holders,
+                holdersActive: h.holdersActive != null ? h.holdersActive : holders.length,
+                holdersCapped: !!h.holdersCapped,
+                holdersSource: h.holdersSource || null,
+                holdersStats: h.holdersStats || null,
               };
             });
-            return {
-              ...prev,
-              holders,
-              holdersActive: h.holdersActive != null ? h.holdersActive : holders.length,
-              holdersCapped: !!h.holdersCapped,
-              holdersSource: h.holdersSource || null,
-              holdersStats: h.holdersStats || null,
-            };
+          })
+          .catch(() => {
+            holdersAtRef.current = 0;
           });
-        })
-        .catch(() => {});
+      }
       // Meta for image/socials
       if (data?.pkg && data?.id) {
         fetchMetaOne(data.pkg, data.id).then(setMeta).catch(() => setMeta(null));
