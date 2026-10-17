@@ -439,13 +439,18 @@ export default function Token() {
       document.head.appendChild(og);
     }
     og.setAttribute("content", title);
-    const img = resolveTokenImage(m, meta) || "/thumbnail.jpg";
+    const rawImg = resolveTokenImage(m, meta) || "/thumbnail.jpg";
+    const img = /^https?:\/\//i.test(rawImg)
+      ? rawImg
+      : rawImg.startsWith("/")
+        ? `https://gnomi.fun${rawImg}`
+        : rawImg;
     let ogImg = document.querySelector('meta[property="og:image"]');
     if (ogImg) ogImg.setAttribute("content", img);
     return () => {
       document.title = `gnomi · ${netLabel}`;
       let oImg = document.querySelector('meta[property="og:image"]');
-      if (oImg) oImg.setAttribute("content", "/thumbnail.jpg");
+      if (oImg) oImg.setAttribute("content", "https://gnomi.fun/thumbnail.jpg");
     };
   }, [m, meta, netLabel]);
 
