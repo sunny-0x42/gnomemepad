@@ -8,8 +8,12 @@ import { applyTheme, loadPrefs } from "./lib/prefs";
 applyTheme(loadPrefs().theme);
 
 // PWA: force new SW so buy-path fixes are not stuck on cache-first JS.
-// Also unregister ancient workers once so Approve/TF buy path cannot stick.
-if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+// Dev skips the worker. A cached shell on :5174 leaves a blank page.
+if (import.meta.env.DEV && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations?.().then((regs) => {
+    for (const reg of regs || []) reg.unregister();
+  }).catch(() => {});
+} else if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .getRegistrations?.()

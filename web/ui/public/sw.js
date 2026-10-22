@@ -1,18 +1,46 @@
 /* Network-first for HTML/JS so buy-path fixes ship; cache as fallback offline */
+const DEV_HOST =
+  self.location.hostname === "localhost" ||
+  self.location.hostname === "127.0.0.1" ||
+  self.location.hostname === "::1" ||
+  self.location.hostname === "[::1]";
+
+if (DEV_HOST) {
+  // Vite dev must not be controlled by this worker. A cached shell leaves a blank page.
+  self.addEventListener("install", () => {
+    self.skipWaiting();
+  });
+  self.addEventListener("activate", (event) => {
+    event.waitUntil(
+      (async () => {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+        await self.registration.unregister();
+        const windows = await self.clients.matchAll({ type: "window" });
+        await Promise.all(
+          windows.map((client) =>
+            client.navigate ? client.navigate(client.url) : Promise.resolve(),
+          ),
+        );
+      })(),
+    );
+  });
+}
+
 const CACHE = "gnomemepad-v11-trades-lp-pnl";
 const PRECACHE = ["/manifest.webmanifest", "/icon.svg", "/favicon.svg"];
 
-self.addEventListener("install", (e) => {
+if (!DEV_HOST) self.addEventListener("install", (e) => {
   // Activate immediately so Buy path fixes ship without a second reload
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)));
 });
 
-self.addEventListener("message", (e) => {
+if (!DEV_HOST) self.addEventListener("message", (e) => {
   if (e?.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-self.addEventListener("activate", (e) => {
+if (!DEV_HOST) self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
       .keys()
@@ -23,7 +51,7 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-self.addEventListener("fetch", (e) => {
+if (!DEV_HOST) self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
 

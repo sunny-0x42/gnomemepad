@@ -5,7 +5,9 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: "::",
     port: 5174,
+    strictPort: true,
     proxy: {
       // Point at Netlify Dev or a local API that uses chain-api
       // Example: netlify dev on :8888, or `node web/server-api.mjs` on :8787
