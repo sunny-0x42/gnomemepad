@@ -975,21 +975,6 @@ export default function Create() {
                       <p className="muted">{t("mechQuoteBody")}</p>
                     </li>
                   </ul>
-                  <div className="create-mech-k">{t("mechSoon")}</div>
-                  <div className="create-mech-chips">
-                    {[
-                      t("mechSoonPool"),
-                      t("mechSoonTax"),
-                      t("mechSoonSplit"),
-                      t("mechSoonQuote"),
-                      t("mechSoonSkip"),
-                    ].map((label) => (
-                      <button key={label} type="button" className="filter-btn is-soon" disabled>
-                        {label}
-                        <span className="dex-tab-soon">{t("soon") || "Soon"}</span>
-                      </button>
-                    ))}
-                  </div>
                 </div>
 
                 <button
