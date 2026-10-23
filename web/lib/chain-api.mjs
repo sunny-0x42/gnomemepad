@@ -62,6 +62,10 @@ const HOLDER_INDEXER_MAX_PAGES = 20;
 // memepad MaxTradeHistory. A full TradeHistory has already dropped older points.
 const CURVE_RING_LEN = 128;
 const INDEXER_CURVE_VOLUME_MAX_PAGES = 8;
+// One unbounded event query no longer returns inside the abort. Walk fixed height
+// windows instead, and keep enough pages to reach the chain tip.
+const INDEXER_WALK_SPAN = 100_000;
+const INDEXER_WALK_PAGE_CAP = 80;
 const TRANSFER_HOLDERS_OMISSION =
   "Transfer-only holders are omitted. ListBuyers and indexer Buy/SwapBuy pages do not include wallets that only received tokens by transfer.";
 
@@ -2092,11 +2096,38 @@ function markCurveRingLowerBound(stats, curveLen) {
   return stats;
 }
 
-async function indexerTradeEventPage(pkg, func, afterHeight) {
-  const height =
-    Number(afterHeight) > 0
-      ? `block_height: { gt: ${Math.floor(Number(afterHeight))} }`
-      : "";
+let indexerTipCache = { at: 0, h: 0 };
+
+async function indexerTipHeight() {
+  if (indexerTipCache.h > 0 && Date.now() - indexerTipCache.at < 15_000) {
+    return indexerTipCache.h;
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8_000);
+  try {
+    const res = await fetch(INDEXER_GQL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "{ latestBlockHeight }" }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return 0;
+    const body = await res.json();
+    const h = Number(body.data?.latestBlockHeight) || 0;
+    if (h > 0) indexerTipCache = { at: Date.now(), h };
+    return h;
+  } catch {
+    return 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function indexerTradeEventPage(pkg, func, afterHeight, beforeHeight) {
+  const bounds = [];
+  if (Number(afterHeight) > 0) bounds.push(`gt: ${Math.floor(Number(afterHeight))}`);
+  if (Number(beforeHeight) > 0) bounds.push(`lt: ${Math.floor(Number(beforeHeight))}`);
+  const height = bounds.length ? `block_height: { ${bounds.join(", ")} }` : "";
   const query = `{
     getTransactions(
       where: {
@@ -2143,39 +2174,77 @@ async function cachedIndexerFuncTxs(pkg, func) {
   const job = (async () => {
     const rows = [];
     const seen = new Set();
-    let cursor = 0;
-    let pages = 0;
-    let done = false;
-    // Volume funcs keep the old 8-page budget on every host. Holder funcs use it only in full mode.
-    const volumeFunc =
-      func === "Buy" || func === "Sell" || func === "SwapBuy" || func === "SwapSell";
-    const budget =
-      volumeFunc || fullMetrics() ? INDEXER_CURVE_VOLUME_MAX_PAGES : 2;
-    while (pages < budget) {
-      const txs = await indexerTradeEventPage(pkg, func, cursor);
-      pages += 1;
-      if (!txs.length) {
-        done = true;
-        break;
+    // Netlify stays on the short walk. A full-metrics host needs every height,
+    // and an unbounded event query does not return before the abort.
+    if (!fullMetrics()) {
+      let cursor = 0;
+      let pages = 0;
+      let done = false;
+      const volumeFunc =
+        func === "Buy" || func === "Sell" || func === "SwapBuy" || func === "SwapSell";
+      const budget = volumeFunc ? INDEXER_CURVE_VOLUME_MAX_PAGES : 2;
+      while (pages < budget) {
+        const txs = await indexerTradeEventPage(pkg, func, cursor, 0);
+        pages += 1;
+        if (!txs.length) {
+          done = true;
+          break;
+        }
+        let maxH = cursor;
+        let added = 0;
+        for (const tx of txs) {
+          const h = Number(tx.block_height) || 0;
+          if (h > maxH) maxH = h;
+          const txKey = `${func}:${tx.hash || ""}:${tx.index ?? ""}:${h}`;
+          if (seen.has(txKey)) continue;
+          seen.add(txKey);
+          added += 1;
+          rows.push(tx);
+        }
+        if (added === 0 || maxH <= cursor) {
+          done = true;
+          break;
+        }
+        cursor = maxH > 0 ? maxH - 1 : maxH;
       }
-      let maxH = cursor;
-      let added = 0;
-      for (const tx of txs) {
-        const h = Number(tx.block_height) || 0;
-        if (h > maxH) maxH = h;
-        const txKey = `${func}:${tx.hash || ""}:${tx.index ?? ""}:${h}`;
-        if (seen.has(txKey)) continue;
-        seen.add(txKey);
-        added += 1;
-        rows.push(tx);
-      }
-      if (added === 0 || maxH <= cursor) {
-        done = true;
-        break;
-      }
-      cursor = maxH > 0 ? maxH - 1 : maxH;
+      return { ok: done, pages, rows };
     }
-    return { ok: done, pages, rows };
+    const tip = await indexerTipHeight();
+    if (!(tip > 0)) return { ok: false, pages: 0, rows };
+    const windows = Math.ceil((tip + 1) / INDEXER_WALK_SPAN);
+    const budget = Math.min(INDEXER_WALK_PAGE_CAP, windows + INDEXER_CURVE_VOLUME_MAX_PAGES);
+    let pages = 0;
+    let start = 0;
+    while (start <= tip) {
+      if (pages >= budget) return { ok: false, pages, rows };
+      const end = Math.min(tip + 1, start + INDEXER_WALK_SPAN);
+      let cursor = start > 0 ? start - 1 : 0;
+      let guard = 0;
+      while (guard < 6) {
+        if (pages >= budget) return { ok: false, pages, rows };
+        const txs = await indexerTradeEventPage(pkg, func, cursor, end);
+        pages += 1;
+        guard += 1;
+        if (!txs.length) break;
+        let maxH = cursor;
+        let added = 0;
+        for (const tx of txs) {
+          const h = Number(tx.block_height) || 0;
+          if (h > maxH) maxH = h;
+          const txKey = `${func}:${tx.hash || ""}:${tx.index ?? ""}:${h}`;
+          if (seen.has(txKey)) continue;
+          seen.add(txKey);
+          added += 1;
+          rows.push(tx);
+        }
+        // The indexer caps a response. A short page is the whole window.
+        if (txs.length < 9000) break;
+        if (added === 0 || maxH <= cursor || maxH >= end) return { ok: false, pages, rows };
+        cursor = maxH > 0 ? maxH - 1 : maxH;
+      }
+      start = end;
+    }
+    return { ok: true, pages, rows };
   })();
   padTxInflight.set(inflightKey, job);
   try {
@@ -2374,7 +2443,6 @@ function buildStatWindows(chart, spotGnot, nowMs) {
   }
   return {
     asOfMs: now,
-    blockMs: 2000,
     incomplete: false,
     spotGnot: spot > 0 ? spot : null,
     windows,
@@ -3143,9 +3211,78 @@ async function getMarket(RPC, PKG, id, meta = {}) {
   return m;
 }
 
+// Block header times are immutable. A 2s-per-block guess stretches 24h to about 43h.
+const blockHeaderMsCache = new Map();
+const BLOCK_STAMP_FALLBACK_MS = 2000;
+
+function parseBlockTime(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return 0;
+  const direct = Date.parse(s);
+  if (Number.isFinite(direct)) return direct;
+  const trimmed = Date.parse(s.replace(/(\.\d{3})\d+/, "$1"));
+  return Number.isFinite(trimmed) ? trimmed : 0;
+}
+
+function applyBlockStamp(pt, timeMs) {
+  pt.timeMs = timeMs;
+  pt.time = new Date(timeMs).toISOString();
+}
+
+async function blockHeaderMs(RPC, height) {
+  const h = Math.floor(Number(height));
+  if (!(h > 0)) return 0;
+  const hit = blockHeaderMsCache.get(h);
+  if (hit) return hit;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8_000);
+  try {
+    const res = await rpc(RPC, "block", { height: String(h) }, ctrl.signal);
+    const t = parseBlockTime(res?.block?.header?.time);
+    if (!(t > 0)) throw new Error("block time");
+    blockHeaderMsCache.set(h, t);
+    return t;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Last height whose header time is at or before targetMs. */
+async function lastHeightAtOrBefore(RPC, tipH, targetMs) {
+  let lo = 1;
+  let hi = tipH;
+  let step = 4_000;
+  let probe = tipH;
+  while (probe > 1) {
+    const t = await blockHeaderMs(RPC, probe);
+    if (t <= targetMs) {
+      lo = probe;
+      break;
+    }
+    hi = probe - 1;
+    if (hi < 1) return 1;
+    step *= 2;
+    probe = Math.max(1, hi - step);
+  }
+  let ans = lo;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const t = await blockHeaderMs(RPC, mid);
+    if (t <= targetMs) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 /**
- * Attach approximate ISO/ms timestamps to trade points using chain tip height + time.
- * TradeHistory only stores block height; Sapphire ~2s blocks (fallback).
+ * Stamp curve points from block header time.
+ * Heights inside the real 24h window use that header. Older heights stay ordered
+ * and strictly outside it, so the window base price is the latest trade before the cut.
+ * A header outage falls back to a 2s block guess.
  */
 async function stampTradeTimes(RPC, chart) {
   if (!chart?.length) return;
@@ -3154,12 +3291,13 @@ async function stampTradeTimes(RPC, chart) {
   try {
     const st = await rpc(RPC, "status", {});
     tipH = Number(st?.sync_info?.latest_block_height || 0);
-    const t = Date.parse(st?.sync_info?.latest_block_time || "");
-    if (Number.isFinite(t)) tipMs = t;
+    const t = parseBlockTime(st?.sync_info?.latest_block_time);
+    if (t > 0) tipMs = t;
   } catch {
-    /* use Date.now */
+    /* tip stays Date.now so the fallback stamp still orders the ring */
   }
-  const BLOCK_MS = 2000;
+
+  const needs = [];
   for (const pt of chart) {
     // Keep indexer / Gnoswap wall-clock times — never wipe or rewrite them
     if (pt.source === "gnoswap" && (Number(pt.timeMs) > 0 || pt.time)) {
@@ -3171,19 +3309,75 @@ async function stampTradeTimes(RPC, chart) {
     }
     const h = Number(pt.height) || 0;
     if (!h) {
-      // height-less curve marks: keep any existing stamp
       if (!(Number(pt.timeMs) > 0) && pt.time) {
         const p = Date.parse(pt.time);
         if (Number.isFinite(p)) pt.timeMs = p;
       }
       continue;
     }
-    if (tipH > 0 && h <= tipH) {
-      pt.timeMs = tipMs - (tipH - h) * BLOCK_MS;
-    } else {
-      pt.timeMs = tipMs;
+    needs.push(pt);
+  }
+  if (!needs.length) return;
+
+  let edgeH = 0;
+  let edgeMs = 0;
+  if (tipH > 0) {
+    try {
+      edgeH = await lastHeightAtOrBefore(RPC, tipH, tipMs - 24 * 60 * 60 * 1000);
+      edgeMs = await blockHeaderMs(RPC, edgeH);
+    } catch {
+      edgeH = 0;
+      edgeMs = 0;
     }
-    pt.time = new Date(pt.timeMs).toISOString();
+  }
+
+  if (!(edgeMs > 0)) {
+    for (const pt of needs) {
+      const h = Number(pt.height) || 0;
+      const timeMs = tipH > 0 && h <= tipH ? tipMs - (tipH - h) * BLOCK_STAMP_FALLBACK_MS : tipMs;
+      applyBlockStamp(pt, timeMs);
+    }
+    return;
+  }
+
+  const recent = [];
+  const seen = new Set();
+  for (const pt of needs) {
+    const h = Math.floor(Number(pt.height) || 0);
+    if (h > edgeH && h < tipH && !seen.has(h)) {
+      seen.add(h);
+      recent.push(h);
+    }
+  }
+  const loadHeaders = async (heights, concurrency) => {
+    await mapPool(heights, concurrency, async (h) => {
+      try {
+        return await blockHeaderMs(RPC, h);
+      } catch {
+        return 0;
+      }
+    });
+  };
+  await loadHeaders(recent, 8);
+  const missing = recent.filter((h) => !(blockHeaderMsCache.get(h) > 0));
+  if (missing.length) await loadHeaders(missing, 4);
+
+  for (const pt of needs) {
+    const h = Math.floor(Number(pt.height) || 0);
+    if (!(h > 0) || h > tipH) {
+      applyBlockStamp(pt, tipMs);
+      continue;
+    }
+    if (h <= edgeH) {
+      applyBlockStamp(pt, edgeMs - (edgeH - h));
+      continue;
+    }
+    if (h === tipH) {
+      applyBlockStamp(pt, tipMs);
+      continue;
+    }
+    const exact = blockHeaderMsCache.get(h);
+    if (exact > 0) applyBlockStamp(pt, exact);
   }
 }
 
