@@ -3229,60 +3229,56 @@ function applyBlockStamp(pt, timeMs) {
   pt.time = new Date(timeMs).toISOString();
 }
 
-async function blockHeaderMs(RPC, height) {
-  const h = Math.floor(Number(height));
-  if (!(h > 0)) return 0;
-  const hit = blockHeaderMsCache.get(h);
-  if (hit) return hit;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8_000);
-  try {
-    const res = await rpc(RPC, "block", { height: String(h) }, ctrl.signal);
-    const t = parseBlockTime(res?.block?.header?.time);
-    if (!(t > 0)) throw new Error("block time");
-    blockHeaderMsCache.set(h, t);
-    return t;
-  } finally {
-    clearTimeout(timer);
+/** Header time for many heights. One RPC batch is 40 blocks. */
+async function loadBlockHeaderTimes(RPC, heights) {
+  const pending = [];
+  const seen = new Set();
+  for (const raw of heights) {
+    const h = Math.floor(Number(raw));
+    if (!(h > 0) || blockHeaderMsCache.has(h) || seen.has(h)) continue;
+    seen.add(h);
+    pending.push(h);
   }
-}
-
-/** Last height whose header time is at or before targetMs. */
-async function lastHeightAtOrBefore(RPC, tipH, targetMs) {
-  let lo = 1;
-  let hi = tipH;
-  let step = 4_000;
-  let probe = tipH;
-  while (probe > 1) {
-    const t = await blockHeaderMs(RPC, probe);
-    if (t <= targetMs) {
-      lo = probe;
-      break;
+  const groups = [];
+  for (let i = 0; i < pending.length; i += 40) groups.push(pending.slice(i, i + 40));
+  await mapPool(groups, 3, async (group) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    try {
+      const res = await fetch(RPC, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(
+          group.map((h, i) => ({
+            jsonrpc: "2.0",
+            id: i + 1,
+            method: "block",
+            params: { height: String(h) },
+          })),
+        ),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) return;
+      const rows = await res.json();
+      const list = Array.isArray(rows) ? rows : [rows];
+      for (const row of list) {
+        const id = Number(row?.id) || 0;
+        const h = group[id - 1];
+        const t = parseBlockTime(row?.result?.block?.header?.time);
+        if (h > 0 && t > 0) blockHeaderMsCache.set(h, t);
+      }
+    } catch {
+      /* a retry pass fills the gaps */
+    } finally {
+      clearTimeout(timer);
     }
-    hi = probe - 1;
-    if (hi < 1) return 1;
-    step *= 2;
-    probe = Math.max(1, hi - step);
-  }
-  let ans = lo;
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const t = await blockHeaderMs(RPC, mid);
-    if (t <= targetMs) {
-      ans = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return ans;
+  });
 }
 
 /**
- * Stamp curve points from block header time.
- * Heights inside the real 24h window use that header. Older heights stay ordered
- * and strictly outside it, so the window base price is the latest trade before the cut.
- * A header outage falls back to a 2s block guess.
+ * Stamp every curve height from its block header.
+ * A missing header is interpolated between known headers so older trades keep
+ * their place on the chart. A total outage falls back to a 2s block guess.
  */
 async function stampTradeTimes(RPC, chart) {
   if (!chart?.length) return;
@@ -3319,65 +3315,63 @@ async function stampTradeTimes(RPC, chart) {
   }
   if (!needs.length) return;
 
-  let edgeH = 0;
-  let edgeMs = 0;
-  if (tipH > 0) {
-    try {
-      edgeH = await lastHeightAtOrBefore(RPC, tipH, tipMs - 24 * 60 * 60 * 1000);
-      edgeMs = await blockHeaderMs(RPC, edgeH);
-    } catch {
-      edgeH = 0;
-      edgeMs = 0;
-    }
-  }
-
-  if (!(edgeMs > 0)) {
+  const fallback = () => {
     for (const pt of needs) {
       const h = Number(pt.height) || 0;
       const timeMs = tipH > 0 && h <= tipH ? tipMs - (tipH - h) * BLOCK_STAMP_FALLBACK_MS : tipMs;
       applyBlockStamp(pt, timeMs);
     }
+  };
+  if (!(tipH > 0)) {
+    fallback();
+    return;
+  }
+  if (!(blockHeaderMsCache.get(tipH) > 0)) blockHeaderMsCache.set(tipH, tipMs);
+
+  const wanted = [];
+  const seenH = new Set();
+  for (const pt of needs) {
+    const h = Math.floor(Number(pt.height) || 0);
+    if (h > 0 && h < tipH && !seenH.has(h)) {
+      seenH.add(h);
+      wanted.push(h);
+    }
+  }
+  await loadBlockHeaderTimes(RPC, wanted);
+  const missing = wanted.filter((h) => !(blockHeaderMsCache.get(h) > 0));
+  if (missing.length) await loadBlockHeaderTimes(RPC, missing);
+
+  const known = [...blockHeaderMsCache.entries()]
+    .filter(([h, t]) => h > 0 && h <= tipH && t > 0)
+    .sort((a, b) => a[0] - b[0]);
+  if (known.length < 2) {
+    fallback();
     return;
   }
 
-  const recent = [];
-  const seen = new Set();
-  for (const pt of needs) {
-    const h = Math.floor(Number(pt.height) || 0);
-    if (h > edgeH && h < tipH && !seen.has(h)) {
-      seen.add(h);
-      recent.push(h);
+  const timeAt = (h) => {
+    if (h >= tipH) return tipMs;
+    const exact = blockHeaderMsCache.get(h);
+    if (exact > 0) return exact;
+    let lo = 0;
+    let hi = known.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (known[mid][0] <= h) lo = mid;
+      else hi = mid - 1;
     }
-  }
-  const loadHeaders = async (heights, concurrency) => {
-    await mapPool(heights, concurrency, async (h) => {
-      try {
-        return await blockHeaderMs(RPC, h);
-      } catch {
-        return 0;
-      }
-    });
+    const left = known[lo];
+    const right = known[Math.min(known.length - 1, lo + 1)];
+    if (!left || left[0] > h) {
+      return left[1] - (left[0] - h) * BLOCK_STAMP_FALLBACK_MS;
+    }
+    if (!right || right[0] <= left[0] || h >= right[0]) return left[1];
+    return Math.round(left[1] + ((right[1] - left[1]) * (h - left[0])) / (right[0] - left[0]));
   };
-  await loadHeaders(recent, 8);
-  const missing = recent.filter((h) => !(blockHeaderMsCache.get(h) > 0));
-  if (missing.length) await loadHeaders(missing, 4);
 
   for (const pt of needs) {
     const h = Math.floor(Number(pt.height) || 0);
-    if (!(h > 0) || h > tipH) {
-      applyBlockStamp(pt, tipMs);
-      continue;
-    }
-    if (h <= edgeH) {
-      applyBlockStamp(pt, edgeMs - (edgeH - h));
-      continue;
-    }
-    if (h === tipH) {
-      applyBlockStamp(pt, tipMs);
-      continue;
-    }
-    const exact = blockHeaderMsCache.get(h);
-    if (exact > 0) applyBlockStamp(pt, exact);
+    applyBlockStamp(pt, h > 0 ? timeAt(h) : tipMs);
   }
 }
 
